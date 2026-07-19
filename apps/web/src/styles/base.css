@@ -1,0 +1,76 @@
+:root {
+  color-scheme: dark;
+  --bg: #07090b;
+  --surface: #101417;
+  --surface-raised: #171c20;
+  --ink: #f3f5f2;
+  --muted: #879197;
+  --line: rgb(255 255 255 / 9%);
+  --line-strong: rgb(255 255 255 / 17%);
+  --cyan: #26ebd5;
+  --coral: #ff6f61;
+  --font-display: 'Barlow Condensed', sans-serif;
+  --font-cn: 'PingFang SC', 'Microsoft YaHei UI', 'Noto Sans CJK SC', sans-serif;
+  font-family: var(--font-cn);
+  font-synthesis: none;
+  color: var(--ink);
+  background: var(--bg);
+}
+
+* { box-sizing: border-box; }
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  background: var(--bg);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100dvh;
+  margin: 0;
+  background:
+    radial-gradient(circle at 15% -10%, rgb(38 235 213 / 11%), transparent 34%),
+    radial-gradient(circle at 90% 105%, rgb(255 111 97 / 8%), transparent 30%),
+    var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select { font: inherit; }
+
+button,
+a,
+select { -webkit-tap-highlight-color: transparent; }
+
+button:not(:disabled),
+select:not(:disabled) { cursor: pointer; }
+
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 3px;
+}
+
+::selection {
+  color: var(--bg);
+  background: var(--cyan);
+}
+
+::-webkit-scrollbar { width: 7px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border-radius: 10px; background: var(--line-strong); }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

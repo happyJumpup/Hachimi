@@ -1,0 +1,39 @@
+# Local secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# JavaScript
+node_modules/
+dist/
+coverage/
+.vite/
+playwright-report/
+test-results/
+.playwright-cli/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Runtime media and transient analysis material
+tmp/
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+*.ogg
+*.webm
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

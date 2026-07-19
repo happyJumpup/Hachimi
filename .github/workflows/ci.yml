@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --project services/analysis-api --locked
+      - run: pnpm api:generate
+      - run: git diff --exit-code -- contracts/openapi.json apps/web/src/api/schema.d.ts
+      - run: pnpm check
+
+      - run: uv run --project services/analysis-api python services/analysis-api/scripts/create_synthetic_video.py
+      - run: pnpm --filter @hachimi/web exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
