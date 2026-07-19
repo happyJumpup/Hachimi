@@ -50,10 +50,14 @@ describe('方案草稿 store', () => {
     const store = useDraftStore()
     await store.load(repository)
 
-    store.addCandidates([candidate('video-a'), candidate('video-b')])
+    store.addCandidates([candidate('video-a'), candidate('video-b')], [], {
+      'video-a': '来源视频 A',
+      'video-b': '来源视频 B',
+    })
 
     expect(store.items).toHaveLength(2)
     expect(store.items.map((item) => item.sourceRef?.sourceId)).toEqual(['video-a', 'video-b'])
+    expect(store.items.map((item) => item.sourceRef?.title)).toEqual(['来源视频 A', '来源视频 B'])
     expect(store.items[0].sets).toEqual({ value: 3, source: 'rule' })
     expect(store.items[0].reps).toEqual({ value: 10, source: 'rule' })
     expect(store.items[0].restSeconds).toEqual({ value: 60, source: 'rule' })

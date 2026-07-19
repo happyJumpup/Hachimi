@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from hakimi_analysis.models import (
     ActionMode,
     AnalysisCandidate,
@@ -8,6 +10,46 @@ from hakimi_analysis.models import (
     SpeechSignal,
     VisualSegment,
 )
+
+_ACTION_ALIASES = {
+    "dragcurl": "drag-curl",
+    "拖拽弯举": "drag-curl",
+    "拖拽式弯举": "drag-curl",
+}
+
+
+def _normalized_action_name(name: str) -> str:
+    normalized = "".join(character for character in name.casefold() if character.isalnum())
+    return _ACTION_ALIASES.get(normalized, normalized)
+
+
+def _same_action(speech_name: str, visual_name: str | None) -> bool:
+    if visual_name is None:
+        return True
+    speech = _normalized_action_name(speech_name)
+    visual = _normalized_action_name(visual_name)
+    return bool(speech and visual) and speech == visual
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateFusionSkill:
+    instructions: str
+    version: str
+
+    def run(
+        self,
+        *,
+        source_id: str,
+        speech_signals: list[SpeechSignal],
+        visual_segments: list[VisualSegment],
+    ) -> list[AnalysisCandidate]:
+        if not self.instructions.strip() or not self.version.strip():
+            raise ValueError("candidate fusion Skill must be versioned")
+        return fuse_candidates(
+            source_id=source_id,
+            speech_signals=speech_signals,
+            visual_segments=visual_segments,
+        )
 
 
 def _overlap_seconds(
@@ -51,13 +93,18 @@ def fuse_candidates(
 
     for speech in speech_signals:
         matches = [
-            (index, _overlap_seconds(
-                speech.start_seconds,
-                speech.end_seconds,
-                visual.start_seconds,
-                visual.end_seconds,
-            ))
+            (
+                index,
+                _overlap_seconds(
+                    speech.start_seconds,
+                    speech.end_seconds,
+                    visual.start_seconds,
+                    visual.end_seconds,
+                ),
+            )
             for index, visual in enumerate(visual_segments)
+            if index not in matched_visual_indexes
+            and _same_action(speech.action_name, visual.action_name)
         ]
         matched_index, overlap = max(matches, key=lambda item: item[1], default=(-1, 0.0))
         visual = visual_segments[matched_index] if overlap > 0 else None
@@ -95,7 +142,7 @@ def fuse_candidates(
                 segment=Segment(start_seconds=start_seconds, end_seconds=end_seconds),
                 parameters=_parameters(speech),
                 evidence=evidence,
-                needs_confirmation=visual is None,
+                needs_confirmation=visual is None or visual.action_name is None,
             )
         )
 

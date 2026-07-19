@@ -1,7 +1,7 @@
 import asyncio
 import tempfile
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -83,10 +83,17 @@ class LocalMediaProcessor:
             directory = Path(temp_directory)
             video_path = directory / "visual-window.mp4"
             audio_path = directory / "speech-window.wav"
-            await asyncio.gather(
-                self._extract_video(source_path, video_path, window),
-                self._extract_audio(source_path, audio_path, window),
-            )
+            extraction_tasks = [
+                asyncio.create_task(self._extract_video(source_path, video_path, window)),
+                asyncio.create_task(self._extract_audio(source_path, audio_path, window)),
+            ]
+            try:
+                await asyncio.gather(*extraction_tasks)
+            finally:
+                for task in extraction_tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*extraction_tasks, return_exceptions=True)
             yield PreparedMedia(
                 directory=directory,
                 video_path=video_path,
@@ -162,14 +169,23 @@ class LocalMediaProcessor:
             async with asyncio.timeout(self._command_timeout_seconds):
                 _, _stderr = await process.communicate()
         except TimeoutError as error:
-            process.kill()
-            await process.wait()
+            await _stop_process(process)
             raise MediaProcessingError(f"{operation} extraction timed out") from error
+        except asyncio.CancelledError:
+            await _stop_process(process)
+            raise
         if process.returncode != 0:
             raise MediaProcessingError(f"{operation} extraction failed")
         output_path = Path(arguments[-1])
         if not output_path.is_file() or output_path.stat().st_size == 0:
             raise MediaProcessingError(f"{operation} extraction produced no output")
+
+
+async def _stop_process(process: asyncio.subprocess.Process) -> None:
+    if process.returncode is None:
+        with suppress(ProcessLookupError):
+            process.kill()
+    await process.wait()
 
 
 def probe_duration_sync(source_path: Path) -> float:

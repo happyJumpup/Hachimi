@@ -9,7 +9,7 @@ import respx
 from hakimi_analysis.models import Segment
 from hakimi_analysis.providers.ark import ArkResponsesClient
 from hakimi_analysis.providers.asr import VolcAsrClient
-from hakimi_analysis.providers.base import ProviderSchemaError
+from hakimi_analysis.providers.base import ProviderError, ProviderSchemaError
 
 
 @pytest.mark.asyncio
@@ -60,7 +60,7 @@ async def test_asr_maps_word_timestamps_to_the_source_video_clock(tmp_path: Path
     request = route.calls[0].request
     assert request.headers["X-Api-Key"] == "test-asr-key"
     payload = json.loads(request.content)
-    assert payload["user"]["uid"] == "hachimi-run-123"
+    assert payload["user"]["uid"] == "test-asr-key"
     assert payload["audio"]["data"] == base64.b64encode(b"wav-bytes").decode("ascii")
 
 
@@ -157,6 +157,40 @@ async def test_ark_video_file_is_deleted_when_structured_result_is_invalid(tmp_p
             http_client=http_client,
         )
         with pytest.raises(ProviderSchemaError):
+            await client.locate_visual(
+                video_path=video,
+                window=Segment(start_seconds=15, end_seconds=54),
+                trigger_seconds=45,
+                instructions="visual skill contract",
+            )
+
+    assert delete.called
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ark_video_file_is_deleted_when_preprocessing_fails(tmp_path: Path) -> None:
+    video = tmp_path / "window.mp4"
+    video.write_bytes(b"video-bytes")
+    respx.post("https://ark.example/api/v3/files").mock(
+        return_value=httpx.Response(200, json={"id": "file-failed", "status": "processing"})
+    )
+    respx.get("https://ark.example/api/v3/files/file-failed").mock(
+        return_value=httpx.Response(200, json={"id": "file-failed", "status": "failed"})
+    )
+    delete = respx.delete("https://ark.example/api/v3/files/file-failed").mock(
+        return_value=httpx.Response(200, json={"id": "file-failed", "deleted": True})
+    )
+
+    async with httpx.AsyncClient() as http_client:
+        client = ArkResponsesClient(
+            api_key="test-ark-key",
+            model_id="doubao-test",
+            base_url="https://ark.example/api/v3",
+            http_client=http_client,
+            file_poll_interval_seconds=0,
+        )
+        with pytest.raises(ProviderError):
             await client.locate_visual(
                 video_path=video,
                 window=Segment(start_seconds=15, end_seconds=54),

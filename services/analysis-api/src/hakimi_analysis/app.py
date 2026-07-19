@@ -1,6 +1,7 @@
+import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,28 @@ from hakimi_analysis.models import AnalysisRunView, CreateAnalysisRunRequest, So
 from hakimi_analysis.pipeline import AnalysisPipeline
 from hakimi_analysis.runs import TERMINAL_STATUSES, AnalysisRunManager, as_pipeline
 from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog
+
+
+async def stream_run_events(
+    manager: AnalysisRunManager,
+    run_id: str,
+    is_disconnected: Callable[[], Awaitable[bool]],
+) -> AsyncGenerator[str, None]:
+    try:
+        async for event in manager.events(run_id):
+            if await is_disconnected():
+                return
+            data = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
+            yield f"event: {event.type}\ndata: {data}\n\n"
+    finally:
+        view: AnalysisRunView | None
+        try:
+            view = manager.get(run_id)
+        except KeyError:
+            view = None
+        if view is not None and view.status not in TERMINAL_STATUSES:
+            with suppress(KeyError):
+                await asyncio.shield(manager.cancel(run_id))
 
 
 def create_app(
@@ -113,24 +136,8 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="分析请求不存在或已过期") from error
 
-        async def stream() -> AsyncIterator[str]:
-            disconnected = False
-            async for event in manager.events(run_id):
-                if await request.is_disconnected():
-                    disconnected = True
-                    break
-                data = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
-                yield f"event: {event.type}\ndata: {data}\n\n"
-            if disconnected:
-                try:
-                    view = manager.get(run_id)
-                except KeyError:
-                    return
-                if view.status not in TERMINAL_STATUSES:
-                    await manager.cancel(run_id)
-
         return StreamingResponse(
-            stream(),
+            stream_run_events(manager, run_id, request.is_disconnected),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )

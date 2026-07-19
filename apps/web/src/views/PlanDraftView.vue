@@ -14,7 +14,9 @@ const totalSets = computed(() =>
 )
 
 const sourceLabel = (item: DraftItem): string =>
-  item.sourceRef ? `视频动作 · ${item.sourceRef.sourceId}` : '自建动作 · 无参考视频'
+  item.sourceRef
+    ? `视频动作 · ${item.sourceRef.title ?? item.sourceRef.sourceId}`
+    : '自建动作 · 无参考视频'
 
 const provenance = (source: DraftItem['sets']['source']): string => {
   if (source === 'video') return '视频'
@@ -142,7 +144,7 @@ const addManual = (): void => {
     <section v-else class="empty-plan">
       <span>00</span>
       <h2>草稿还是空的</h2>
-      <p>可以继续找视频动作，也可以直接创建一个没有参考视频的动作。</p>
+      <p>可以继续找动作，也可以直接创建一个没有参考视频的自建动作。</p>
     </section>
 
     <section class="manual-section">
@@ -153,7 +155,7 @@ const addManual = (): void => {
       <form v-else class="manual-form" @submit.prevent="addManual">
         <div>
           <p class="eyebrow">MANUAL ACTION</p>
-          <h2>创建无视频动作</h2>
+          <h2>创建自建动作</h2>
         </div>
         <label>
           动作名称

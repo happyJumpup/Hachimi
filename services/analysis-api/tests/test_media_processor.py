@@ -1,10 +1,12 @@
 import asyncio
+import sys
 from pathlib import Path
+from typing import Any
 
 import imageio_ffmpeg
 import pytest
 
-from hakimi_analysis.media import AnalysisWindow, LocalMediaProcessor
+from hakimi_analysis.media import AnalysisWindow, LocalMediaProcessor, MediaProcessingError
 
 
 async def create_synthetic_video(path: Path) -> None:
@@ -58,3 +60,96 @@ async def test_prepared_media_is_bounded_and_removed_after_use(tmp_path: Path) -
 
     assert prepared_directory is not None
     assert not prepared_directory.exists()
+
+
+@pytest.mark.asyncio
+async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    both_started = asyncio.Event()
+    processes: list[asyncio.subprocess.Process] = []
+    real_create_subprocess_exec = asyncio.create_subprocess_exec
+
+    async def create_blocking_process(*_args: Any, **_kwargs: Any) -> asyncio.subprocess.Process:
+        process = await real_create_subprocess_exec(
+            sys.executable,
+            "-c",
+            "import time; time.sleep(30)",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        processes.append(process)
+        if len(processes) == 2:
+            both_started.set()
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_blocking_process)
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    prepared_directories: list[Path] = []
+
+    async def prepare() -> None:
+        async with processor.prepare(
+            source,
+            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
+        ) as prepared:
+            prepared_directories.append(prepared.directory)
+            raise AssertionError("cancelled extraction must not yield prepared media")
+
+    task = asyncio.create_task(prepare())
+    await asyncio.wait_for(both_started.wait(), timeout=1)
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(processes) == 2
+    assert all(process.returncode is not None for process in processes)
+    assert not any((tmp_path / "runs").iterdir())
+    assert prepared_directories == []
+
+
+@pytest.mark.asyncio
+async def test_failed_extraction_stops_the_other_ffmpeg_process(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    processes: list[asyncio.subprocess.Process] = []
+    real_create_subprocess_exec = asyncio.create_subprocess_exec
+    call_count = 0
+
+    async def create_test_process(*_args: Any, **_kwargs: Any) -> asyncio.subprocess.Process:
+        nonlocal call_count
+        call_count += 1
+        code = (
+            "import sys, time; time.sleep(0.1); sys.exit(1)"
+            if call_count == 1
+            else "import time; time.sleep(30)"
+        )
+        process = await real_create_subprocess_exec(
+            sys.executable,
+            "-c",
+            code,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_test_process)
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+
+    with pytest.raises(MediaProcessingError):
+        async with processor.prepare(
+            source,
+            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
+        ):
+            raise AssertionError("failed extraction must not yield prepared media")
+
+    assert len(processes) == 2
+    assert all(process.returncode is not None for process in processes)
+    assert not any((tmp_path / "runs").iterdir())

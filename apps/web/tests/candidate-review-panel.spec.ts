@@ -72,4 +72,18 @@ describe('CandidateReviewPanel', () => {
     expect(editedIds).toEqual(['candidate-a'])
     expect(candidates[0].name).toBe('拖拽弯举')
   })
+
+  it('does not add a selected candidate with an empty name', async () => {
+    const wrapper = mount(CandidateReviewPanel, {
+      props: {
+        candidates: [{ ...candidates[1], parameters: { ...candidates[1].parameters } }],
+        warnings: [],
+      },
+    })
+
+    await wrapper.get('.action-name-input').setValue('   ')
+
+    expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('动作名称不能为空')
+  })
 })

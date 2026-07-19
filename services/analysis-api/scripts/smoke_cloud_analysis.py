@@ -33,25 +33,7 @@ def _is_expected_action(name: str) -> bool:
     )
 
 
-def _message_category(message: str) -> str | None:
-    normalized = message.lower()
-    categories = (
-        ("entitlement", ("permission", "access denied", "activate", "resource not")),
-        ("authentication", ("api key", "apikey", "unauthorized", "authentication")),
-        ("unsupported_parameter", ("not supported", "unsupported")),
-        ("missing_parameter", ("required", "missing")),
-        ("invalid_parameter", ("invalid", "illegal")),
-    )
-    return next(
-        (category for category, terms in categories if any(term in normalized for term in terms)),
-        None,
-    )
-
-
 def _provider_call(response: httpx.Response) -> dict[str, object]:
-    path = response.request.url.path
-    if "/files/" in path:
-        path = f"{path.split('/files/', maxsplit=1)[0]}/files/{{file_id}}"
     payload: dict[str, Any] = {}
     try:
         parsed = response.json()
@@ -61,24 +43,12 @@ def _provider_call(response: httpx.Response) -> dict[str, object]:
         pass
     error_payload = payload.get("error")
     error = error_payload if isinstance(error_payload, dict) else {}
-    message = str(error.get("message") or response.headers.get("X-Api-Message") or "")
-    mentioned_fields = [
-        field
-        for field in ("input_file", "file_id", "text.format", "json_schema", "schema", "purpose")
-        if field in message.lower()
-    ]
     return {
         "provider": "asr" if "openspeech" in response.request.url.host else "ark",
-        "method": response.request.method,
-        "path": path,
-        "http_status": response.status_code,
         "provider_status": response.headers.get("X-Api-Status-Code"),
         "provider_request_id": response.headers.get("X-Tt-Logid")
         or response.headers.get("X-Request-Id"),
         "provider_error_code": error.get("code") or payload.get("code"),
-        "provider_error_param": error.get("param"),
-        "message_category": _message_category(message),
-        "mentioned_fields": mentioned_fields,
     }
 
 
@@ -158,13 +128,6 @@ async def run_smoke() -> dict[str, Any]:
     return {
         "status": "PASS",
         "elapsed_seconds": elapsed_seconds,
-        "candidate_count": len(result.candidates),
-        "completed_branches": sorted(completed_branches),
-        "stage_event_count": sum(
-            event_type == "stage.changed" for event_type, _data in events
-        ),
-        "local_temp_cleanup": True,
-        "ark_temp_cleanup": True,
     }
 
 
@@ -176,23 +139,25 @@ async def main() -> int:
             json.dumps(
                 {
                     "status": "FAIL",
-                    "error_type": type(error).__name__,
                     "error_code": error.code,
-                    "provider_calls": error.provider_calls,
+                    "provider_diagnostics": error.provider_calls,
                 },
                 ensure_ascii=False,
             )
         )
         return 1
     except Exception as error:
+        runtime_code = str(error) if isinstance(error, RuntimeError) else ""
+        safe_code = (
+            runtime_code
+            if runtime_code in {"cloud_provider_required", "cloud_credentials_missing"}
+            else "unexpected_error"
+        )
         print(
             json.dumps(
                 {
                     "status": "FAIL",
-                    "error_type": type(error).__name__,
-                    "error_code": str(error)
-                    if isinstance(error, RuntimeError)
-                    else "unexpected_error",
+                    "error_code": safe_code,
                 },
                 ensure_ascii=False,
             )

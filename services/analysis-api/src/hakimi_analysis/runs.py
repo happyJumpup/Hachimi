@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -14,10 +16,12 @@ from hakimi_analysis.models import (
     RunStage,
     RunStatus,
 )
+from hakimi_analysis.observability import log_safe_fields
 from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure
 from hakimi_analysis.sources import VideoSource
 
 TERMINAL_STATUSES = {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+LOGGER = logging.getLogger("hakimi_analysis.runs")
 
 
 @dataclass(slots=True)
@@ -27,6 +31,7 @@ class RunRecord:
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task[None] | None = None
     terminal_at: datetime | None = None
+    started_monotonic: float = field(default_factory=time.perf_counter)
 
 
 class AnalysisRunManager:
@@ -193,6 +198,17 @@ class AnalysisRunManager:
             data=data,
         )
         record.events.append(event)
+        log_safe_fields(
+            LOGGER,
+            run_id=record.view.id,
+            source_id=record.view.source_id,
+            stage=record.view.stage.value,
+            elapsed_ms=round((time.perf_counter() - record.started_monotonic) * 1000),
+            model_version=data.get("model_version"),
+            skill_version=data.get("skill_version"),
+            provider_request_id=data.get("provider_request_id"),
+            error_code=data.get("error_code"),
+        )
         async with record.condition:
             record.condition.notify_all()
 

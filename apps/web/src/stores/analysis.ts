@@ -67,7 +67,10 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
     try {
       const created = await input.client.createRun(input.sourceId, input.triggerSeconds)
-      if (generation !== currentGeneration) return
+      if (generation !== currentGeneration) {
+        await input.client.cancelRun(created.id).catch(() => undefined)
+        return
+      }
       activeRunId.value = created.id
       status.value = created.status
       stage.value = created.stage
@@ -144,6 +147,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     activeRunId.value = null
     candidates.value = []
     warnings.value = []
+    error.value = null
     emptyReason.value = null
     if (runId) {
       try {
@@ -152,7 +156,10 @@ export const useAnalysisStore = defineStore('analysis', () => {
         status.value = 'cancelled'
         stage.value = 'cancelled'
       }
+      return
     }
+    status.value = 'cancelled'
+    stage.value = 'cancelled'
   }
 
   function clearResult(): void {

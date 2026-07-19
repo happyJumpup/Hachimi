@@ -81,8 +81,10 @@ class ArkResponsesClient:
         trigger_seconds: float,
         instructions: str,
     ) -> VisualLocalizationResult:
-        file_id = await self._upload_file(video_path)
+        file_id, ready = await self._upload_file(video_path)
         try:
+            if not ready:
+                await self._wait_for_file(file_id)
             metadata = {
                 "trigger_seconds": trigger_seconds,
                 "window": window.model_dump(mode="json"),
@@ -110,7 +112,7 @@ class ArkResponsesClient:
         finally:
             await self._delete_file(file_id)
 
-    async def _upload_file(self, path: Path) -> str:
+    async def _upload_file(self, path: Path) -> tuple[str, bool]:
         file_bytes = await asyncio.to_thread(path.read_bytes)
         response = await request_with_retry(
             self._http_client,
@@ -131,9 +133,8 @@ class ArkResponsesClient:
             status = str(payload.get("status", ""))
         except (KeyError, TypeError, ValueError) as error:
             raise ProviderSchemaError("方舟文件上传返回格式无效") from error
-        if status not in {"processed", "succeeded", "completed", "active"}:
-            await self._wait_for_file(file_id)
-        return file_id
+        ready = status in {"processed", "succeeded", "completed", "active"}
+        return file_id, ready
 
     async def _wait_for_file(self, file_id: str) -> None:
         for _ in range(self._file_poll_limit):

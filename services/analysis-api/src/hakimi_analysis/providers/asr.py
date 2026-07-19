@@ -34,7 +34,7 @@ class VolcAsrClient:
     ) -> Transcript:
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         payload = {
-            "user": {"uid": f"hachimi-{request_id}"},
+            "user": {"uid": self._api_key},
             "audio": {"data": base64.b64encode(audio_bytes).decode("ascii")},
             "request": {
                 "model_name": "bigmodel",

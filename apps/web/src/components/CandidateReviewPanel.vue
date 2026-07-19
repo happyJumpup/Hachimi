@@ -44,13 +44,16 @@ watch(
 
 const selected = computed(() => editable.value.filter((candidate) => candidate.selected))
 const needsMode = computed(() => selected.value.some((candidate) => candidate.parameters.mode === null))
+const invalidName = computed(() => selected.value.some((candidate) => !candidate.name.trim()))
 const invalidSegment = computed(() =>
   selected.value.some(
     (candidate) =>
       candidate.segment !== null && candidate.segment.end_seconds <= candidate.segment.start_seconds,
   ),
 )
-const canAdd = computed(() => selected.value.length > 0 && !needsMode.value && !invalidSegment.value)
+const canAdd = computed(
+  () => selected.value.length > 0 && !needsMode.value && !invalidName.value && !invalidSegment.value,
+)
 
 const formatTime = (seconds: number): string => {
   const minutes = Math.floor(seconds / 60)
@@ -175,6 +178,7 @@ const submit = (): void => {
 
     <footer class="panel-footer">
       <p v-if="needsMode">先为选中的动作选择训练方式</p>
+      <p v-else-if="invalidName">动作名称不能为空</p>
       <p v-else-if="invalidSegment">结束时间要晚于开始时间</p>
       <p v-else>参数缺失时会使用可修改的规则默认值</p>
       <button type="button" class="primary-action" :disabled="!canAdd" @click="submit">

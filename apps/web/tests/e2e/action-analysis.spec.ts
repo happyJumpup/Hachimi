@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 test('video candidate can be reviewed, added, and restored from the draft', async ({ page }) => {
   await page.goto('/')
-  const sourceSelect = page.getByLabel('训练视频')
+  const sourceSelect = page.getByLabel('来源视频')
   await expect(sourceSelect).toHaveValue('legacy-arm-workout')
   await expect(sourceSelect.locator('option:checked')).toContainText('哈基米手臂训练')
 

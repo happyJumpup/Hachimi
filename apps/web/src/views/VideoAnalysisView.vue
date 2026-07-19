@@ -86,7 +86,10 @@ const addCandidates = async (
   candidates: AnalysisCandidate[],
   editedSegmentIds: string[],
 ): Promise<void> => {
-  draft.addCandidates(candidates, editedSegmentIds)
+  const sourceTitles = selectedSource.value
+    ? { [selectedSource.value.id]: selectedSource.value.title }
+    : {}
+  draft.addCandidates(candidates, editedSegmentIds, sourceTitles)
   await draft.flushPersist()
   analysis.clearResult()
   await router.push('/plan')
@@ -113,7 +116,7 @@ const addCandidates = async (
     <section class="video-stage" :class="{ 'has-review': analysis.status === 'completed' && analysis.candidates.length }">
       <div class="source-rail">
         <span class="live-dot" />
-        <label for="source">训练视频</label>
+        <label for="source">来源视频</label>
         <select id="source" v-model="selectedSourceId" :disabled="analysis.isRunning">
           <option v-for="source in analysis.sources" :key="source.id" :value="source.id">
             {{ source.title }}
@@ -121,16 +124,16 @@ const addCandidates = async (
         </select>
       </div>
 
-      <div v-if="analysis.sourcesLoading" class="stage-empty">正在读取受控视频…</div>
+      <div v-if="analysis.sourcesLoading" class="stage-empty">正在读取受控视频源…</div>
       <div v-else-if="!selectedSource" class="stage-empty">
         <span class="empty-code">NO SOURCE</span>
         <h1>还没有可分析的视频</h1>
-        <p>在本地环境中配置演示视频后，这里会出现训练来源。</p>
+        <p>在本地环境中配置演示视频后，这里会出现来源视频。</p>
       </div>
       <template v-else>
         <video
           ref="video"
-          class="training-video"
+          class="source-video"
           :src="selectedSource.media_url"
           playsinline
           controls
@@ -329,7 +332,7 @@ const addCandidates = async (
 }
 .source-rail option { color: #111; }
 
-.training-video {
+.source-video {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -490,11 +493,11 @@ const addCandidates = async (
     height: min(78dvh, 760px);
     min-height: 620px;
   }
-  .training-video { width: min(100%, 430px); margin-left: calc((100% - 430px) / 2); border-inline: 1px solid var(--line); }
+  .source-video { width: min(100%, 430px); margin-left: calc((100% - 430px) / 2); border-inline: 1px solid var(--line); }
   .video-vignette { left: calc((100% - 430px) / 2); right: calc((100% - 430px) / 2); }
   .time-readout,
   .analyze-button { left: calc((100% - 430px) / 2 + 16px); right: calc((100% - 430px) / 2 + 16px); }
-  .video-stage.has-review .training-video { margin-left: 28px; }
+  .video-stage.has-review .source-video { margin-left: 28px; }
   .video-stage.has-review .video-vignette { left: 28px; right: calc(100% - 458px); }
   .video-stage.has-review .time-readout,
   .video-stage.has-review .analyze-button { left: 44px; right: calc(100% - 442px); }

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
 
-from hakimi_analysis.fusion import fuse_candidates
+from hakimi_analysis.fusion import CandidateFusionSkill
 from hakimi_analysis.media import (
     AnalysisWindow,
     LocalMediaProcessor,
@@ -69,28 +69,43 @@ class ArkAnalyzer(Protocol):
 @dataclass(frozen=True, slots=True)
 class SkillRepository:
     speech_instructions: str
+    speech_version: str
     visual_instructions: str
+    visual_version: str
+    fusion_instructions: str
+    fusion_version: str
 
     @classmethod
     def load(cls, skills_root: Path) -> "SkillRepository":
         speech_path = skills_root / "training-speech-understanding" / "SKILL.md"
         visual_path = skills_root / "visual-action-localization" / "SKILL.md"
+        fusion_path = skills_root / "candidate-fusion" / "SKILL.md"
+        speech_instructions = speech_path.read_text(encoding="utf-8")
+        visual_instructions = visual_path.read_text(encoding="utf-8")
+        fusion_instructions = fusion_path.read_text(encoding="utf-8")
         return cls(
-            speech_instructions=speech_path.read_text(encoding="utf-8"),
-            visual_instructions=visual_path.read_text(encoding="utf-8"),
+            speech_instructions=speech_instructions,
+            speech_version=_skill_version(speech_instructions),
+            visual_instructions=visual_instructions,
+            visual_version=_skill_version(visual_instructions),
+            fusion_instructions=fusion_instructions,
+            fusion_version=_skill_version(fusion_instructions),
         )
+
+
+def _skill_version(instructions: str) -> str:
+    for line in instructions.splitlines():
+        if line.startswith("version:"):
+            version = line.partition(":")[2].strip()
+            if version:
+                return version
+    raise ValueError("Skill contract is missing a version")
 
 
 @dataclass(slots=True)
 class BranchResults:
     speech: list[SpeechSignal] | ProviderError
     visual: list[VisualSegment] | ProviderError
-
-    @property
-    def has_evidence(self) -> bool:
-        speech_has_evidence = isinstance(self.speech, list) and bool(self.speech)
-        visual_has_evidence = isinstance(self.visual, list) and bool(self.visual)
-        return speech_has_evidence or visual_has_evidence
 
     @property
     def both_successful(self) -> bool:
@@ -110,6 +125,10 @@ class OrchestratedAnalysisPipeline:
         self._asr = asr
         self._ark = ark
         self._skills = skills
+        self._fusion = CandidateFusionSkill(
+            instructions=skills.fusion_instructions,
+            version=skills.fusion_version,
+        )
 
     async def analyze(
         self,
@@ -145,7 +164,11 @@ class OrchestratedAnalysisPipeline:
             speech_signals = results.speech if isinstance(results.speech, list) else []
             visual_segments = results.visual if isinstance(results.visual, list) else []
             if speech_signals or visual_segments:
-                await emit(RunStage.FUSING_CANDIDATES, "stage.changed", {})
+                await emit(
+                    RunStage.FUSING_CANDIDATES,
+                    "stage.changed",
+                    {"skill_version": self._fusion.version},
+                )
                 warnings: list[AnalysisWarning] = []
                 if isinstance(results.speech, ProviderError):
                     warnings.append(
@@ -162,7 +185,7 @@ class OrchestratedAnalysisPipeline:
                         )
                     )
                 return PipelineOutput(
-                    candidates=fuse_candidates(
+                    candidates=self._fusion.run(
                         source_id=source.id,
                         speech_signals=speech_signals,
                         visual_segments=visual_segments,
@@ -222,7 +245,7 @@ class OrchestratedAnalysisPipeline:
         await emit(
             RunStage.ANALYZING_EVIDENCE,
             "branch.started",
-            {"branch": "speech"},
+            {"branch": "speech", "skill_version": self._skills.speech_version},
         )
         transcript = await self._asr.recognize(
             audio_path=prepared.audio_path,
@@ -265,7 +288,7 @@ class OrchestratedAnalysisPipeline:
         await emit(
             RunStage.ANALYZING_EVIDENCE,
             "branch.started",
-            {"branch": "visual"},
+            {"branch": "visual", "skill_version": self._skills.visual_version},
         )
         result = await self._ark.locate_visual(
             video_path=prepared.video_path,

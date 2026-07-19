@@ -122,8 +122,21 @@ def source(tmp_path: Path) -> VideoSource:
 def skills() -> SkillRepository:
     return SkillRepository(
         speech_instructions="speech skill",
+        speech_version="test-speech",
         visual_instructions="visual skill",
+        visual_version="test-visual",
+        fusion_instructions="fusion skill",
+        fusion_version="test-fusion",
     )
+
+
+def test_skill_repository_loads_all_three_versioned_contracts() -> None:
+    repository = SkillRepository.load(Path(__file__).parents[3] / "skills")
+
+    assert repository.speech_version == "1.0.0"
+    assert repository.visual_version == "1.0.0"
+    assert repository.fusion_version == "1.0.0"
+    assert "Merge temporally overlapping evidence" in repository.fusion_instructions
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,13 @@
 import asyncio
+import json
+import logging
 from pathlib import Path
 from typing import cast
 
 import httpx
 import pytest
 
-from hakimi_analysis.app import create_app
+from hakimi_analysis.app import create_app, stream_run_events
 from hakimi_analysis.models import (
     AnalysisCandidate,
     CandidateParameters,
@@ -14,7 +16,8 @@ from hakimi_analysis.models import (
     RunStage,
     Segment,
 )
-from hakimi_analysis.pipeline import EmitCallback, PipelineOutput
+from hakimi_analysis.observability import ALLOWED_LOG_FIELDS
+from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
 from hakimi_analysis.sources import SourceCatalog, VideoSource
 
 
@@ -58,6 +61,20 @@ class SlowPipeline:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
         await asyncio.sleep(30)
         return PipelineOutput()
+
+
+class SecretFailurePipeline:
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        raise PipelineFailure(
+            "provider_error",
+            "provider-secret-response-must-not-be-logged",
+            retryable=False,
+        )
 
 
 def source_catalog(tmp_path: Path) -> SourceCatalog:
@@ -164,3 +181,74 @@ async def test_delete_cancels_an_in_flight_run(tmp_path: Path) -> None:
         assert cancelled.status_code == 202
         view = await wait_for_status(client, run_id, "cancelled")
         assert view["stage"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_run_timeout_is_an_explicit_failure(tmp_path: Path) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=SlowPipeline(),
+        timeout_seconds=0.01,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout", "trigger_seconds": 45},
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["stage"] == "failed"
+    assert failed["error"] == {
+        "code": "timeout",
+        "message": "动作分析超时，请重试",
+        "retryable": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_closing_sse_stream_cancels_an_in_flight_run(tmp_path: Path) -> None:
+    app = create_app(catalog=source_catalog(tmp_path), pipeline=SlowPipeline())
+    manager = app.state.run_manager
+    source = app.state.source_catalog.get("legacy-arm-workout")
+    created = await manager.create(source, 45)
+
+    async def still_connected() -> bool:
+        return False
+
+    stream = stream_run_events(manager, created.id, still_connected)
+    first_event = await anext(stream)
+    assert "event: run.started" in first_event
+    await stream.aclose()
+
+    assert manager.get(created.id).status == "cancelled"
+    await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_logs_keep_only_allowlisted_diagnostic_fields(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app(catalog=source_catalog(tmp_path), pipeline=SecretFailurePipeline())
+    with caplog.at_level(logging.INFO, logger="hakimi_analysis.runs"):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            created = await client.post(
+                "/api/v1/analysis-runs",
+                json={"source_id": "legacy-arm-workout", "trigger_seconds": 45},
+            )
+            await wait_for_status(client, created.json()["id"], "failed")
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "hakimi_analysis.runs"
+    ]
+    payloads = [json.loads(message) for message in messages]
+    assert payloads
+    assert all(set(payload) <= ALLOWED_LOG_FIELDS for payload in payloads)
+    assert any(payload.get("error_code") == "provider_error" for payload in payloads)
+    assert all("provider-secret-response-must-not-be-logged" not in message for message in messages)

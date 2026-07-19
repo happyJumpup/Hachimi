@@ -28,7 +28,11 @@ const sourced = <T>(value: T | null, source: SourcedValue<T>['source']): Sourced
   source,
 })
 
-const fromCandidate = (candidate: AnalysisCandidate, segmentEdited = false): DraftItem => {
+const fromCandidate = (
+  candidate: AnalysisCandidate,
+  segmentEdited = false,
+  sourceTitle?: string,
+): DraftItem => {
   const mode = candidate.parameters.mode
   if (mode === null) {
     throw new Error('candidate mode must be selected before adding it to the draft')
@@ -37,7 +41,7 @@ const fromCandidate = (candidate: AnalysisCandidate, segmentEdited = false): Dra
   return {
     id: id(),
     name: candidate.name,
-    sourceRef: { sourceId: candidate.source_id },
+    sourceRef: { sourceId: candidate.source_id, title: sourceTitle },
     segment: sourced(
       candidate.segment ? cloneJson(candidate.segment) : null,
       candidate.segment ? (segmentEdited ? 'user' : 'video') : null,
@@ -101,9 +105,15 @@ export const useDraftStore = defineStore('draft', () => {
     await repository.save(cloneJson(plan.value))
   }
 
-  function addCandidates(candidates: AnalysisCandidate[], editedSegmentIds: string[] = []): void {
+  function addCandidates(
+    candidates: AnalysisCandidate[],
+    editedSegmentIds: string[] = [],
+    sourceTitles: Record<string, string> = {},
+  ): void {
     const edited = new Set(editedSegmentIds)
-    plan.value.items.push(...candidates.map((candidate) => fromCandidate(candidate, edited.has(candidate.id))))
+    plan.value.items.push(...candidates.map((candidate) =>
+      fromCandidate(candidate, edited.has(candidate.id), sourceTitles[candidate.source_id]),
+    ))
     schedulePersist()
   }
 
@@ -153,15 +163,6 @@ export const useDraftStore = defineStore('draft', () => {
     schedulePersist()
   }
 
-  function updateSegment(itemId: string, segment: Segment | null): void {
-    const item = plan.value.items.find((entry) => entry.id === itemId)
-    if (!item) {
-      return
-    }
-    item.segment = sourced(segment ? cloneJson(segment) : null, segment ? 'user' : null)
-    schedulePersist()
-  }
-
   function move(itemId: string, direction: -1 | 1): void {
     const index = plan.value.items.findIndex((entry) => entry.id === itemId)
     const target = index + direction
@@ -201,7 +202,6 @@ export const useDraftStore = defineStore('draft', () => {
     updateValue,
     updateName,
     updateMode,
-    updateSegment,
     move,
     duplicate,
     remove,

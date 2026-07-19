@@ -80,7 +80,7 @@ def build_catalog(settings: Settings) -> SourceCatalog:
         [
             VideoSource(
                 id="legacy-arm-workout",
-                title="哈基米手臂训练｜本地受控视频",
+                title="哈基米手臂训练｜本地来源视频",
                 path=resolved_path,
                 duration_seconds=duration,
             )

@@ -35,6 +35,5 @@ jobs:
       - run: git diff --exit-code -- contracts/openapi.json apps/web/src/api/schema.d.ts
       - run: pnpm check
 
-      - run: uv run --project services/analysis-api python services/analysis-api/scripts/create_synthetic_video.py
       - run: pnpm --filter @hachimi/web exec playwright install --with-deps chromium
       - run: pnpm test:e2e

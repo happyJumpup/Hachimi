@@ -118,4 +118,30 @@ describe('动作分析 store', () => {
     expect(store.status).toBe('cancelled')
     expect(store.candidates).toEqual([])
   })
+
+  it('cancels a run that is created after the user already cancelled', async () => {
+    const client = new FakeClient()
+    const events = new FakeEventFactory()
+    const store = useAnalysisStore()
+    let resolveCreated!: (run: AnalysisRun) => void
+    client.createRun = () =>
+      new Promise<AnalysisRun>((resolve) => {
+        resolveCreated = resolve
+      })
+
+    const starting = store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    await flushPromises()
+    await store.cancel(client)
+    resolveCreated({
+      ...completedRun('run-created-late'),
+      status: 'queued',
+      stage: 'queued',
+      candidates: [],
+    })
+    await starting
+
+    expect(client.cancelled).toEqual(['run-created-late'])
+    expect(store.status).toBe('cancelled')
+    expect(store.candidates).toEqual([])
+  })
 })
