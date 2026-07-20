@@ -31,6 +31,7 @@ const stageCopy: Record<AnalysisRun['stage'], string> = {
 export const useAnalysisStore = defineStore('analysis', () => {
   const sources = ref<SourceSummary[]>([])
   const sourcesLoading = ref(false)
+  const sourcesError = ref<string | null>(null)
   const status = ref<UiStatus>('idle')
   const stage = ref<AnalysisRun['stage']>('queued')
   const candidates = ref<AnalysisCandidate[]>([])
@@ -48,8 +49,11 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
   async function loadSources(client: AnalysisClient): Promise<void> {
     sourcesLoading.value = true
+    sourcesError.value = null
     try {
       sources.value = await client.listSources()
+    } catch {
+      sourcesError.value = '视频暂时没有读取成功，请重试'
     } finally {
       sourcesLoading.value = false
     }
@@ -202,6 +206,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
   return {
     sources,
     sourcesLoading,
+    sourcesError,
     status,
     stage,
     stageLabel,

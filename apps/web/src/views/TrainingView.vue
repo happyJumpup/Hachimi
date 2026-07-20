@@ -10,6 +10,7 @@ import {
 import { onBeforeRouteLeave } from 'vue-router'
 
 import { analysisClient } from '@/api/client'
+import { toSafeOriginUrl } from '@/domain/source'
 import HachimiPet from '@/features/experience/HachimiPet.vue'
 import { derivePetState } from '@/features/experience/pet-state'
 import { useAnalysisStore } from '@/stores/analysis'
@@ -33,6 +34,7 @@ const source = computed(() => {
   return sourceId ? analysis.sources.find((entry) => entry.id === sourceId) ?? null : null
 })
 const segment = computed(() => item.value?.segment.value ?? null)
+const originalUrl = computed(() => toSafeOriginUrl(item.value?.sourceRef?.originUrl))
 const targetSets = computed(() => item.value?.sets.value ?? 0)
 const actionPosition = computed(() => {
   if (!session.value) return ''
@@ -245,6 +247,15 @@ onBeforeUnmount(() => {
           <p class="action-position">{{ actionPosition }}</p>
           <p class="eyebrow">{{ session.plan.name }}</p>
           <h1>{{ item.name }}</h1>
+          <a
+            v-if="originalUrl"
+            class="original-video-link"
+            :href="originalUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            查看原视频
+          </a>
         </div>
         <div class="set-counter">
           <b>{{ setNumber }}</b>
@@ -386,6 +397,7 @@ onBeforeUnmount(() => {
 .action-position { margin: 0 0 7px; color: var(--ink); font-size: 11px; font-weight: 800; }
 .session-title { justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .session-title h1 { margin: 6px 0 0; font: 700 38px/.95 var(--font-display), var(--font-cn); }
+.original-video-link { display: inline-flex; min-width: 44px; min-height: 44px; align-items: center; color: var(--cyan); font-size: 10px; font-weight: 700; text-decoration: none; }
 .set-counter { flex: 0 0 auto; color: var(--muted); text-align: right; }
 .set-counter b { color: var(--ink); font: 700 42px/.8 var(--font-display); }
 .set-counter span { font-size: 11px; }

@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { toSafeOriginUrl } from '@/domain/source'
 import type { ActionMode, DraftItem } from '@/domain/types'
 import { QUICK_EXPERIENCE_PLAN_NAME } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
@@ -33,11 +34,25 @@ const totalSets = computed(() =>
 const isQuickExperience = computed(() =>
   draft.plan.linkedPlanId === null && draft.plan.name === QUICK_EXPERIENCE_PLAN_NAME,
 )
+const globalValidationIssues = computed(() =>
+  training.validationIssues.filter((issue) => issue.itemId === null),
+)
+
+const validationIssuesForItem = (itemId: string) =>
+  training.validationIssues.filter((issue) => issue.itemId === itemId)
+
+const hasItemIssue = (itemId: string, field: string): boolean =>
+  training.validationIssues.some((issue) => issue.itemId === itemId && issue.field === field)
+
+const validationId = (itemId: string): string => `validation-${itemId}`
 
 const sourceLabel = (item: DraftItem): string =>
   item.sourceRef
     ? `视频动作 · ${item.sourceRef.title ?? item.sourceRef.sourceId}`
     : '自建动作 · 无参考视频'
+
+const originalUrl = (item: DraftItem): string | undefined =>
+  toSafeOriginUrl(item.sourceRef?.originUrl)
 
 const provenance = (source: DraftItem['sets']['source']): string => {
   if (source === 'video') return '视频'
@@ -62,10 +77,17 @@ const startTraining = async (): Promise<void> => {
     const result = await training.createFromDraft(draft.plan)
     if (result.ok || (!result.ok && result.code === 'active_session_exists')) {
       await router.push('/training')
-    } else if (!result.ok && result.code !== 'invalid_plan') {
-      operationError.value = {
-        action: 'start_training',
-        message: '这次没有开始训练，请重试',
+    } else if (!result.ok) {
+      if (result.code === 'invalid_plan') {
+        await nextTick()
+        const invalidCard = document.querySelector<HTMLElement>('.plan-card.has-validation-error')
+        invalidCard?.focus()
+        invalidCard?.scrollIntoView?.({ block: 'center' })
+      } else {
+        operationError.value = {
+          action: 'start_training',
+          message: '这次没有开始训练，请重试',
+        }
       }
     }
   } catch {
@@ -143,7 +165,14 @@ const retryOperation = async (): Promise<void> => {
     <p v-if="saveMessage" class="save-message" role="status">{{ saveMessage }}</p>
 
     <section v-if="draft.items.length" class="plan-list" aria-label="动作安排">
-      <article v-for="(item, index) in draft.items" :key="item.id" class="plan-card">
+      <article
+        v-for="(item, index) in draft.items"
+        :key="item.id"
+        class="plan-card"
+        :class="{ 'has-validation-error': validationIssuesForItem(item.id).length }"
+        :aria-describedby="validationIssuesForItem(item.id).length ? validationId(item.id) : undefined"
+        tabindex="-1"
+      >
         <div class="order-column">
           <span>{{ String(index + 1).padStart(2, '0') }}</span>
           <i />
@@ -154,11 +183,23 @@ const retryOperation = async (): Promise<void> => {
         </div>
 
         <div class="card-content">
-          <p class="source-label">{{ sourceLabel(item) }}</p>
+          <div class="source-row">
+            <p class="source-label">{{ sourceLabel(item) }}</p>
+            <a
+              v-if="originalUrl(item)"
+              class="original-video-link"
+              :href="originalUrl(item)"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              查看原视频
+            </a>
+          </div>
           <input
             class="plan-name"
             :value="item.name"
             aria-label="动作名称"
+            :aria-invalid="hasItemIssue(item.id, 'name') || undefined"
             @change="draft.updateName(item.id, ($event.target as HTMLInputElement).value)"
           />
 
@@ -174,6 +215,7 @@ const retryOperation = async (): Promise<void> => {
                 type="number"
                 min="1"
                 :value="item.sets.value ?? ''"
+                :aria-invalid="hasItemIssue(item.id, 'sets') || undefined"
                 @input="draft.updateValue(item.id, 'sets', Number(($event.target as HTMLInputElement).value) || null)"
               />
             </label>
@@ -183,6 +225,7 @@ const retryOperation = async (): Promise<void> => {
                 type="number"
                 min="1"
                 :value="item.reps.value ?? ''"
+                :aria-invalid="hasItemIssue(item.id, 'reps') || undefined"
                 @input="draft.updateValue(item.id, 'reps', Number(($event.target as HTMLInputElement).value) || null)"
               />
             </label>
@@ -192,6 +235,7 @@ const retryOperation = async (): Promise<void> => {
                 type="number"
                 min="1"
                 :value="item.durationSeconds.value ?? ''"
+                :aria-invalid="hasItemIssue(item.id, 'durationSeconds') || undefined"
                 @input="draft.updateValue(item.id, 'durationSeconds', Number(($event.target as HTMLInputElement).value) || null)"
               />
             </label>
@@ -201,6 +245,7 @@ const retryOperation = async (): Promise<void> => {
                 type="number"
                 min="0"
                 :value="item.restSeconds.value ?? ''"
+                :aria-invalid="hasItemIssue(item.id, 'restSeconds') || undefined"
                 @input="draft.updateValue(item.id, 'restSeconds', Number(($event.target as HTMLInputElement).value) || 0)"
               />
             </label>
@@ -212,6 +257,7 @@ const retryOperation = async (): Promise<void> => {
                 step="0.5"
                 placeholder="留空"
                 :value="item.weightKg.value ?? ''"
+                :aria-invalid="hasItemIssue(item.id, 'weightKg') || undefined"
                 @input="draft.updateValue(item.id, 'weightKg', Number(($event.target as HTMLInputElement).value) || null)"
               />
             </label>
@@ -227,6 +273,21 @@ const retryOperation = async (): Promise<void> => {
             <button type="button" @click="draft.duplicate(item.id)">复制</button>
             <button type="button" class="danger" @click="draft.remove(item.id)">删除</button>
           </footer>
+
+          <div
+            v-if="validationIssuesForItem(item.id).length"
+            :id="validationId(item.id)"
+            class="card-validation"
+            role="alert"
+          >
+            <strong>请检查这个动作</strong>
+            <p
+              v-for="issue in validationIssuesForItem(item.id)"
+              :key="`${issue.itemId}-${issue.field}`"
+            >
+              {{ issue.message }}
+            </p>
+          </div>
         </div>
       </article>
     </section>
@@ -266,6 +327,7 @@ const retryOperation = async (): Promise<void> => {
       <div>
         <strong>{{ training.hasCurrent ? '已有未完成训练' : '方案结构会在开始前检查' }}</strong>
         <small>{{ training.hasCurrent ? '继续当前进度，不会覆盖原场次' : '不评价动作顺序或训练效果' }}</small>
+        <small class="training-safety-tip">如有不适请停止，并按自身情况调整</small>
       </div>
       <button
         v-if="!training.hasCurrent"
@@ -327,9 +389,9 @@ const retryOperation = async (): Promise<void> => {
       </template>
     </span>
 
-    <section v-if="training.errorCode === 'invalid_plan'" class="plan-error" role="alert">
+    <section v-if="globalValidationIssues.length" class="plan-error" role="alert">
       <strong>方案还不能开始训练</strong>
-      <p v-for="issue in training.validationIssues" :key="`${issue.itemId}-${issue.field}`">
+      <p v-for="issue in globalValidationIssues" :key="`${issue.itemId}-${issue.field}`">
         {{ issue.message }}
       </p>
     </section>
@@ -379,19 +441,23 @@ const retryOperation = async (): Promise<void> => {
 .save-message { border-left-color: var(--cyan); color: var(--cyan); background: rgb(38 235 213 / 5%); }
 
 .plan-list { display: grid; gap: 14px; margin-top: 20px; }
-.plan-card { display: grid; grid-template-columns: 52px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1%)); }
+.plan-card { display: grid; grid-template-columns: 60px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1%)); }
+.plan-card.has-validation-error { border-color: rgb(255 111 97 / 55%); }
+.plan-card.has-validation-error:focus { outline: 2px solid var(--coral); outline-offset: 3px; }
 .order-column { display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 8px; padding: 16px 8px; border-right: 1px solid var(--line); background: rgb(38 235 213 / 3%); }
 .order-column > span { color: var(--cyan); font: 700 22px/1 var(--font-display); }
 .order-column > i { width: 1px; background: linear-gradient(var(--cyan), transparent); }
-.order-column div { display: grid; gap: 5px; }
-.order-column button { width: 28px; height: 28px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; }
+.order-column div { display: grid; gap: 8px; }
+.order-column button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; }
 .order-column button:disabled { opacity: .2; }
 
 .card-content { min-width: 0; padding: 16px; }
-.source-label { margin: 0 0 6px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
+.source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.source-label { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
+.original-video-link { display: inline-grid; min-width: 44px; min-height: 44px; flex: 0 0 auto; place-items: center; color: var(--cyan); font-size: 10px; font-weight: 700; text-decoration: none; }
 .plan-name { width: 100%; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 28px/1.1 var(--font-display), var(--font-cn); }
 .mode-toggle { display: inline-flex; gap: 4px; margin: 14px 0; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
-.mode-toggle button { padding: 7px 12px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; }
+.mode-toggle button { min-width: 44px; min-height: 44px; padding: 7px 12px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; }
 .mode-toggle button.active { color: var(--bg); background: var(--cyan); font-weight: 800; }
 
 .parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
@@ -405,8 +471,11 @@ const retryOperation = async (): Promise<void> => {
 .segment-line { gap: 8px; margin-top: 12px; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 5%); font-size: 10px; }
 .segment-line b { margin-left: auto; color: var(--ink); font: 600 14px/1 var(--font-display); }
 .card-actions { justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.card-actions button { padding: 6px 9px; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
+.card-actions button { min-width: 44px; min-height: 44px; padding: 6px 9px; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
 .card-actions .danger { color: var(--coral); }
+.card-validation { margin-top: 10px; padding: 10px 12px; border-left: 2px solid var(--coral); color: var(--coral); background: rgb(255 111 97 / 6%); }
+.card-validation strong { font-size: 11px; }
+.card-validation p { margin: 4px 0 0; font-size: 10px; }
 
 .manual-section { margin-top: 16px; }
 .manual-trigger { width: 100%; gap: 13px; padding: 15px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--ink); background: transparent; text-align: left; }
@@ -448,6 +517,7 @@ const retryOperation = async (): Promise<void> => {
 .start-training-panel small { display: block; }
 .start-training-panel strong { font-size: 12px; }
 .start-training-panel small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.start-training-panel .training-safety-tip { margin-top: 6px; color: var(--ink); }
 .start-training-panel button,
 .start-training-panel a {
   min-height: 44px;

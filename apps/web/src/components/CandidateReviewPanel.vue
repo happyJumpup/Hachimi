@@ -16,6 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   preview: [segment: Segment]
   add: [candidates: AnalysisCandidate[], editedSegmentIds: string[]]
+  close: []
 }>()
 
 const editable = ref<EditableCandidate[]>([])
@@ -93,7 +94,17 @@ const submit = (): void => {
         <p class="eyebrow">ACTION PICK</p>
         <h2 id="candidate-title">找到 {{ editable.length }} 个动作</h2>
       </div>
-      <span class="review-note">由你确认</span>
+      <div class="panel-header-actions">
+        <span class="review-note">由你确认</span>
+        <button
+          type="button"
+          class="return-button"
+          aria-label="返回视频并重新选择时间点"
+          @click="emit('close')"
+        >
+          返回视频
+        </button>
+      </div>
     </header>
 
     <p v-for="warning in warnings" :key="warning.code" class="warning-note">
@@ -229,6 +240,12 @@ const submit = (): void => {
   margin-bottom: 12px;
 }
 
+.panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .panel-header h2 {
   margin: 2px 0 0;
   font-size: 22px;
@@ -248,6 +265,17 @@ const submit = (): void => {
   border-radius: 999px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.return-button {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .warning-note {
@@ -281,6 +309,7 @@ const submit = (): void => {
 }
 
 .candidate-select {
+  min-height: 44px;
   gap: 8px;
   color: var(--muted);
   font-size: 12px;
@@ -297,6 +326,7 @@ const submit = (): void => {
 
 .action-name-input {
   width: 100%;
+  min-height: 44px;
   margin: 10px 0 8px;
   padding: 0;
   border: 0;
@@ -333,6 +363,7 @@ const submit = (): void => {
 
 .segment-editor input {
   width: 100%;
+  min-height: 44px;
   padding: 7px 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -342,6 +373,7 @@ const submit = (): void => {
 }
 
 .preview-button {
+  min-height: 44px;
   padding: 8px 10px;
   border: 1px solid rgb(38 235 213 / 25%);
   border-radius: 9px;
@@ -368,6 +400,8 @@ const submit = (): void => {
 }
 
 .mode-picker button {
+  min-width: 44px;
+  min-height: 44px;
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -404,6 +438,7 @@ const submit = (): void => {
 }
 
 .primary-action {
+  min-height: 44px;
   padding: 12px 18px;
   border: 0;
   border-radius: 12px;

@@ -137,6 +137,33 @@ describe('训练页合同', () => {
     wrapper.unmount()
   })
 
+  it('shows the original-video link from the immutable action snapshot', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('paused')
+    current.plan.items[0]!.sourceRef = {
+      sourceId: source.id,
+      title: source.title,
+      originUrl: 'https://www.douyin.com/video/123456',
+    }
+    current.plan.items[0]!.segment = {
+      value: { start_seconds: 41, end_seconds: 51 },
+      source: 'video',
+    }
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    const link = wrapper.get('a.original-video-link')
+    expect(link.text()).toBe('查看原视频')
+    expect(link.attributes()).toMatchObject({
+      href: 'https://www.douyin.com/video/123456',
+      target: '_blank',
+      rel: 'noopener noreferrer',
+    })
+    wrapper.unmount()
+  })
+
   it('visibly pauses and stops ticking after another tab wins a revision conflict', async () => {
     vi.useFakeTimers()
     const pinia = createPinia()

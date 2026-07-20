@@ -54,6 +54,27 @@ class StartStorageFailureEngine implements TrainingEngine {
   }
 }
 
+class InvalidPlanEngine implements TrainingEngine {
+  async restore(): Promise<TrainingEngineResult> {
+    return { ok: true, session: null, record: null, events: [] }
+  }
+
+  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
+    if (command.type !== 'session.create') throw new Error('unexpected command')
+    return {
+      ok: false,
+      code: 'invalid_plan',
+      message: '方案还不能开始训练',
+      session: null,
+      issues: [{
+        itemId: command.plan.items[0]!.id,
+        field: 'sets',
+        message: '组数必须是正整数',
+      }],
+    }
+  }
+}
+
 describe('方案草稿保存状态', () => {
   afterEach(() => vi.useRealTimers())
 
@@ -154,6 +175,7 @@ describe('方案草稿保存状态', () => {
     await router.isReady()
     const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
 
+    expect(wrapper.get('.training-safety-tip').text()).toBe('如有不适请停止，并按自身情况调整')
     await wrapper.get('.start-training-panel button').trigger('click')
     await flushPromises()
 
@@ -161,5 +183,80 @@ describe('方案草稿保存状态', () => {
     expect(wrapper.get('.operation-error[role="alert"]').text()).toContain('没有开始训练')
     expect(wrapper.get('button[aria-label="重试开始训练"]')).toBeTruthy()
     expect(wrapper.text()).not.toContain('internal database details should not leak')
+  })
+
+  it('shows a plan validation issue beside the affected action', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    draft.addManualAction({ name: '平板支撑', mode: 'duration' })
+    await useTrainingStore().load(new InvalidPlanEngine())
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/plan', component: PlanDraftView }],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, {
+      attachTo: document.body,
+      global: { plugins: [pinia, router] },
+    })
+
+    await wrapper.get('.start-training-panel button').trigger('click')
+    await flushPromises()
+
+    const card = wrapper.get('.plan-card')
+    expect(card.classes()).toContain('has-validation-error')
+    expect(card.get('.card-validation[role="alert"]').text()).toContain('组数必须是正整数')
+    expect(document.activeElement).toBe(card.element)
+  })
+
+  it('shows a safe original-video link only for an action with a source URL', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    draft.addCandidates([{
+      id: 'candidate-a',
+      name: '拖拽弯举',
+      source_id: 'video-a',
+      segment: { start_seconds: 41, end_seconds: 51 },
+      parameters: {
+        mode: 'reps',
+        sets: 3,
+        reps: 10,
+        duration_seconds: null,
+        rest_seconds: 60,
+      },
+      evidence: [{ type: 'visual', start_seconds: 41, end_seconds: 51 }],
+      needs_confirmation: false,
+    }], [], {
+      'video-a': {
+        title: '来源视频 A',
+        origin_url: 'https://www.douyin.com/video/123456',
+      },
+    })
+    draft.addManualAction({ name: '平板支撑', mode: 'duration' })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/plan', component: PlanDraftView }],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
+
+    const links = wrapper.findAll('a.original-video-link')
+    expect(links).toHaveLength(1)
+    expect(links[0]!.text()).toBe('查看原视频')
+    expect(links[0]!.attributes()).toMatchObject({
+      href: 'https://www.douyin.com/video/123456',
+      target: '_blank',
+      rel: 'noopener noreferrer',
+    })
   })
 })

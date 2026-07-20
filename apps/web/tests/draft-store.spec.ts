@@ -73,13 +73,23 @@ describe('方案草稿 store', () => {
     await store.load(repository)
 
     store.addCandidates([candidate('video-a'), candidate('video-b')], [], {
-      'video-a': '来源视频 A',
-      'video-b': '来源视频 B',
+      'video-a': {
+        title: '来源视频 A',
+        origin_url: 'https://www.douyin.com/video/123456',
+      },
+      'video-b': {
+        title: '来源视频 B',
+        origin_url: null,
+      },
     })
 
     expect(store.items).toHaveLength(2)
     expect(store.items.map((item) => item.sourceRef?.sourceId)).toEqual(['video-a', 'video-b'])
     expect(store.items.map((item) => item.sourceRef?.title)).toEqual(['来源视频 A', '来源视频 B'])
+    expect(store.items.map((item) => item.sourceRef?.originUrl)).toEqual([
+      'https://www.douyin.com/video/123456',
+      undefined,
+    ])
     expect(store.items[0].sets).toEqual({ value: 3, source: 'rule' })
     expect(store.items[0].reps).toEqual({ value: 10, source: 'rule' })
     expect(store.items[0].restSeconds).toEqual({ value: 60, source: 'rule' })
@@ -116,6 +126,21 @@ describe('方案草稿 store', () => {
     await reloaded.load(repository)
     expect(reloaded.items).toHaveLength(1)
     expect(reloaded.items[0].name).toBe('平板支撑（副本）')
+  })
+
+  it('does not persist a non-http original-video URL', async () => {
+    const store = useDraftStore()
+    await store.load(new MemoryDraftRepository())
+
+    store.addCandidates([candidate('video-a')], [], {
+      'video-a': { title: '来源视频 A', origin_url: 'javascript:alert(1)' },
+    })
+
+    expect(store.items[0]!.sourceRef).toEqual({
+      sourceId: 'video-a',
+      title: '来源视频 A',
+      originUrl: undefined,
+    })
   })
 
   it('adopts an already-persisted library draft without writing it again', async () => {

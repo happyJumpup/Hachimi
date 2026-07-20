@@ -30,10 +30,14 @@ const formatTime = (seconds: number): string => {
   return `${Math.floor(safe / 60)}:${Math.floor(safe % 60).toString().padStart(2, '0')}`
 }
 
-onMounted(async () => {
+const loadSources = async (): Promise<void> => {
   await analysis.loadSources(analysisClient)
-  selectedSourceId.value = analysis.sources[0]?.id ?? ''
-})
+  if (!analysis.sources.some((source) => source.id === selectedSourceId.value)) {
+    selectedSourceId.value = analysis.sources[0]?.id ?? ''
+  }
+}
+
+onMounted(loadSources)
 
 watch(selectedSourceId, async (next, previous) => {
   if (previous && next !== previous && analysis.isRunning) {
@@ -90,13 +94,20 @@ const addCandidates = async (
   candidates: AnalysisCandidate[],
   editedSegmentIds: string[],
 ): Promise<void> => {
-  const sourceTitles = selectedSource.value
-    ? { [selectedSource.value.id]: selectedSource.value.title }
-    : {}
-  draft.addCandidates(candidates, editedSegmentIds, sourceTitles)
+  const sourceSnapshots = Object.fromEntries(
+    analysis.sources.map((source) => [source.id, source]),
+  )
+  draft.addCandidates(candidates, editedSegmentIds, sourceSnapshots)
   await draft.flushPersist()
   analysis.clearResult()
   await router.push('/plan')
+}
+
+const returnToVideo = async (): Promise<void> => {
+  previewEnd.value = null
+  analysis.clearResult()
+  if (resumeAfterCancel) await video.value?.play().catch(() => undefined)
+  resumeAfterCancel = false
 }
 </script>
 
@@ -134,6 +145,14 @@ const addCandidates = async (
       </div>
 
       <div v-if="analysis.sourcesLoading" class="stage-empty">正在读取受控视频源…</div>
+      <div v-else-if="analysis.sourcesError && !analysis.sources.length" class="stage-empty source-load-error" role="alert">
+        <span class="empty-code">TRY AGAIN</span>
+        <h1>{{ analysis.sourcesError }}</h1>
+        <p>请检查网络后重试，已经编排的动作不会受影响。</p>
+        <button type="button" :disabled="analysis.sourcesLoading" @click="loadSources">
+          {{ analysis.sourcesLoading ? '正在重试…' : '重新读取视频' }}
+        </button>
+      </div>
       <div v-else-if="!selectedSource" class="stage-empty">
         <span class="empty-code">NO SOURCE</span>
         <h1>还没有可分析的视频</h1>
@@ -213,6 +232,7 @@ const addCandidates = async (
           :warnings="analysis.warnings"
           @preview="preview"
           @add="addCandidates"
+          @close="returnToVideo"
         />
       </template>
     </section>
@@ -493,6 +513,7 @@ const addCandidates = async (
 }
 .stage-empty h1 { margin: 8px 0; font-size: 26px; }
 .stage-empty p { max-width: 260px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.source-load-error button { min-width: 44px; min-height: 44px; justify-self: center; margin-top: 16px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); background: var(--surface-raised); font-weight: 700; }
 .empty-code { color: var(--coral); font: 600 11px/1 var(--font-display); letter-spacing: .16em; }
 
 .page-caption {

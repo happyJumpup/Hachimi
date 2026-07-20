@@ -92,6 +92,31 @@ describe('动作分析 store', () => {
     setActivePinia(createPinia())
   })
 
+  it('turns a source-list failure into a safe retryable state', async () => {
+    const client = new FakeClient()
+    client.listSources = async () => {
+      throw new Error('internal source manifest path should not leak')
+    }
+    const store = useAnalysisStore()
+
+    await store.loadSources(client)
+
+    expect(store.sourcesLoading).toBe(false)
+    expect(store.sources).toEqual([])
+    expect(store.sourcesError).toBe('视频暂时没有读取成功，请重试')
+
+    client.listSources = async () => [{
+      id: 'video-a',
+      title: '来源视频 A',
+      media_url: '/api/v1/sources/video-a/media',
+      duration_seconds: 60,
+      origin_url: null,
+    }]
+    await store.loadSources(client)
+    expect(store.sourcesError).toBeNull()
+    expect(store.sources).toHaveLength(1)
+  })
+
   it('shows real stages and accepts candidates only from the active run', async () => {
     const client = new FakeClient()
     const events = new FakeEventFactory()

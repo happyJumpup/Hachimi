@@ -38,6 +38,17 @@ const candidates: AnalysisCandidate[] = [
 ]
 
 describe('CandidateReviewPanel', () => {
+  it('lets the user return to the video without adding a candidate', async () => {
+    const wrapper = mount(CandidateReviewPanel, {
+      props: { candidates, warnings: [] },
+    })
+
+    await wrapper.get('button[aria-label="返回视频并重新选择时间点"]').trigger('click')
+
+    expect(wrapper.emitted('close')).toEqual([[]])
+    expect(wrapper.emitted('add')).toBeUndefined()
+  })
+
   it('requires an unknown mode and emits only selected, edited candidates', async () => {
     const wrapper = mount(CandidateReviewPanel, {
       props: { candidates, warnings: [] },

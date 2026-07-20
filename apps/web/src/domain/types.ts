@@ -80,6 +80,7 @@ export interface SourcedValue<T> {
 export interface DraftSourceRef {
   sourceId: string
   title?: string
+  originUrl?: string
 }
 
 export interface DraftItem {

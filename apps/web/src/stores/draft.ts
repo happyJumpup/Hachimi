@@ -8,8 +8,10 @@ import type {
   DraftPlan,
   DraftRepository,
   Segment,
+  SourceSummary,
   SourcedValue,
 } from '@/domain/types'
+import { toSafeOriginUrl } from '@/domain/source'
 
 type NumericField = 'sets' | 'reps' | 'durationSeconds' | 'restSeconds' | 'weightKg'
 type PersistState = 'idle' | 'pending' | 'saving' | 'saved' | 'failed'
@@ -31,10 +33,12 @@ const sourced = <T>(value: T | null, source: SourcedValue<T>['source']): Sourced
   source,
 })
 
+type SourceSnapshot = Pick<SourceSummary, 'title' | 'origin_url'>
+
 const fromCandidate = (
   candidate: AnalysisCandidate,
   segmentEdited = false,
-  sourceTitle?: string,
+  source?: SourceSnapshot,
 ): DraftItem => {
   const mode = candidate.parameters.mode
   if (mode === null) {
@@ -44,7 +48,11 @@ const fromCandidate = (
   return {
     id: id(),
     name: candidate.name,
-    sourceRef: { sourceId: candidate.source_id, title: sourceTitle },
+    sourceRef: {
+      sourceId: candidate.source_id,
+      title: source?.title,
+      originUrl: toSafeOriginUrl(source?.origin_url),
+    },
     segment: sourced(
       candidate.segment ? cloneJson(candidate.segment) : null,
       candidate.segment ? (segmentEdited ? 'user' : 'video') : null,
@@ -192,11 +200,11 @@ export const useDraftStore = defineStore('draft', () => {
   function addCandidates(
     candidates: AnalysisCandidate[],
     editedSegmentIds: string[] = [],
-    sourceTitles: Record<string, string> = {},
+    sources: Record<string, SourceSnapshot> = {},
   ): void {
     const edited = new Set(editedSegmentIds)
     plan.value.items.push(...candidates.map((candidate) =>
-      fromCandidate(candidate, edited.has(candidate.id), sourceTitles[candidate.source_id]),
+      fromCandidate(candidate, edited.has(candidate.id), sources[candidate.source_id]),
     ))
     schedulePersist()
   }
