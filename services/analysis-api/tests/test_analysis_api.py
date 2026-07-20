@@ -297,3 +297,68 @@ async def test_provider_failure_returns_only_a_safe_public_message(tmp_path: Pat
         "retryable": False,
     }
     assert "provider-secret-response-must-not-be-logged" not in str(failed)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path_suffix"),
+    [
+        ("GET", ""),
+        ("DELETE", ""),
+        ("GET", "/events"),
+    ],
+)
+async def test_terminal_run_is_unavailable_from_every_http_path_after_ttl(
+    tmp_path: Path,
+    method: str,
+    path_suffix: str,
+) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=SuccessfulPipeline(),
+        access=make_test_access(),
+        ttl_seconds=0.01,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout", "trigger_seconds": 45},
+        )
+        run_id = created.json()["id"]
+        await wait_for_status(client, run_id, "completed")
+        await asyncio.sleep(0.03)
+
+        response = await client.request(
+            method,
+            f"/api/v1/analysis-runs/{run_id}{path_suffix}",
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_manager_event_stream_prunes_a_terminal_run_after_ttl(tmp_path: Path) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=SuccessfulPipeline(),
+        access=make_test_access(),
+        ttl_seconds=0.01,
+    )
+    manager = app.state.run_manager
+    source = app.state.source_catalog.get("legacy-arm-workout")
+    created = await manager.create(source, 45)
+    for _ in range(100):
+        if manager.get(created.id).status == "completed":
+            break
+        await asyncio.sleep(0.001)
+    else:
+        raise AssertionError("run did not complete")
+    await asyncio.sleep(0.03)
+
+    events = manager.events(created.id)
+    with pytest.raises(KeyError):
+        await anext(events)
+    await events.aclose()
+    await manager.close()

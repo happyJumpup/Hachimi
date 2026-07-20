@@ -22,7 +22,10 @@ from hakimi_analysis.access import (
 from hakimi_analysis.models import (
     AccessSessionView,
     AnalysisRunView,
+    ApiErrorResponse,
     CreateAnalysisRunRequest,
+    NotReadyResponse,
+    ReadyResponse,
     SourceSummary,
     UpgradeAccessSessionRequest,
 )
@@ -129,7 +132,16 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/api/v1/ready")
+    @app.get(
+        "/api/v1/ready",
+        response_model=ReadyResponse,
+        responses={
+            503: {
+                "model": NotReadyResponse,
+                "description": "生产就绪检查未通过，返回脱敏错误码。",
+            }
+        },
+    )
     async def ready() -> JSONResponse:
         failure_code = await asyncio.to_thread(readiness_probe.check)
         if failure_code is not None:
@@ -210,6 +222,34 @@ def create_app(
         "/api/v1/analysis-runs",
         response_model=AnalysisRunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses={
+            400: {
+                "model": ApiErrorResponse,
+                "description": "可信代理提供的客户端地址无效。",
+            },
+            403: {
+                "model": ApiErrorResponse,
+                "description": "请求未通过同源校验。",
+            },
+            404: {
+                "model": ApiErrorResponse,
+                "description": "受控视频源不存在。",
+            },
+            429: {
+                "model": ApiErrorResponse,
+                "description": "分析容量或调用频率已达到限制。",
+                "headers": {
+                    "Retry-After": {
+                        "description": "再次尝试前需要等待的秒数。",
+                        "schema": {"type": "string"},
+                    }
+                },
+            },
+            503: {
+                "model": ApiErrorResponse,
+                "description": "生产分析服务尚未就绪。",
+            },
+        },
     )
     async def create_run(
         payload: CreateAnalysisRunRequest,
@@ -268,7 +308,16 @@ def create_app(
         _set_access_cookie(response, access_manager, session)
         return created
 
-    @app.get("/api/v1/analysis-runs/{run_id}", response_model=AnalysisRunView)
+    @app.get(
+        "/api/v1/analysis-runs/{run_id}",
+        response_model=AnalysisRunView,
+        responses={
+            404: {
+                "model": ApiErrorResponse,
+                "description": "分析请求不存在、已过期或不属于当前会话。",
+            }
+        },
+    )
     async def get_run(run_id: str, request: Request) -> AnalysisRunView:
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         try:
@@ -280,6 +329,16 @@ def create_app(
         "/api/v1/analysis-runs/{run_id}",
         response_model=AnalysisRunView,
         status_code=status.HTTP_202_ACCEPTED,
+        responses={
+            403: {
+                "model": ApiErrorResponse,
+                "description": "请求未通过同源校验。",
+            },
+            404: {
+                "model": ApiErrorResponse,
+                "description": "分析请求不存在、已过期或不属于当前会话。",
+            },
+        },
     )
     async def cancel_run(run_id: str, request: Request) -> AnalysisRunView:
         _require_same_origin(
@@ -293,7 +352,15 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="分析请求不存在或已过期") from error
 
-    @app.get("/api/v1/analysis-runs/{run_id}/events")
+    @app.get(
+        "/api/v1/analysis-runs/{run_id}/events",
+        responses={
+            404: {
+                "model": ApiErrorResponse,
+                "description": "分析请求不存在、已过期或不属于当前会话。",
+            }
+        },
+    )
     async def run_events(run_id: str, request: Request) -> StreamingResponse:
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         try:

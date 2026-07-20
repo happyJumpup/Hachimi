@@ -83,7 +83,6 @@ class AnalysisRunManager:
         *,
         owner_session_id: str | None = None,
     ) -> AnalysisRunView:
-        self._prune()
         return self._record(run_id, owner_session_id=owner_session_id).view.model_copy(deep=True)
 
     async def cancel(
@@ -255,6 +254,7 @@ class AnalysisRunManager:
         *,
         owner_session_id: str | None = None,
     ) -> RunRecord:
+        self._prune()
         try:
             record = self._records[run_id]
         except KeyError as error:

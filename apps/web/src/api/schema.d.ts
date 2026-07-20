@@ -225,6 +225,11 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** ApiErrorResponse */
+        ApiErrorResponse: {
+            /** Detail */
+            detail: string;
+        };
         /** CandidateParameters */
         CandidateParameters: {
             /** Duration Seconds */
@@ -266,6 +271,24 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** NotReadyResponse */
+        NotReadyResponse: {
+            /** Code */
+            code: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "not_ready";
+        };
+        /** ReadyResponse */
+        ReadyResponse: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "ready";
         };
         /**
          * RunStage
@@ -399,6 +422,33 @@ export interface operations {
                     "application/json": components["schemas"]["AnalysisRunView"];
                 };
             };
+            /** @description 可信代理提供的客户端地址无效。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 受控视频源不存在。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -406,6 +456,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 分析容量或调用频率已达到限制。 */
+            429: {
+                headers: {
+                    /** @description 再次尝试前需要等待的秒数。 */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 生产分析服务尚未就绪。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
         };
@@ -428,6 +498,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalysisRunView"];
+                };
+            };
+            /** @description 分析请求不存在、已过期或不属于当前会话。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -461,6 +540,24 @@ export interface operations {
                     "application/json": components["schemas"]["AnalysisRunView"];
                 };
             };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 分析请求不存在、已过期或不属于当前会话。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -490,6 +587,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description 分析请求不存在、已过期或不属于当前会话。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -540,7 +646,16 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ReadyResponse"];
+                };
+            };
+            /** @description 生产就绪检查未通过，返回脱敏错误码。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotReadyResponse"];
                 };
             };
         };

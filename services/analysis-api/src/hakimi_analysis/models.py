@@ -9,6 +9,19 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ApiErrorResponse(StrictModel):
+    detail: str
+
+
+class ReadyResponse(StrictModel):
+    status: Literal["ready"]
+
+
+class NotReadyResponse(StrictModel):
+    status: Literal["not_ready"]
+    code: str = Field(min_length=1)
+
+
 class ActionMode(StrEnum):
     REPS = "reps"
     DURATION = "duration"
