@@ -26,6 +26,7 @@ jobs:
       packages: write
     env:
       AUDIT_IMAGE: hachimi-competition-audit:${{ github.sha }}
+      PUBLISH_IMAGE: ghcr.io/happyjumpup/hachimi:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
@@ -77,13 +78,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish verified commit image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha
-          provenance: mode=max
-          sbom: true
+      # Push the exact local image that passed every gate above. This workflow
+      # does not claim registry-attached provenance or SBOM attestations.
+      - name: Publish audited commit image
+        run: |
+          set -Eeuo pipefail
+          docker tag "$AUDIT_IMAGE" "$PUBLISH_IMAGE"
+          test "$(docker image inspect --format '{{.Id}}' "$AUDIT_IMAGE")" = \
+            "$(docker image inspect --format '{{.Id}}' "$PUBLISH_IMAGE")"
+          docker push "$PUBLISH_IMAGE"

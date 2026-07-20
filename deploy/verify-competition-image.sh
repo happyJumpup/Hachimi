@@ -10,6 +10,15 @@ docker_cmd() {
   MSYS_NO_PATHCONV=1 docker "$@"
 }
 
+if python3 --version >/dev/null 2>&1; then
+  readonly python_cmd="python3"
+elif python --version >/dev/null 2>&1; then
+  readonly python_cmd="python"
+else
+  printf 'competition image verification failed: Python 3 is required\n' >&2
+  exit 2
+fi
+
 cleanup() {
   docker_cmd rm --force "${smoke_name}" >/dev/null 2>&1 || true
   rm -rf "${work_dir}"
@@ -30,6 +39,10 @@ readonly configured_user="$(docker_cmd image inspect --format '{{.Config.User}}'
 if [[ "${configured_user}" != "10001:10001" ]]; then
   fail "runtime user must be 10001:10001, got '${configured_user}'"
 fi
+
+readonly saved_image="${work_dir}/image.tar"
+docker_cmd image save "${image_ref}" >"${saved_image}"
+"${python_cmd}" "$(dirname "$0")/audit-image-layers.py" "${saved_image}"
 
 audit_output="$({
   docker_cmd run --rm --entrypoint /bin/sh "${image_ref}" -eu -c '
