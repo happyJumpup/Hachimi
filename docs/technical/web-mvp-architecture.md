@@ -103,7 +103,7 @@ interface AccessSessionView {
 }
 ```
 
-服务端签发 `hachimi_access` Cookie，内容只有随机会话 ID、层级和过期时间并由 `ACCESS_COOKIE_SECRET` 签名；Cookie 使用 `Secure`、`HttpOnly`、`SameSite=Lax`，有效期十二小时。两个访问接口均返回 `Cache-Control: no-store`。`JUDGE_ACCESS_CODE` 只在后端以常量时间比较，失败统一返回 401，不暴露是否已配置或具体原因。所有改变状态的请求检查同源 `Origin`；Caddy 是唯一可信代理，应用不接受公网直连伪造的转发地址。
+服务端签发 `hachimi_access` Cookie，内容只有随机会话 ID、层级和过期时间并由 `ACCESS_COOKIE_SECRET` 签名；Cookie 使用 `Secure`、`HttpOnly`、`SameSite=Lax`，有效期十二小时。两个访问接口均返回 `Cache-Control: no-store`。`JUDGE_ACCESS_CODE` 在生产门禁中至少为 16 字节，只在后端以常量时间比较；无效值统一返回 401，连续失败达到上限后按会话和真实客户端 IP 返回带 `Retry-After` 的 429，不暴露是否已配置或具体原因。所有改变状态的请求检查同源 `Origin`；Caddy 是唯一可信代理，应用不接受公网直连伪造的转发地址，并将单次请求体限制为 64 KiB。
 
 ### 4.2 准入规则
 
