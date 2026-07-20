@@ -43,6 +43,7 @@ pnpm test:e2e
 
 ## 文档
 
+- [项目进展与下一步（团队同步版）](docs/team/project-status-and-next-steps.md)
 - [领域词汇表](CONTEXT.md)
 - [首个动作分析纵切片技术设计与开发准入](docs/technical/action-analysis-vertical-slice.md)
 - [架构决策](docs/adr)
