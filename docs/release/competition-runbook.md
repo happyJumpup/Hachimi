@@ -13,7 +13,7 @@
 - Web 静态资源和 FastAPI 使用同一域名；浏览器不接触 Ark、ASR、COS 写权限或服务器密钥。
 - 腾讯云主机只运行一个 `app` 容器实例、一个 Uvicorn worker 和一个 `caddy` 容器，不使用多副本、持久任务队列或服务器数据库。
 - Analysis Run 仍是单进程内存态；重启、SSE 断开、取消或超时都会使运行失效，迟到结果不回填。
-- 公开媒体 URL 只能由 `PUBLIC_MEDIA_BASE_URL` 与版本化受控清单中的 `analysis_filename` 拼接；客户端只提交 `source_id`，不能提供 URL、对象键或本地路径。
+- 公开媒体 URL 只能由 `PUBLIC_MEDIA_BASE_URL` 与版本化受控清单中的 `media_path` 拼接；客户端只提交 `source_id`，不能提供 URL、对象键或本地路径。
 - 评委体验码只提升真实 AI 容量优先级。访客的“快速体验方案”必须明确标注为产品示例，不得伪装成 Agent 返回或云端降级结果。
 - 训练档案、草稿、方案、未完成训练和记录保留在浏览器 IndexedDB；服务器不接收或同步这些训练数据。
 - 原始视频、音频、帧、转录、提示词和模型原始响应不得进入 Git、容器镜像、长期日志、CI 产物或发布录屏附件。
@@ -117,10 +117,10 @@ Caddy 必须：
 
 ### 5.1 来源清单
 
-版本化清单只登记 2–3 个团队授权来源。每项至少包含稳定 `source_id`、标题、`analysis_filename`、SHA-256、字节数和视频时长；可附不参与下载的 `origin_url`。`analysis_filename` 必须是无目录穿越的受控相对文件名。
+版本化清单只登记 2–3 个团队授权来源。每项固定包含稳定 `id`、`title`、`media_path`、`duration_seconds` 和 `sha256`；可附不参与下载的 `origin_url`。`media_path` 必须是无 `..` 的相对 POSIX 路径。完整 JSON Schema 以技术架构文档为准，部署脚本不得维护第二套字段名。
 
-- 浏览器播放地址：`PUBLIC_MEDIA_BASE_URL + analysis_filename`。
-- 后端分析路径：`SOURCE_MEDIA_ROOT / analysis_filename`。
+- 浏览器播放地址：`PUBLIC_MEDIA_BASE_URL + media_path`。
+- 后端分析路径：`SOURCE_MEDIA_ROOT / media_path`。
 - 清单不能包含任意客户端 URL、COS 写密钥、带签名临时 URL 或本机绝对路径。
 - CDN/COS 仅开放清单前缀的只读 `GET`/`HEAD`，支持 Range，并返回正确的 `Content-Length`、`Content-Range` 和视频 MIME 类型。
 

@@ -108,7 +108,7 @@ interface AccessSessionView {
 ### 4.2 准入规则
 
 - 每个匿名会话同时最多一个未终态分析请求。
-- 评委池默认 `JUDGE_ANALYSIS_CONCURRENCY=3`，公共池默认 `PUBLIC_ANALYSIS_CONCURRENCY=1`，两个池互不挤占；低配服务器可把公共池设为 0。
+- 安全默认值为 `JUDGE_ANALYSIS_CONCURRENCY=2`、`PUBLIC_ANALYSIS_CONCURRENCY=0`，两个池互不挤占。只有目标主机达到 4C/8GB，并通过发布手册规定的三路真实并发资源门禁后，才允许由运维显式提升为 3 个评委槽位和 1 个公共槽位。
 - 公共会话每十分钟最多创建一次分析，评委会话每小时最多十次；会话 ID 为主键，并使用可信代理提供的客户端 IP 做第二层滥用保护。
 - 创建成功后立即占用对应槽位；完成、失败、取消、SSE 断开和超时都必须在 `finally` 中释放。服务重启清空内存限流和占用状态。
 - 没有槽位或超过频率时，`POST /api/v1/analysis-runs` 返回 429、`Retry-After` 和自然中文提示。系统不排队、不在后台等待，也不返回预置候选。
@@ -183,8 +183,8 @@ interface AccessSessionView {
 | `PUBLIC_MEDIA_BASE_URL` | COS/CDN 的 HTTPS 公共播放前缀 |
 | `JUDGE_ACCESS_CODE` | 评委体验码 |
 | `ACCESS_COOKIE_SECRET` | 匿名访问 Cookie 的签名密钥 |
-| `JUDGE_ANALYSIS_CONCURRENCY` | 评委保留分析槽位，默认 3 |
-| `PUBLIC_ANALYSIS_CONCURRENCY` | 公共分析槽位，默认 1，可设为 0 |
+| `JUDGE_ANALYSIS_CONCURRENCY` | 评委保留分析槽位，安全默认 2；通过容量门禁后可设为 3 |
+| `PUBLIC_ANALYSIS_CONCURRENCY` | 公共分析槽位，安全默认 0；通过容量门禁后可设为 1 |
 
 现有 Ark、ASR、超时和 TTL 变量继续有效。部署流程通过同镜像的一次性同步命令准备媒体，并在切换流量前检查 `/api/v1/ready`；宿主机不要求安装 Python 或 uv。完整发布与回滚步骤由竞赛发布运行手册定义。
 

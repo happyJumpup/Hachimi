@@ -183,6 +183,7 @@ stateDiagram-v2
     resting --> ready_to_continue: 休息自然结束
     ready_to_continue --> active: 用户确认继续
     active --> paused: 跳过剩余组并移到下一动作
+    active --> ended_early: 用户确认提前结束
     paused --> ended_early: 用户确认提前结束
     resting --> ended_early: 用户确认提前结束
     ready_to_continue --> ended_early: 用户确认提前结束
@@ -240,7 +241,7 @@ type TrainingEvent =
 
 | 消费者 | 唯一输入 | 行为 |
 | --- | --- | --- |
-| Pet | 当前场次状态和终态事件 | `active→训练`、`resting→休息`、`paused/ready_to_continue→暂停`、无场次→待机、完整完成结果页→完成 |
+| Pet | 当前场次状态、暂停原因和终态事件 | `active→训练`、`resting→休息`、`paused/before_start` 或 `paused/between_actions→待机`、其他 `paused` 与 `ready_to_continue→暂停`、无场次→待机、完整完成结果页→完成 |
 | 卡路里 | 终态实际活动/计入休息时间和当前档案 | 在记录事务中计算一次；Pet 和 Agent 不参与 |
 | 训练记录 | 终态场次和方案快照 | 保存实际完成量；不引用可变方案 |
 | 海报 | `outcome=completed` 的训练记录 | 即时生成；提前结束没有海报 |
