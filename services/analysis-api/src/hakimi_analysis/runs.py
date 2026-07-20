@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -32,6 +32,8 @@ class RunRecord:
     task: asyncio.Task[None] | None = None
     terminal_at: datetime | None = None
     started_monotonic: float = field(default_factory=time.perf_counter)
+    on_terminal: Callable[[], Awaitable[None]] | None = None
+    terminal_notified: bool = False
 
 
 class AnalysisRunManager:
@@ -47,7 +49,13 @@ class AnalysisRunManager:
         self._ttl = timedelta(seconds=ttl_seconds)
         self._records: dict[str, RunRecord] = {}
 
-    async def create(self, source: VideoSource, trigger_seconds: float) -> AnalysisRunView:
+    async def create(
+        self,
+        source: VideoSource,
+        trigger_seconds: float,
+        *,
+        on_terminal: Callable[[], Awaitable[None]] | None = None,
+    ) -> AnalysisRunView:
         self._prune()
         if trigger_seconds > source.duration_seconds:
             raise ValueError("trigger_seconds must be inside the source video")
@@ -59,7 +67,8 @@ class AnalysisRunManager:
                 trigger_seconds=trigger_seconds,
                 status=RunStatus.QUEUED,
                 stage=RunStage.QUEUED,
-            )
+            ),
+            on_terminal=on_terminal,
         )
         self._records[run_id] = record
         record.task = asyncio.create_task(self._execute(record, source))
@@ -83,6 +92,7 @@ class AnalysisRunManager:
             record.terminal_at = datetime.now(UTC)
             record.view.updated_at = record.terminal_at
             await self._event(record, "run.cancelled", {"stage": RunStage.CANCELLED.value})
+        await self._notify_terminal(record)
         return record.view.model_copy(deep=True)
 
     async def events(self, run_id: str) -> AsyncIterator[AnalysisEvent]:
@@ -167,6 +177,7 @@ class AnalysisRunManager:
                 record.view.updated_at = record.terminal_at
                 async with record.condition:
                     record.condition.notify_all()
+                await self._notify_terminal(record)
 
     async def _fail(
         self,
@@ -237,7 +248,16 @@ class AnalysisRunManager:
                 task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for record in self._records.values():
+            await self._notify_terminal(record)
         self._records.clear()
+
+    async def _notify_terminal(self, record: RunRecord) -> None:
+        if record.terminal_notified:
+            return
+        record.terminal_notified = True
+        if record.on_terminal is not None:
+            await record.on_terminal()
 
 
 def as_pipeline(value: object) -> AnalysisPipeline:

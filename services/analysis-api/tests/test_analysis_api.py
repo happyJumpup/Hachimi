@@ -7,6 +7,7 @@ from typing import cast
 import httpx
 import pytest
 
+from hakimi_analysis.access import AccessManager
 from hakimi_analysis.app import create_app, stream_run_events
 from hakimi_analysis.models import (
     AnalysisCandidate,
@@ -92,6 +93,14 @@ def source_catalog(tmp_path: Path) -> SourceCatalog:
     )
 
 
+def make_test_access() -> AccessManager:
+    return AccessManager(
+        cookie_secret="test-cookie-secret-with-at-least-32-bytes",
+        judge_access_code="test-judge-code",
+        public_concurrency=1,
+    )
+
+
 async def wait_for_status(client: httpx.AsyncClient, run_id: str, status: str) -> dict[str, object]:
     for _ in range(100):
         response = await client.get(f"/api/v1/analysis-runs/{run_id}")
@@ -104,7 +113,9 @@ async def wait_for_status(client: httpx.AsyncClient, run_id: str, status: str) -
 
 @pytest.mark.asyncio
 async def test_sources_and_completed_run_are_observable_through_http(tmp_path: Path) -> None:
-    app = create_app(catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline())
+    app = create_app(
+        catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline(), access=make_test_access()
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -116,6 +127,7 @@ async def test_sources_and_completed_run_are_observable_through_http(tmp_path: P
                 "title": "本地联调视频",
                 "media_url": "/api/v1/sources/legacy-arm-workout/media",
                 "duration_seconds": 54.0,
+                "origin_url": None,
             }
         ]
 
@@ -136,7 +148,9 @@ async def test_sources_and_completed_run_are_observable_through_http(tmp_path: P
 
 @pytest.mark.asyncio
 async def test_unknown_source_is_rejected_without_starting_a_run(tmp_path: Path) -> None:
-    app = create_app(catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline())
+    app = create_app(
+        catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline(), access=make_test_access()
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -151,7 +165,7 @@ async def test_unknown_source_is_rejected_without_starting_a_run(tmp_path: Path)
 async def test_controlled_media_supports_http_range(tmp_path: Path) -> None:
     catalog = source_catalog(tmp_path)
     source_bytes = catalog.get("legacy-arm-workout").path.read_bytes()
-    app = create_app(catalog=catalog, pipeline=SuccessfulPipeline())
+    app = create_app(catalog=catalog, pipeline=SuccessfulPipeline(), access=make_test_access())
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -168,7 +182,9 @@ async def test_controlled_media_supports_http_range(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_delete_cancels_an_in_flight_run(tmp_path: Path) -> None:
-    app = create_app(catalog=source_catalog(tmp_path), pipeline=SlowPipeline())
+    app = create_app(
+        catalog=source_catalog(tmp_path), pipeline=SlowPipeline(), access=make_test_access()
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -189,6 +205,7 @@ async def test_run_timeout_is_an_explicit_failure(tmp_path: Path) -> None:
         catalog=source_catalog(tmp_path),
         pipeline=SlowPipeline(),
         timeout_seconds=0.01,
+        access=make_test_access(),
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -209,7 +226,9 @@ async def test_run_timeout_is_an_explicit_failure(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_closing_sse_stream_cancels_an_in_flight_run(tmp_path: Path) -> None:
-    app = create_app(catalog=source_catalog(tmp_path), pipeline=SlowPipeline())
+    app = create_app(
+        catalog=source_catalog(tmp_path), pipeline=SlowPipeline(), access=make_test_access()
+    )
     manager = app.state.run_manager
     source = app.state.source_catalog.get("legacy-arm-workout")
     created = await manager.create(source, 45)
@@ -231,7 +250,11 @@ async def test_runtime_logs_keep_only_allowlisted_diagnostic_fields(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    app = create_app(catalog=source_catalog(tmp_path), pipeline=SecretFailurePipeline())
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=SecretFailurePipeline(),
+        access=make_test_access(),
+    )
     with caplog.at_level(logging.INFO, logger="hakimi_analysis.runs"):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
@@ -243,9 +266,7 @@ async def test_runtime_logs_keep_only_allowlisted_diagnostic_fields(
             await wait_for_status(client, created.json()["id"], "failed")
 
     messages = [
-        record.getMessage()
-        for record in caplog.records
-        if record.name == "hakimi_analysis.runs"
+        record.getMessage() for record in caplog.records if record.name == "hakimi_analysis.runs"
     ]
     payloads = [json.loads(message) for message in messages]
     assert payloads

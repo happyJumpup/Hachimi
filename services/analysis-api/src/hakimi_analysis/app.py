@@ -1,14 +1,30 @@
 import asyncio
 import json
+import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-from hakimi_analysis.models import AnalysisRunView, CreateAnalysisRunRequest, SourceSummary
+from hakimi_analysis.access import (
+    ACCESS_COOKIE_NAME,
+    ACCESS_SESSION_SECONDS,
+    AccessManager,
+    AccessSession,
+    AdmissionDenied,
+)
+from hakimi_analysis.models import (
+    AccessSessionView,
+    AnalysisRunView,
+    CreateAnalysisRunRequest,
+    SourceSummary,
+    UpgradeAccessSessionRequest,
+)
 from hakimi_analysis.pipeline import AnalysisPipeline
+from hakimi_analysis.readiness import ReadinessProbe, StaticReadiness
 from hakimi_analysis.runs import TERMINAL_STATUSES, AnalysisRunManager, as_pipeline
 from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog
 
@@ -43,6 +59,9 @@ def create_app(
     ttl_seconds: float = 600,
     cors_origins: list[str] | None = None,
     close_callbacks: list[Callable[[], Awaitable[None]]] | None = None,
+    access: AccessManager | None = None,
+    app_env: str = "test",
+    readiness: ReadinessProbe | None = None,
 ) -> FastAPI:
     source_catalog = catalog or EmptySourceCatalog()
     resolved_pipeline: AnalysisPipeline
@@ -57,6 +76,14 @@ def create_app(
         timeout_seconds=timeout_seconds,
         ttl_seconds=ttl_seconds,
     )
+    access_manager = access or AccessManager(
+        cookie_secret=secrets.token_urlsafe(32),
+        judge_access_code=secrets.token_urlsafe(16),
+    )
+    readiness_probe = readiness or StaticReadiness(
+        "provider_configuration_invalid" if app_env == "production" else None
+    )
+    resolved_cors_origins = cors_origins or ["http://localhost:5173"]
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -72,10 +99,11 @@ def create_app(
     )
     app.state.run_manager = manager
     app.state.source_catalog = source_catalog
+    app.state.access_manager = access_manager
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins or ["http://localhost:5173"],
-        allow_credentials=False,
+        allow_origins=resolved_cors_origins,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Content-Type"],
     )
@@ -84,16 +112,67 @@ def create_app(
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/v1/ready")
+    async def ready() -> JSONResponse:
+        failure_code = await asyncio.to_thread(readiness_probe.check)
+        if failure_code is not None:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "code": failure_code},
+            )
+        return JSONResponse(status_code=200, content={"status": "ready"})
+
+    @app.get("/api/v1/access/session", response_model=AccessSessionView)
+    async def get_access_session(request: Request, response: Response) -> AccessSessionView:
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
+        _set_access_cookie(response, access_manager, session)
+        response.headers["Cache-Control"] = "no-store"
+        return await access_view(session)
+
+    @app.post("/api/v1/access/session", response_model=AccessSessionView)
+    async def upgrade_access_session(
+        payload: UpgradeAccessSessionRequest,
+        request: Request,
+        response: Response,
+    ) -> AccessSessionView:
+        _require_same_origin(
+            request,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
+        upgraded = access_manager.upgrade(session, payload.access_code)
+        if upgraded is None:
+            raise HTTPException(
+                status_code=401,
+                detail="体验码无效",
+                headers={"Cache-Control": "no-store"},
+            )
+        _set_access_cookie(response, access_manager, upgraded)
+        response.headers["Cache-Control"] = "no-store"
+        return await access_view(upgraded)
+
+    async def access_view(session: AccessSession) -> AccessSessionView:
+        view = access_manager.view(session)
+        if app_env != "production":
+            return view
+        failure_code = await asyncio.to_thread(readiness_probe.check)
+        if failure_code is None:
+            return view
+        return view.model_copy(update={"can_analyze": False, "retry_after_seconds": None})
+
     @app.get("/api/v1/sources", response_model=list[SourceSummary])
     async def list_sources() -> list[SourceSummary]:
         return source_catalog.list()
 
-    @app.get("/api/v1/sources/{source_id}/media", response_class=FileResponse)
-    async def source_media(source_id: str) -> FileResponse:
+    @app.get("/api/v1/sources/{source_id}/media")
+    async def source_media(source_id: str) -> Response:
         try:
             source = source_catalog.get(source_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="受控视频源不存在") from error
+        if source.public_media_url is not None:
+            return RedirectResponse(source.public_media_url, status_code=307)
         return FileResponse(source.path, media_type="video/mp4")
 
     @app.post(
@@ -101,15 +180,61 @@ def create_app(
         response_model=AnalysisRunView,
         status_code=status.HTTP_202_ACCEPTED,
     )
-    async def create_run(payload: CreateAnalysisRunRequest) -> AnalysisRunView:
+    async def create_run(
+        payload: CreateAnalysisRunRequest,
+        request: Request,
+        response: Response,
+    ) -> AnalysisRunView:
+        _require_same_origin(
+            request,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
+        if app_env == "production":
+            failure_code = await asyncio.to_thread(readiness_probe.check)
+            if failure_code is not None:
+                raise HTTPException(status_code=503, detail="动作分析服务尚未就绪")
         try:
             source = source_catalog.get(payload.source_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="受控视频源不存在") from error
+        if payload.trigger_seconds > source.duration_seconds:
+            raise HTTPException(
+                status_code=422,
+                detail="trigger_seconds must be inside the source video",
+            )
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
+        active = await access_manager.active_run(session.id)
+        if active is not None and active.source_id != source.id and active.run_id is not None:
+            with suppress(KeyError):
+                await manager.cancel(active.run_id)
         try:
-            return await manager.create(source, payload.trigger_seconds)
+            lease = await access_manager.reserve(
+                session,
+                source_id=source.id,
+                client_ip=request.client.host if request.client is not None else "unknown",
+            )
+        except AdmissionDenied as error:
+            raise HTTPException(
+                status_code=429,
+                detail="真实动作分析暂时繁忙，请稍后重试",
+                headers={"Retry-After": str(error.retry_after_seconds)},
+            ) from error
+        try:
+            created = await manager.create(
+                source,
+                payload.trigger_seconds,
+                on_terminal=lease.release,
+            )
         except ValueError as error:
+            await lease.release()
             raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception:
+            await lease.release()
+            raise
+        await lease.bind(created.id)
+        _set_access_cookie(response, access_manager, session)
+        return created
 
     @app.get("/api/v1/analysis-runs/{run_id}", response_model=AnalysisRunView)
     async def get_run(run_id: str) -> AnalysisRunView:
@@ -123,7 +248,12 @@ def create_app(
         response_model=AnalysisRunView,
         status_code=status.HTTP_202_ACCEPTED,
     )
-    async def cancel_run(run_id: str) -> AnalysisRunView:
+    async def cancel_run(run_id: str, request: Request) -> AnalysisRunView:
+        _require_same_origin(
+            request,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
         try:
             return await manager.cancel(run_id)
         except KeyError as error:
@@ -143,3 +273,38 @@ def create_app(
         )
 
     return app
+
+
+def _set_access_cookie(
+    response: Response,
+    access_manager: AccessManager,
+    session: AccessSession,
+) -> None:
+    response.set_cookie(
+        key=ACCESS_COOKIE_NAME,
+        value=access_manager.encode(session),
+        max_age=ACCESS_SESSION_SECONDS,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+
+
+def _require_same_origin(
+    request: Request,
+    *,
+    app_env: str,
+    development_origins: list[str],
+) -> None:
+    origin = request.headers.get("origin")
+    if origin is None:
+        if app_env == "production":
+            raise HTTPException(status_code=403, detail="请求来源无效")
+        return
+    expected_host = request.headers.get("host", "").lower()
+    parsed = urlparse(origin)
+    is_same_host = parsed.scheme in {"http", "https"} and parsed.netloc.lower() == expected_host
+    is_allowed_development_origin = app_env != "production" and origin in development_origins
+    if not is_same_host and not is_allowed_development_origin:
+        raise HTTPException(status_code=403, detail="请求来源无效")

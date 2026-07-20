@@ -27,6 +27,11 @@ class RunStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
+class AccessTier(StrEnum):
+    PUBLIC = "public"
+    JUDGE = "judge"
+
+
 class RunStage(StrEnum):
     QUEUED = "queued"
     PREPARING_MEDIA = "preparing_media"
@@ -52,6 +57,7 @@ class SourceSummary(StrictModel):
     title: str
     media_url: str
     duration_seconds: float
+    origin_url: str | None = None
 
 
 class Segment(StrictModel):
@@ -143,6 +149,16 @@ class Transcript(StrictModel):
 class CreateAnalysisRunRequest(StrictModel):
     source_id: str = Field(min_length=1)
     trigger_seconds: float = Field(ge=0)
+
+
+class UpgradeAccessSessionRequest(StrictModel):
+    access_code: str = Field(min_length=1)
+
+
+class AccessSessionView(StrictModel):
+    tier: AccessTier
+    can_analyze: bool
+    retry_after_seconds: int | None = Field(default=None, ge=1)
 
 
 class AnalysisWarning(StrictModel):

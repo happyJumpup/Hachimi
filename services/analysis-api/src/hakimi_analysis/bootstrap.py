@@ -1,7 +1,10 @@
+import secrets
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI
 
+from hakimi_analysis.access import AccessManager
 from hakimi_analysis.media import LocalMediaProcessor, probe_duration_sync
 from hakimi_analysis.models import (
     AnalysisCandidate,
@@ -15,8 +18,14 @@ from hakimi_analysis.orchestration import OrchestratedAnalysisPipeline, SkillRep
 from hakimi_analysis.pipeline import AnalysisPipeline, EmitCallback, PipelineFailure, PipelineOutput
 from hakimi_analysis.providers.ark import ArkResponsesClient
 from hakimi_analysis.providers.asr import VolcAsrClient
+from hakimi_analysis.readiness import ProductionReadiness
 from hakimi_analysis.settings import PROJECT_ROOT, Settings
-from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog, VideoSource
+from hakimi_analysis.sources import (
+    EmptySourceCatalog,
+    SourceCatalog,
+    SourceManifestError,
+    VideoSource,
+)
 
 
 class UnconfiguredPipeline:
@@ -71,6 +80,20 @@ class DeterministicTestPipeline:
 
 
 def build_catalog(settings: Settings) -> SourceCatalog:
+    if (
+        settings.source_manifest_path is not None
+        and settings.source_media_root is not None
+        and settings.public_media_base_url is not None
+    ):
+        try:
+            return SourceCatalog.from_manifest(
+                manifest_path=settings.source_manifest_path,
+                media_root=settings.source_media_root,
+                public_media_base_url=settings.public_media_base_url,
+                duration_probe=probe_duration_sync,
+            )
+        except SourceManifestError:
+            return EmptySourceCatalog()
     path = settings.hakimi_demo_video_path
     if path is None:
         return EmptySourceCatalog()
@@ -88,13 +111,18 @@ def build_catalog(settings: Settings) -> SourceCatalog:
     )
 
 
-def build_pipeline(settings: Settings, http_client: httpx.AsyncClient) -> AnalysisPipeline:
+def build_pipeline(
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    *,
+    temp_root: Path | None = None,
+) -> AnalysisPipeline:
     if settings.analysis_provider == "test":
         return DeterministicTestPipeline()
     if settings.ark_api_key is None or settings.volc_asr_api_key is None:
         return UnconfiguredPipeline()
 
-    media = LocalMediaProcessor(temp_root=PROJECT_ROOT / "tmp" / "analysis-runs")
+    media = LocalMediaProcessor(temp_root=temp_root or PROJECT_ROOT / "tmp" / "analysis-runs")
     asr = VolcAsrClient(
         api_key=settings.volc_asr_api_key.get_secret_value(),
         resource_id=settings.volc_asr_resource_id,
@@ -106,12 +134,11 @@ def build_pipeline(settings: Settings, http_client: httpx.AsyncClient) -> Analys
         base_url=settings.ark_base_url,
         http_client=http_client,
     )
-    return OrchestratedAnalysisPipeline(
-        media=media,
-        asr=asr,
-        ark=ark,
-        skills=SkillRepository.load(PROJECT_ROOT / "skills"),
-    )
+    try:
+        skills = SkillRepository.load(PROJECT_ROOT / "skills")
+    except (OSError, ValueError):
+        return UnconfiguredPipeline()
+    return OrchestratedAnalysisPipeline(media=media, asr=asr, ark=ark, skills=skills)
 
 
 def build_default_app() -> FastAPI:
@@ -122,11 +149,49 @@ def build_default_app() -> FastAPI:
         timeout=httpx.Timeout(settings.run_timeout_seconds, connect=15),
         follow_redirects=False,
     )
+    catalog = build_catalog(settings)
+    temp_root = PROJECT_ROOT / "tmp" / "analysis-runs"
+    configured_cookie_secret = (
+        settings.access_cookie_secret.get_secret_value()
+        if settings.access_cookie_secret is not None
+        else ""
+    )
+    cookie_secret = (
+        configured_cookie_secret
+        if len(configured_cookie_secret.encode("utf-8")) >= 32
+        else secrets.token_urlsafe(32)
+    )
+    configured_judge_access_code = (
+        settings.judge_access_code.get_secret_value()
+        if settings.judge_access_code is not None
+        else ""
+    )
+    judge_access_code = (
+        configured_judge_access_code if configured_judge_access_code else secrets.token_urlsafe(16)
+    )
+    public_concurrency = settings.public_analysis_concurrency
+    if settings.app_env == "test":
+        public_concurrency = max(1, public_concurrency)
+    access = AccessManager(
+        cookie_secret=cookie_secret,
+        judge_access_code=judge_access_code,
+        judge_concurrency=settings.judge_analysis_concurrency,
+        public_concurrency=public_concurrency,
+    )
+    readiness = ProductionReadiness(
+        settings=settings,
+        catalog=catalog,
+        temp_root=temp_root,
+        skills_root=PROJECT_ROOT / "skills",
+    )
     return create_app(
-        catalog=build_catalog(settings),
-        pipeline=build_pipeline(settings, http_client),
+        catalog=catalog,
+        pipeline=build_pipeline(settings, http_client, temp_root=temp_root),
         timeout_seconds=settings.run_timeout_seconds,
         ttl_seconds=settings.run_ttl_seconds,
         cors_origins=settings.cors_origin_list,
         close_callbacks=[http_client.aclose],
+        access=access,
+        app_env=settings.app_env,
+        readiness=readiness,
     )

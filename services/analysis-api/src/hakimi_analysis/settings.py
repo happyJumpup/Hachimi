@@ -22,10 +22,15 @@ class Settings(BaseSettings):
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     volc_asr_api_key: SecretStr | None = None
     volc_asr_resource_id: str = "volc.seedasr.sauc.duration"
-    volc_asr_url: str = (
-        "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
-    )
+    volc_asr_url: str = "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
     hakimi_demo_video_path: Path | None = None
+    source_manifest_path: Path | None = None
+    source_media_root: Path | None = None
+    public_media_base_url: str | None = None
+    judge_access_code: SecretStr | None = None
+    access_cookie_secret: SecretStr | None = None
+    judge_analysis_concurrency: int = Field(default=2, ge=0)
+    public_analysis_concurrency: int = Field(default=0, ge=0)
     cors_origins: str = "http://localhost:5173"
     run_ttl_seconds: int = Field(default=600, ge=1)
     run_timeout_seconds: int = Field(default=180, ge=1)
