@@ -86,7 +86,7 @@ export interface TrainingRecord {
   creditedRestSeconds: number
   trainingDurationSeconds: number
   completedActionCount: number
-  calorie: CalorieEstimate | null
+  calorie: CalorieEstimate
   petId: 'hachimi'
   startedAt: string
   endedAt: string

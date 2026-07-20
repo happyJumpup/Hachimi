@@ -130,7 +130,7 @@ const expectSuccess = (result: TrainingEngineResult) => {
 const setup = () => {
   const persistence = new MemoryTrainingPersistence()
   const clock = new FakeTrainingClock()
-  const estimateCalories = (): CalorieEstimate | null => null
+  const estimateCalories = (): CalorieEstimate => ({ value: 24, method: 'generic' })
   const engine = createTrainingEngine({
     persistence,
     clock,
@@ -206,7 +206,7 @@ describe('TrainingEngine public command interface', () => {
       creditedRestSeconds: 0,
       trainingDurationSeconds: 2,
       completedActionCount: 1,
-      calorie: null,
+      calorie: { value: 24, method: 'generic' },
       actions: [{
         itemId: 'curl',
         completedSets: 2,
@@ -263,7 +263,7 @@ describe('TrainingEngine public command interface', () => {
       persistence,
       clock,
       idFactory: () => 'unused',
-      estimateCalories: () => null,
+      estimateCalories: () => ({ value: 0, method: 'generic' }),
     })
     const restored = expectSuccess(await restoredEngine.restore())
     expect(restored.session).toMatchObject({
@@ -314,7 +314,11 @@ describe('TrainingEngine public command interface', () => {
     })
 
     clock.advance(100_000)
-    const restoredEngine = createTrainingEngine({ persistence, clock, estimateCalories: () => null })
+    const restoredEngine = createTrainingEngine({
+      persistence,
+      clock,
+      estimateCalories: () => ({ value: 0, method: 'generic' }),
+    })
     const restored = expectSuccess(await restoredEngine.restore())
     expect(restored.session).toMatchObject({
       revision: 3,
@@ -337,7 +341,11 @@ describe('TrainingEngine public command interface', () => {
     }))
 
     clock.advance(15_000)
-    const refreshedEngine = createTrainingEngine({ persistence, clock, estimateCalories: () => null })
+    const refreshedEngine = createTrainingEngine({
+      persistence,
+      clock,
+      estimateCalories: () => ({ value: 0, method: 'generic' }),
+    })
     const restored = expectSuccess(await refreshedEngine.restore())
     expect(restored.session).toMatchObject({
       revision: 2,

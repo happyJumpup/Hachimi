@@ -46,7 +46,7 @@ const record = (sessionId: string): TrainingRecord => ({
   creditedRestSeconds: 0,
   trainingDurationSeconds: 0,
   completedActionCount: 0,
-  calorie: null,
+  calorie: { value: 12, method: 'generic' },
   petId: 'hachimi',
   startedAt: '2026-07-21T00:00:00.000Z',
   endedAt: '2026-07-21T00:01:00.000Z',

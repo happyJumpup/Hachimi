@@ -22,7 +22,7 @@ export interface CalorieEstimatorInput {
   creditedRestMilliseconds: number
 }
 
-export type CalorieEstimator = (input: CalorieEstimatorInput) => CalorieEstimate | null
+export type CalorieEstimator = (input: CalorieEstimatorInput) => CalorieEstimate
 
 type VersionedCommand = {
   sessionId: string
@@ -78,7 +78,7 @@ interface TrainingEngineDependencies {
   persistence: TrainingPersistence
   clock?: TrainingClock
   idFactory?: () => string
-  estimateCalories?: CalorieEstimator
+  estimateCalories: CalorieEstimator
 }
 
 const browserClock: TrainingClock = {
@@ -195,7 +195,7 @@ export const createTrainingEngine = ({
   persistence,
   clock = browserClock,
   idFactory = () => globalThis.crypto.randomUUID(),
-  estimateCalories = () => null,
+  estimateCalories,
 }: TrainingEngineDependencies): TrainingEngine => {
   let activeCheckpoint: { sessionId: string; milliseconds: number } | null = null
 
