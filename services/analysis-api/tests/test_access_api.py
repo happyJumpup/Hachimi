@@ -421,3 +421,72 @@ async def test_starting_analysis_for_another_source_cancels_the_session_old_run(
         assert old_view.json()["status"] == "cancelled"
 
         await client.delete(f"/api/v1/analysis-runs/{second.json()['id']}")
+
+
+@pytest.mark.asyncio
+async def test_analysis_run_endpoints_are_private_to_the_creating_session(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        catalog=two_source_catalog(tmp_path),
+        pipeline=SlowPipeline(),
+        access=access_manager(public_concurrency=1),
+    )
+    owner_transport = httpx.ASGITransport(app=app, client=("203.0.113.10", 1001))
+    other_transport = httpx.ASGITransport(app=app, client=("203.0.113.11", 1002))
+    async with (
+        httpx.AsyncClient(transport=owner_transport, base_url="https://test") as owner,
+        httpx.AsyncClient(transport=other_transport, base_url="https://test") as other,
+    ):
+        created = await owner.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-01", "trigger_seconds": 10},
+        )
+        run_id = created.json()["id"]
+        try:
+            foreign_view = await other.get(f"/api/v1/analysis-runs/{run_id}")
+            foreign_cancel = await other.delete(f"/api/v1/analysis-runs/{run_id}")
+            foreign_events = await other.get(f"/api/v1/analysis-runs/{run_id}/events")
+            owner_view = await owner.get(f"/api/v1/analysis-runs/{run_id}")
+
+            assert (
+                foreign_view.status_code,
+                foreign_cancel.status_code,
+                foreign_events.status_code,
+            ) == (404, 404, 404)
+            assert owner_view.status_code == 200
+            assert owner_view.json()["status"] in {"queued", "running"}
+        finally:
+            await owner.delete(f"/api/v1/analysis-runs/{run_id}")
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "*",
+        "http://competition.example.com",
+        "https://competition.example.com/path",
+        "https://user:password@competition.example.com",
+    ],
+)
+def test_production_rejects_non_exact_https_cors_origins(origin: str) -> None:
+    with pytest.raises(ValueError, match="production CORS origin"):
+        create_app(app_env="production", cors_origins=[origin])
+
+
+@pytest.mark.asyncio
+async def test_production_empty_cors_configuration_does_not_allow_localhost() -> None:
+    app = create_app(app_env="production", cors_origins=[])
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.options(
+            "/api/v1/sources",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers

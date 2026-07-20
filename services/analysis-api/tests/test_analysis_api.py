@@ -117,7 +117,7 @@ async def test_sources_and_completed_run_are_observable_through_http(tmp_path: P
         catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline(), access=make_test_access()
     )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
     ) as client:
         sources = await client.get("/api/v1/sources")
         assert sources.status_code == 200
@@ -152,7 +152,7 @@ async def test_unknown_source_is_rejected_without_starting_a_run(tmp_path: Path)
         catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline(), access=make_test_access()
     )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
     ) as client:
         response = await client.post(
             "/api/v1/analysis-runs",
@@ -167,7 +167,7 @@ async def test_controlled_media_supports_http_range(tmp_path: Path) -> None:
     source_bytes = catalog.get("legacy-arm-workout").path.read_bytes()
     app = create_app(catalog=catalog, pipeline=SuccessfulPipeline(), access=make_test_access())
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
     ) as client:
         response = await client.get(
             "/api/v1/sources/legacy-arm-workout/media",
@@ -186,7 +186,7 @@ async def test_delete_cancels_an_in_flight_run(tmp_path: Path) -> None:
         catalog=source_catalog(tmp_path), pipeline=SlowPipeline(), access=make_test_access()
     )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
     ) as client:
         created = await client.post(
             "/api/v1/analysis-runs",
@@ -208,7 +208,7 @@ async def test_run_timeout_is_an_explicit_failure(tmp_path: Path) -> None:
         access=make_test_access(),
     )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
     ) as client:
         created = await client.post(
             "/api/v1/analysis-runs",
@@ -257,7 +257,7 @@ async def test_runtime_logs_keep_only_allowlisted_diagnostic_fields(
     )
     with caplog.at_level(logging.INFO, logger="hakimi_analysis.runs"):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
+            transport=httpx.ASGITransport(app=app), base_url="https://test"
         ) as client:
             created = await client.post(
                 "/api/v1/analysis-runs",
@@ -273,3 +273,27 @@ async def test_runtime_logs_keep_only_allowlisted_diagnostic_fields(
     assert all(set(payload) <= ALLOWED_LOG_FIELDS for payload in payloads)
     assert any(payload.get("error_code") == "provider_error" for payload in payloads)
     assert all("provider-secret-response-must-not-be-logged" not in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_provider_failure_returns_only_a_safe_public_message(tmp_path: Path) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=SecretFailurePipeline(),
+        access=make_test_access(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout", "trigger_seconds": 45},
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["error"] == {
+        "code": "provider_error",
+        "message": "动作分析暂时不可用，请稍后重试",
+        "retryable": False,
+    }
+    assert "provider-secret-response-must-not-be-logged" not in str(failed)

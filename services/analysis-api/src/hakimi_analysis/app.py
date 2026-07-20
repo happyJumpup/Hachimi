@@ -36,9 +36,11 @@ async def stream_run_events(
     manager: AnalysisRunManager,
     run_id: str,
     is_disconnected: Callable[[], Awaitable[bool]],
+    *,
+    owner_session_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
     try:
-        async for event in manager.events(run_id):
+        async for event in manager.events(run_id, owner_session_id=owner_session_id):
             if await is_disconnected():
                 return
             data = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
@@ -46,12 +48,14 @@ async def stream_run_events(
     finally:
         view: AnalysisRunView | None
         try:
-            view = manager.get(run_id)
+            view = manager.get(run_id, owner_session_id=owner_session_id)
         except KeyError:
             view = None
         if view is not None and view.status not in TERMINAL_STATUSES:
             with suppress(KeyError):
-                await asyncio.shield(manager.cancel(run_id))
+                await asyncio.shield(
+                    manager.cancel(run_id, owner_session_id=owner_session_id)
+                )
 
 
 def create_app(
@@ -88,7 +92,12 @@ def create_app(
     readiness_probe = readiness or StaticReadiness(
         "provider_configuration_invalid" if app_env == "production" else None
     )
-    resolved_cors_origins = cors_origins or ["http://localhost:5173"]
+    if cors_origins is None:
+        resolved_cors_origins = [] if app_env == "production" else ["http://localhost:5173"]
+    else:
+        resolved_cors_origins = cors_origins
+    if app_env == "production":
+        _validate_production_cors_origins(resolved_cors_origins)
     trusted_proxy_networks = tuple(
         ip_network(value, strict=False) for value in trusted_proxy_cidrs or []
     )
@@ -229,7 +238,7 @@ def create_app(
         active = await access_manager.active_run(session.id)
         if active is not None and active.source_id != source.id and active.run_id is not None:
             with suppress(KeyError):
-                await manager.cancel(active.run_id)
+                await manager.cancel(active.run_id, owner_session_id=session.id)
         try:
             lease = await access_manager.reserve(
                 session,
@@ -246,6 +255,7 @@ def create_app(
             created = await manager.create(
                 source,
                 payload.trigger_seconds,
+                owner_session_id=session.id,
                 on_terminal=lease.release,
             )
         except ValueError as error:
@@ -259,9 +269,10 @@ def create_app(
         return created
 
     @app.get("/api/v1/analysis-runs/{run_id}", response_model=AnalysisRunView)
-    async def get_run(run_id: str) -> AnalysisRunView:
+    async def get_run(run_id: str, request: Request) -> AnalysisRunView:
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         try:
-            return manager.get(run_id)
+            return manager.get(run_id, owner_session_id=session.id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="分析请求不存在或已过期") from error
 
@@ -276,20 +287,27 @@ def create_app(
             app_env=app_env,
             development_origins=resolved_cors_origins,
         )
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         try:
-            return await manager.cancel(run_id)
+            return await manager.cancel(run_id, owner_session_id=session.id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="分析请求不存在或已过期") from error
 
     @app.get("/api/v1/analysis-runs/{run_id}/events")
     async def run_events(run_id: str, request: Request) -> StreamingResponse:
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         try:
-            manager.get(run_id)
+            manager.get(run_id, owner_session_id=session.id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="分析请求不存在或已过期") from error
 
         return StreamingResponse(
-            stream_run_events(manager, run_id, request.is_disconnected),
+            stream_run_events(
+                manager,
+                run_id,
+                request.is_disconnected,
+                owner_session_id=session.id,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -323,6 +341,29 @@ def _usable_web_root(web_static_root: Path | None) -> Path | None:
     if not resolved.is_dir() or not (resolved / "index.html").is_file():
         return None
     return resolved
+
+
+def _validate_production_cors_origins(origins: list[str]) -> None:
+    for origin in origins:
+        parsed = urlparse(origin)
+        try:
+            _ = parsed.port
+        except ValueError as error:
+            raise ValueError("production CORS origin must be an exact HTTPS origin") from error
+        if (
+            origin != origin.strip()
+            or parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or "*" in parsed.netloc
+            or parsed.path
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("production CORS origin must be an exact HTTPS origin")
 
 
 def _set_access_cookie(

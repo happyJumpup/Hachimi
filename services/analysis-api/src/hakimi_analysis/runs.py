@@ -27,6 +27,7 @@ LOGGER = logging.getLogger("hakimi_analysis.runs")
 @dataclass(slots=True)
 class RunRecord:
     view: AnalysisRunView
+    owner_session_id: str | None = None
     events: list[AnalysisEvent] = field(default_factory=list)
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task[None] | None = None
@@ -54,6 +55,7 @@ class AnalysisRunManager:
         source: VideoSource,
         trigger_seconds: float,
         *,
+        owner_session_id: str | None = None,
         on_terminal: Callable[[], Awaitable[None]] | None = None,
     ) -> AnalysisRunView:
         self._prune()
@@ -68,18 +70,29 @@ class AnalysisRunManager:
                 status=RunStatus.QUEUED,
                 stage=RunStage.QUEUED,
             ),
+            owner_session_id=owner_session_id,
             on_terminal=on_terminal,
         )
         self._records[run_id] = record
         record.task = asyncio.create_task(self._execute(record, source))
         return record.view.model_copy(deep=True)
 
-    def get(self, run_id: str) -> AnalysisRunView:
+    def get(
+        self,
+        run_id: str,
+        *,
+        owner_session_id: str | None = None,
+    ) -> AnalysisRunView:
         self._prune()
-        return self._record(run_id).view.model_copy(deep=True)
+        return self._record(run_id, owner_session_id=owner_session_id).view.model_copy(deep=True)
 
-    async def cancel(self, run_id: str) -> AnalysisRunView:
-        record = self._record(run_id)
+    async def cancel(
+        self,
+        run_id: str,
+        *,
+        owner_session_id: str | None = None,
+    ) -> AnalysisRunView:
+        record = self._record(run_id, owner_session_id=owner_session_id)
         if record.view.status in TERMINAL_STATUSES:
             return record.view.model_copy(deep=True)
         if record.task is not None:
@@ -95,8 +108,13 @@ class AnalysisRunManager:
         await self._notify_terminal(record)
         return record.view.model_copy(deep=True)
 
-    async def events(self, run_id: str) -> AsyncIterator[AnalysisEvent]:
-        record = self._record(run_id)
+    async def events(
+        self,
+        run_id: str,
+        *,
+        owner_session_id: str | None = None,
+    ) -> AsyncIterator[AnalysisEvent]:
+        record = self._record(run_id, owner_session_id=owner_session_id)
         index = 0
         while True:
             while index < len(record.events):
@@ -162,8 +180,16 @@ class AnalysisRunManager:
                 retryable=True,
             )
         except PipelineFailure as error:
-            code = ErrorCode(error.code)
-            await self._fail(record, code, str(error), retryable=error.retryable)
+            try:
+                code = ErrorCode(error.code)
+            except ValueError:
+                code = ErrorCode.PROVIDER_ERROR
+            await self._fail(
+                record,
+                code,
+                _public_failure_message(code),
+                retryable=error.retryable,
+            )
         except Exception:
             await self._fail(
                 record,
@@ -223,11 +249,19 @@ class AnalysisRunManager:
         async with record.condition:
             record.condition.notify_all()
 
-    def _record(self, run_id: str) -> RunRecord:
+    def _record(
+        self,
+        run_id: str,
+        *,
+        owner_session_id: str | None = None,
+    ) -> RunRecord:
         try:
-            return self._records[run_id]
+            record = self._records[run_id]
         except KeyError as error:
             raise KeyError(f"unknown run_id: {run_id}") from error
+        if owner_session_id is not None and record.owner_session_id != owner_session_id:
+            raise KeyError(f"unknown run_id: {run_id}")
+        return record
 
     def _prune(self) -> None:
         cutoff = datetime.now(UTC) - self._ttl
@@ -262,3 +296,14 @@ class AnalysisRunManager:
 
 def as_pipeline(value: object) -> AnalysisPipeline:
     return cast(AnalysisPipeline, value)
+
+
+def _public_failure_message(code: ErrorCode) -> str:
+    return {
+        ErrorCode.CONFIGURATION_ERROR: "动作分析服务尚未就绪，请联系现场工作人员",
+        ErrorCode.PROVIDER_ERROR: "动作分析暂时不可用，请稍后重试",
+        ErrorCode.SCHEMA_ERROR: "这次没有分析成功，请重试",
+        ErrorCode.MEDIA_ERROR: "视频片段准备失败，请重试",
+        ErrorCode.TIMEOUT: "动作分析超时，请重试",
+        ErrorCode.CANCELLED: "动作分析已取消",
+    }[code]
