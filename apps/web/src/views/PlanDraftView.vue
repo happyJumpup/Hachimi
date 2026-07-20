@@ -8,6 +8,11 @@ import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
 
+type OperationError = {
+  action: 'save_as' | 'start_training'
+  message: string
+}
+
 const router = useRouter()
 const draft = useDraftStore()
 const library = useLibraryStore()
@@ -20,6 +25,7 @@ const showSaveAs = ref(false)
 const saveAsName = ref('')
 const savingPlan = ref(false)
 const saveMessage = ref('')
+const operationError = ref<OperationError | null>(null)
 
 const totalSets = computed(() =>
   draft.items.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
@@ -50,14 +56,23 @@ const addManual = (): void => {
 const startTraining = async (): Promise<void> => {
   if (!draft.items.length || starting.value) return
   starting.value = true
+  operationError.value = null
   try {
     await draft.flushPersist()
     const result = await training.createFromDraft(draft.plan)
-    if (result.ok || result.code === 'active_session_exists') {
+    if (result.ok || (!result.ok && result.code === 'active_session_exists')) {
       await router.push('/training')
+    } else if (!result.ok && result.code !== 'invalid_plan') {
+      operationError.value = {
+        action: 'start_training',
+        message: '这次没有开始训练，请重试',
+      }
     }
   } catch {
-    // The draft store exposes the recoverable save error beside the primary actions.
+    operationError.value = {
+      action: 'start_training',
+      message: '这次没有开始训练，请重试',
+    }
   } finally {
     starting.value = false
   }
@@ -67,20 +82,33 @@ const beginSaveAs = (): void => {
   saveAsName.value = draft.plan.name === '未命名方案' ? '' : `${draft.plan.name}（副本）`
   showSaveAs.value = true
   saveMessage.value = ''
+  operationError.value = null
 }
 
 const saveAs = async (): Promise<void> => {
   if (!saveAsName.value.trim() || savingPlan.value) return
   savingPlan.value = true
+  operationError.value = null
   try {
     await draft.flushPersist()
     draft.adoptPersistedPlan(await library.saveCurrentDraftAs(saveAsName.value))
     showSaveAs.value = false
     saveMessage.value = '已另存为新方案'
   } catch {
-    // Keep the form and the visible draft save error available for retry.
+    operationError.value = {
+      action: 'save_as',
+      message: '另存为没有成功，请重试',
+    }
   } finally {
     savingPlan.value = false
+  }
+}
+
+const retryOperation = async (): Promise<void> => {
+  if (operationError.value?.action === 'save_as') {
+    await saveAs()
+  } else if (operationError.value?.action === 'start_training') {
+    await startTraining()
   }
 }
 </script>
@@ -266,6 +294,18 @@ const saveAs = async (): Promise<void> => {
       </form>
     </section>
 
+    <section v-if="operationError" class="operation-error" role="alert">
+      <span>{{ operationError.message }}</span>
+      <button
+        type="button"
+        :aria-label="operationError.action === 'save_as' ? '重试另存为' : '重试开始训练'"
+        :disabled="operationError.action === 'save_as' ? savingPlan : starting"
+        @click="retryOperation"
+      >
+        重试
+      </button>
+    </section>
+
     <span
       class="save-state"
       :class="{ failed: draft.persistState === 'failed' }"
@@ -430,6 +470,21 @@ const saveAs = async (): Promise<void> => {
 .save-as-panel form div { display: flex; justify-content: flex-end; gap: 8px; }
 .save-as-panel form button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }
 .save-as-panel form .confirm { color: var(--bg); border-color: var(--cyan); background: var(--cyan); font-weight: 800; }
+.operation-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgb(255 111 97 / 30%);
+  border-radius: 14px;
+  color: var(--coral);
+  background: rgb(255 111 97 / 6%);
+  font-size: 11px;
+}
+.operation-error button { min-height: 44px; padding: 0 14px; border: 1px solid currentcolor; border-radius: 9px; color: inherit; background: transparent; font-weight: 700; }
+.operation-error button:disabled { opacity: .55; }
 .plan-error {
   margin-top: 12px;
   padding: 14px;
