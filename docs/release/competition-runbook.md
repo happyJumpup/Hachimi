@@ -74,7 +74,7 @@ Issue #8 应版本化 `deploy/compose.yml` 与 `deploy/Caddyfile`。服务器目
 
 Compose 只包含：
 
-- `app`：`ghcr.io/happyjumpup/hachimi:<git-sha>`；镜像同时包含构建后的 Vue SPA 与 FastAPI，但不包含 FFmpeg 可执行文件。生产命令必须显式使用 `--workers 1`，媒体缓存与服务器管理的 FFmpeg 均以只读方式挂载。
+- `app`：`ghcr.io/happyjumpup/hachimi:<git-sha>`；镜像同时包含构建后的 Vue SPA 与 FastAPI，但不包含 FFmpeg 可执行文件。生产命令必须显式使用 `--workers 1`，媒体缓存与服务器管理的 FFmpeg 均以只读方式挂载；`stop_grace_period` 固定为 240 秒，使 180 秒运行上限结束后仍有清理余量。
 - `caddy`：固定版本镜像；只暴露 80/443，只向内部 `app` 转发。
 
 Caddy 必须：
@@ -170,13 +170,13 @@ docker run --rm \
 
 ### 6.2 构建与发布镜像
 
-GitHub Actions 必须从待发布提交构建多阶段镜像，并推送：
+GitHub Actions 必须从待发布提交构建多阶段镜像。推送前先将同一构建加载到 Runner，通过 [`deploy/verify-competition-image.sh`](../../deploy/verify-competition-image.sh) 检查非 root 用户、禁入文件、FFmpeg 发布边界、只读容器、SPA history、健康接口和 API 404，并验证 Compose 与 Caddy；全部通过后才登录 GHCR 并推送：
 
 ```text
 ghcr.io/happyjumpup/hachimi:<完整 git-sha>
 ```
 
-禁止以 `latest` 作为发布或回滚依据。工作流完成后记录仓库 SHA、镜像 digest 和 CI 链接；服务器拉取后再次核对 digest。镜像审计必须确认其中没有 `.env*`、媒体、转录、帧、测试 Trace、源映射、云密钥或本机路径。
+禁止以 `latest` 作为发布或回滚依据。工作流完成后记录仓库 SHA、镜像 digest 和 CI 链接；服务器拉取后再次核对 digest。镜像审计必须确认合并文件系统及最终镜像各层都没有 `.env*`、媒体、转录、帧、测试 Trace、源映射、云密钥、本机路径或 wheel 自带 FFmpeg 二进制。
 
 ### 6.3 部署候选 SHA
 
@@ -341,7 +341,7 @@ PUBLIC_ANALYSIS_CONCURRENCY=0
 ### 13.1 打开入口前
 
 - [ ] 事实表、素材表、当前/上一个 SHA 与 digest 填写完整。
-- [ ] CI、`pnpm check`、E2E、镜像 smoke 和安全审计全绿。
+- [ ] CI、`pnpm check`、E2E、`deploy/verify-competition-image.sh`、镜像逐层审计和安全审计全绿。
 - [ ] COS、服务器缓存与来源清单三方哈希一致，全部视频 Range 可播放。
 - [ ] `/api/v1/health`、`/api/v1/ready`、HTTPS、SSE 超时和断开取消通过。
 - [ ] 2–3 条来源真实云 smoke 通过，临时材料与 Ark 文件均清理。
