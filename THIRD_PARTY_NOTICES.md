@@ -7,7 +7,8 @@ their own licenses.
   media-window extraction. Its wheel-provided executable is not copied into the
   repository or the production GHCR image. Production mounts a separately
   managed, checksummed FFmpeg executable read-only from the server. The release
-  owner must audit that exact build and preserve its applicable license/source
+  owner must audit and pin that exact binary plus its complete configuration line,
+  and preserve its applicable license/source
   obligations; see `licenses/FFMPEG_RUNTIME.md`.
 - `Barlow Condensed` is bundled as a browser font through
   `@fontsource/barlow-condensed`. Copyright 2017 The Barlow Project Authors;

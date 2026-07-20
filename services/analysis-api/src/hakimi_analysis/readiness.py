@@ -1,3 +1,6 @@
+import hashlib
+import os
+import subprocess
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
@@ -11,6 +14,54 @@ from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.orchestration import SkillRepository
 from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import SourceCatalog
+
+FFMPEG_VERSION_TIMEOUT_SECONDS = 5
+FFMPEG_CONFIGURATION_PREFIX = "configuration:"
+FORBIDDEN_FFMPEG_CONFIGURATION_FLAGS = frozenset({"--enable-gpl", "--enable-nonfree"})
+
+
+def validate_ffmpeg_runtime(
+    executable: Path,
+    expected_sha256: str,
+    expected_configuration_sha256: str,
+) -> bool:
+    try:
+        resolved = executable.resolve(strict=True)
+        if not resolved.is_file() or not os.access(resolved, os.X_OK):
+            return False
+        digest = hashlib.sha256()
+        with resolved.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected_sha256:
+            return False
+        completed = subprocess.run(
+            [str(resolved), "-version"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=FFMPEG_VERSION_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if completed.returncode != 0:
+        return False
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if not lines or not lines[0].startswith("ffmpeg version "):
+        return False
+    configuration_line = next(
+        (line for line in lines if line.startswith(FFMPEG_CONFIGURATION_PREFIX)),
+        None,
+    )
+    if configuration_line is None:
+        return False
+    configuration_flags = set(configuration_line.removeprefix(FFMPEG_CONFIGURATION_PREFIX).split())
+    if configuration_flags & FORBIDDEN_FFMPEG_CONFIGURATION_FLAGS:
+        return False
+    return (
+        hashlib.sha256(configuration_line.encode("utf-8")).hexdigest()
+        == expected_configuration_sha256
+    )
 
 
 class ReadinessProbe(Protocol):
@@ -26,6 +77,7 @@ class ProductionReadiness:
         temp_root: Path,
         skills_root: Path,
         duration_probe: Callable[[Path], float] | None = None,
+        ffmpeg_runtime_probe: Callable[[Path, str, str], bool] | None = None,
         cache_seconds: float = 5,
     ) -> None:
         self._settings = settings
@@ -33,6 +85,7 @@ class ProductionReadiness:
         self._temp_root = temp_root
         self._skills_root = skills_root
         self._duration_probe = duration_probe or probe_duration_sync
+        self._ffmpeg_runtime_probe = ffmpeg_runtime_probe or validate_ffmpeg_runtime
         self._cache_seconds = cache_seconds
         self._cache_lock = Lock()
         self._cached_at: float | None = None
@@ -80,7 +133,18 @@ class ProductionReadiness:
         if parsed_media_url.scheme != "https" or not parsed_media_url.netloc:
             return "source_manifest_invalid"
         ffmpeg_executable = self._settings.imageio_ffmpeg_exe
-        if ffmpeg_executable is None or not ffmpeg_executable.is_file():
+        ffmpeg_sha256 = self._settings.ffmpeg_expected_sha256
+        ffmpeg_configuration_sha256 = self._settings.ffmpeg_expected_configuration_sha256
+        if (
+            ffmpeg_executable is None
+            or ffmpeg_sha256 is None
+            or ffmpeg_configuration_sha256 is None
+            or not self._ffmpeg_runtime_probe(
+                ffmpeg_executable,
+                ffmpeg_sha256,
+                ffmpeg_configuration_sha256,
+            )
+        ):
             return "media_processor_unavailable"
         if not self._catalog.validate_media(self._duration_probe):
             return "media_cache_invalid"

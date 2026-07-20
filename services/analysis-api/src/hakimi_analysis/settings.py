@@ -1,3 +1,4 @@
+import re
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
@@ -31,6 +32,8 @@ class Settings(BaseSettings):
     smoke_annotations_path: Path | None = None
     web_static_root: Path | None = None
     imageio_ffmpeg_exe: Path | None = None
+    ffmpeg_expected_sha256: str | None = None
+    ffmpeg_expected_configuration_sha256: str | None = None
     judge_access_code: SecretStr | None = None
     access_cookie_secret: SecretStr | None = None
     judge_analysis_concurrency: int = Field(default=2, ge=0)
@@ -55,6 +58,22 @@ class Settings(BaseSettings):
                 if network.prefixlen == 0:
                     raise ValueError("trusted proxy CIDR must not trust every address")
         return value
+
+    @field_validator(
+        "ffmpeg_expected_sha256",
+        "ffmpeg_expected_configuration_sha256",
+        mode="before",
+    )
+    @classmethod
+    def validate_optional_sha256(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip().lower()
+        if not normalized:
+            return None
+        if re.fullmatch(r"[0-9a-f]{64}", normalized) is None:
+            raise ValueError("expected a 64-character SHA-256 digest")
+        return normalized
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -38,6 +38,20 @@ def test_production_ffmpeg_is_an_explicit_optional_path(tmp_path: Path) -> None:
     assert with_ffmpeg.imageio_ffmpeg_exe == tmp_path / "ffmpeg"
 
 
+def test_ffmpeg_audit_hashes_are_normalized_and_validated() -> None:
+    settings = Settings(
+        _env_file=None,
+        ffmpeg_expected_sha256=f" {'A' * 64} ",
+        ffmpeg_expected_configuration_sha256="B" * 64,
+    )
+
+    assert settings.ffmpeg_expected_sha256 == "a" * 64
+    assert settings.ffmpeg_expected_configuration_sha256 == "b" * 64
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, ffmpeg_expected_sha256="not-a-sha256")
+
+
 def test_trusted_proxy_cidrs_are_split_without_wildcard_defaults() -> None:
     default = Settings(_env_file=None)
     configured = Settings(

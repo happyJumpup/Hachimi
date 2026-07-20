@@ -151,6 +151,7 @@ def configured_readiness(
     trusted_proxy_cidrs: str = "172.30.248.2/32",
     judge_access_code: str = "judge-access-code-at-least-16-bytes",
     include_ffmpeg: bool = True,
+    ffmpeg_audit_passes: bool = True,
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -191,6 +192,7 @@ def configured_readiness(
     ffmpeg_path = tmp_path / "ffmpeg"
     if include_ffmpeg:
         ffmpeg_path.write_bytes(b"server-managed-ffmpeg")
+    ffmpeg_sha256 = hashlib.sha256(b"server-managed-ffmpeg").hexdigest()
     settings = Settings(
         _env_file=None,
         app_env="production",
@@ -205,6 +207,8 @@ def configured_readiness(
         web_static_root=web_static_root,
         trusted_proxy_cidrs=trusted_proxy_cidrs,
         imageio_ffmpeg_exe=ffmpeg_path if include_ffmpeg else None,
+        ffmpeg_expected_sha256=ffmpeg_sha256 if include_ffmpeg else None,
+        ffmpeg_expected_configuration_sha256="c" * 64 if include_ffmpeg else None,
     )
     catalog = SourceCatalog.from_manifest(
         manifest_path=manifest_path,
@@ -219,6 +223,7 @@ def configured_readiness(
             temp_root=tmp_path / "analysis-runs",
             skills_root=skills_root,
             duration_probe=lambda _: 60,
+            ffmpeg_runtime_probe=lambda *_: ffmpeg_audit_passes,
         ),
         media_path,
     )
@@ -244,6 +249,23 @@ async def test_production_ready_requires_a_high_entropy_judge_code(tmp_path: Pat
 @pytest.mark.asyncio
 async def test_production_ready_requires_a_server_managed_ffmpeg(tmp_path: Path) -> None:
     readiness, _ = configured_readiness(tmp_path, include_ffmpeg=False)
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "code": "media_processor_unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_production_ready_rejects_ffmpeg_that_fails_runtime_audit(tmp_path: Path) -> None:
+    readiness, _ = configured_readiness(tmp_path, ffmpeg_audit_passes=False)
     app = create_app(app_env="production", readiness=readiness)
 
     async with httpx.AsyncClient(

@@ -39,6 +39,38 @@ async def create_synthetic_video(path: Path) -> None:
     assert process.returncode == 0, stderr.decode("utf-8", errors="replace")
 
 
+async def create_colour_transition_video(path: Path) -> None:
+    executable = imageio_ffmpeg.get_ffmpeg_exe()
+    process = await asyncio.create_subprocess_exec(
+        executable,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=red:s=64x64:r=10:d=1.5",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=blue:s=64x64:r=10:d=1.5",
+        "-filter_complex",
+        "[0:v][1:v]concat=n=2:v=1:a=0[v]",
+        "-map",
+        "[v]",
+        "-c:v",
+        "mpeg4",
+        "-g",
+        "100",
+        "-pix_fmt",
+        "yuv420p",
+        "-y",
+        str(path),
+    )
+    _, stderr = await process.communicate()
+    assert process.returncode == 0, stderr.decode("utf-8", errors="replace")
+
+
 @pytest.mark.asyncio
 async def test_prepared_media_is_bounded_and_removed_after_use(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
@@ -63,7 +95,7 @@ async def test_prepared_media_is_bounded_and_removed_after_use(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
-async def test_visual_window_uses_stream_copy_without_a_gpl_encoder(
+async def test_visual_window_uses_builtin_mpeg4_encoder_for_accurate_seeking(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -85,8 +117,33 @@ async def test_visual_window_uses_stream_copy_without_a_gpl_encoder(
     )
 
     assert "libx264" not in captured
-    assert captured[captured.index("-c:v") + 1] == "copy"
-    assert captured[captured.index("-avoid_negative_ts") + 1] == "make_zero"
+    assert captured[captured.index("-c:v") + 1] == "mpeg4"
+    assert captured[captured.index("-pix_fmt") + 1] == "yuv420p"
+
+
+@pytest.mark.asyncio
+async def test_visual_window_starts_at_requested_non_keyframe_content(tmp_path: Path) -> None:
+    source = tmp_path / "colour-transition.mp4"
+    output = tmp_path / "window.mp4"
+    await create_colour_transition_video(source)
+    processor = LocalMediaProcessor()
+    await processor._extract_video(
+        source,
+        output,
+        AnalysisWindow(start_seconds=1.75, end_seconds=2.25, expanded=False),
+    )
+    reader: Any = imageio_ffmpeg.read_frames(str(output), pix_fmt="rgb24")
+    try:
+        metadata = next(reader)
+        first_frame = next(reader)
+    finally:
+        reader.close()
+
+    assert 0.4 <= float(metadata["duration"]) <= 0.6
+    red = first_frame[0]
+    blue = first_frame[2]
+    assert blue > 180
+    assert red < 80
 
 
 @pytest.mark.asyncio

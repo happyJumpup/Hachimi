@@ -135,7 +135,7 @@ interface AccessSessionView {
 
 - `APP_ENV=production`、`ANALYSIS_PROVIDER=cloud`，两项云端密钥和三个 Skill 均已配置；
 - 来源清单可解析，所有本地媒体的路径、哈希和时长校验通过；
-- `IMAGEIO_FFMPEG_EXE` 指向服务器只读挂载的真实文件，生产镜像不含 wheel 自带二进制；
+- `IMAGEIO_FFMPEG_EXE` 指向服务器只读挂载的真实文件，生产镜像不含 wheel 自带二进制；`FFMPEG_EXPECTED_SHA256` 与 `FFMPEG_EXPECTED_CONFIGURATION_SHA256` 分别锁定可执行文件和完整 `configuration:` 行；
 - 分析临时根目录可创建、写入和删除探针文件；
 - 访问 Cookie 密钥、评委码以及并发配置有效，未启用测试 Provider。
 

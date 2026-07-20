@@ -164,7 +164,7 @@ pnpm dev
 | `VOLC_ASR_API_KEY` | 流式语音识别 2.0 |
 | `HAKIMI_DEMO_VIDEO_PATH` | 后端登记的本地受控演示视频绝对路径 |
 
-默认 Web 地址为 `http://localhost:5173`，API 地址为 `http://127.0.0.1:8000`。本地开发由 `imageio-ffmpeg` 提供 FFmpeg 可执行文件，不依赖系统 `PATH`；生产镜像会移除该 wheel 二进制，并通过 `IMAGEIO_FFMPEG_EXE` 使用服务器只读挂载、单独完成许可审计的 FFmpeg。如果只需要运行确定性测试，不需要配置真实云密钥；完整变量清单和非敏感默认值见 [`.env.example`](../../.env.example)。
+默认 Web 地址为 `http://localhost:5173`，API 地址为 `http://127.0.0.1:8000`。本地开发由 `imageio-ffmpeg` 提供 FFmpeg 可执行文件，不依赖系统 `PATH`；生产镜像从独立构建阶段只复制已删除 wheel 二进制的干净虚拟环境，并通过 `IMAGEIO_FFMPEG_EXE` 使用服务器只读挂载、由两个 SHA-256 锁定可执行文件和配置行的 FFmpeg。如果只需要运行确定性测试，不需要配置真实云密钥；完整变量清单和非敏感默认值见 [`.env.example`](../../.env.example)。
 
 ### ASR 与模型配置
 
