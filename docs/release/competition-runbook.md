@@ -101,6 +101,7 @@ Caddy 必须：
 | `SOURCE_MANIFEST_PATH` | 指向容器内只读挂载的该 release 来源清单，例如 `/config/media-manifest.json` |
 | `SOURCE_MEDIA_ROOT` | 固定为 `/var/lib/hachimi/media` |
 | `PUBLIC_MEDIA_BASE_URL` | 受控 COS/CDN HTTPS 基地址；只与清单文件名拼接 |
+| `SMOKE_ANNOTATIONS_PATH` | 指向容器内只读挂载的该 release 人工 smoke 标注清单，例如 `/config/smoke-annotations.json`；不得包含转录或模型响应 |
 | `JUDGE_ACCESS_CODE` | 必填高熵秘密，不进入前端构建或 URL |
 | `ACCESS_COOKIE_SECRET` | 必填随机签名秘密，与体验码分离 |
 | `JUDGE_ANALYSIS_CONCURRENCY` | 容量验收后填写；未通过时为 `2` |
@@ -182,7 +183,7 @@ docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml con
 docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml pull
 ```
 
-1. 将该 SHA 的 `compose.yml`、`Caddyfile` 和媒体清单放入新的 release 目录并校验文件哈希。
+1. 将该 SHA 的 `compose.yml`、`Caddyfile`、媒体清单和人工 smoke 标注清单放入新的 release 目录并校验文件哈希。
 2. 切换 `/opt/hachimi/current` 到新 release，执行媒体同步与哈希校验。
 3. 运行 `docker compose up -d --remove-orphans`；不得使用 `--scale app`。
 4. 查看容器健康状态和脱敏启动日志，确认应用恰好一个 worker。
@@ -205,13 +206,28 @@ docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml pul
 
 ### 7.1 真实云 smoke
 
-当前 `pnpm smoke:cloud` 只验证本地 `legacy-arm-workout`。Issue #8 必须扩展为按生产受控清单运行、且不输出内容的 smoke。每条演示视频至少设置一个团队人工标注触发点，并验证：
+`pnpm smoke:cloud` 已按生产受控来源清单运行，不再接受硬编码的本地 `legacy-arm-workout`。发布前从 [`competition/smoke-annotations.example.json`](../../competition/smoke-annotations.example.json) 复制该 release 的 `smoke-annotations.json`，并遵循以下契约：
+
+- `version` 固定为 `1`；`sources` 必须与媒体清单的来源 ID 完全一致，不能遗漏或额外增加来源。
+- 每个来源至少有一个 `checkpoint`，只登记触发秒数、动作名称的人工认可别名和期望片段起止秒数。
+- 清单可以登记公开的动作标注，但不得包含转录、提示词、帧、模型原始响应、密钥、体验码、本机路径或签名 URL。
+- 触发点和期望片段必须位于对应来源时长内；动作名称别名只用于确定性语义别名匹配，不额外调用模型判分。
+
+候选镜像在服务器上按同一只读来源/媒体/标注挂载执行：
+
+```bash
+docker compose --env-file /opt/hachimi/shared/.env.production \
+  -f /opt/hachimi/current/compose.yml run --rm app \
+  python -m hakimi_analysis.cloud_smoke
+```
+
+命令逐来源、逐标注点执行真实管线。任一来源未覆盖、语音或视觉分支未完成、融合阶段缺失、动作语义别名不匹配、片段不相交、候选含重量字段、本地临时目录未恢复，或 Ark 上传与成功删除数量不一致，均返回非零。每条演示视频至少设置一个团队人工标注触发点，并验证：
 
 - Ark、豆包流式 ASR 2.0 和融合三个阶段都是真实成功，不使用测试 Provider、缓存候选或预置结果。
 - 候选名称与人工标注语义一致，绝对片段与标注时间段相交，不产生重量。
-- 结果可由用户校正并加入跨视频草稿，刷新后仍恢复。
+- 真实云命令通过后，再由真实 Web 验收确认候选可校正、可加入跨视频草稿且刷新后恢复。
 - 本地临时目录恢复到运行前状态；Ark 临时文件删除请求成功。
-- 输出只包含 `PASS/FAIL`、来源 ID、阶段耗时、总耗时、模型/Skill 版本、提供方请求 ID 和脱敏错误码；不保存转录、候选原文、帧、提示词、原始响应或 Trace。
+- 成功输出只包含 `PASS`、来源 ID、标注点序号、阶段耗时、总耗时、模型/Skill 版本和脱敏后的提供方请求 ID；失败输出只增加脱敏错误码、来源 ID、标注点序号和允许的数值诊断。输出不保存动作名称、转录、候选原文、帧、提示词、原始响应或 Trace。
 
 任何一个提供方权限、权益、额度或清理校验失败都阻止发布。不得用 Mock 或快速体验方案替代真实云验收。
 

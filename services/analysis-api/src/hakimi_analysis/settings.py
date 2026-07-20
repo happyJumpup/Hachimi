@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     source_manifest_path: Path | None = None
     source_media_root: Path | None = None
     public_media_base_url: str | None = None
+    smoke_annotations_path: Path | None = None
     web_static_root: Path | None = None
     judge_access_code: SecretStr | None = None
     access_cookie_secret: SecretStr | None = None

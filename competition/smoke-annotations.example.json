@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "source_id": "arm-workout-01",
+      "checkpoints": [
+        {
+          "trigger_seconds": 45,
+          "accepted_action_names": [
+            "Drag Curl",
+            "Cable Drag Curl",
+            "拖拽弯举",
+            "拖拽式弯举"
+          ],
+          "expected_segment": {
+            "start_seconds": 41,
+            "end_seconds": 51
+          }
+        }
+      ]
+    }
+  ]
+}
