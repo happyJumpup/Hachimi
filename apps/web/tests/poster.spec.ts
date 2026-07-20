@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   buildCompletionPosterModel,
+  deliverCompletionPoster,
   renderCompletionPoster,
   type PosterDrawingContext,
   type PosterRuntime,
@@ -50,5 +51,31 @@ describe('completion poster', () => {
     expect(runtime.loadImage).toHaveBeenCalledTimes(1)
     expect(context.drawImage).toHaveBeenCalledTimes(1)
     expect(exportPng).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses Web Share when file sharing is available', async () => {
+    const share = vi.fn().mockResolvedValue(undefined)
+    const download = vi.fn()
+    const result = await deliverCompletionPoster(new Blob(['png'], { type: 'image/png' }), '手臂计划', {
+      canShare: () => true,
+      share,
+      download,
+    })
+
+    expect(result).toBe('shared')
+    expect(share).toHaveBeenCalledTimes(1)
+    expect(download).not.toHaveBeenCalled()
+  })
+
+  it('downloads the PNG when Web Share is unavailable or fails', async () => {
+    const download = vi.fn()
+    const result = await deliverCompletionPoster(new Blob(['png'], { type: 'image/png' }), '手臂/计划', {
+      canShare: () => false,
+      share: vi.fn(),
+      download,
+    })
+
+    expect(result).toBe('downloaded')
+    expect(download).toHaveBeenCalledWith(expect.any(File), '哈基米-手臂-计划.png')
   })
 })

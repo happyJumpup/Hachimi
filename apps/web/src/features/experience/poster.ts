@@ -36,6 +36,14 @@ export interface PosterRuntime {
   loadImage(url: string): Promise<CanvasImageSource>
 }
 
+export interface PosterDeliveryRuntime {
+  canShare(data: ShareData): boolean
+  share(data: ShareData): Promise<void>
+  download(file: File, filename: string): void
+}
+
+export type PosterDeliveryResult = 'shared' | 'downloaded' | 'cancelled'
+
 const POSTER_WIDTH = 1_080
 const POSTER_HEIGHT = 1_920
 const COMPLETED_PET_URL = new URL('../../assets/pet/completed.webp', import.meta.url).href
@@ -141,4 +149,60 @@ export async function renderCompletionPoster(
   const pet = await runtime.loadImage(COMPLETED_PET_URL)
   drawPoster(surface.context, model, pet)
   return surface.exportPng()
+}
+
+function posterFilename(planName: string): string {
+  const withoutControlCharacters = [...planName.trim()]
+    .map((character) => (character.charCodeAt(0) < 32 ? '-' : character))
+    .join('')
+  const safePlanName = withoutControlCharacters
+    .replace(/[<>:"/\\|?*]/g, '-')
+    .replace(/-+/g, '-')
+    .slice(0, 48)
+  return `哈基米-${safePlanName || '训练完成'}.png`
+}
+
+function createBrowserDeliveryRuntime(): PosterDeliveryRuntime {
+  return {
+    canShare(data) {
+      return typeof navigator.share === 'function' &&
+        (typeof navigator.canShare !== 'function' || navigator.canShare(data))
+    },
+    share(data) {
+      return navigator.share(data)
+    },
+    download(file, filename) {
+      const url = URL.createObjectURL(file)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 0)
+    },
+  }
+}
+
+export async function deliverCompletionPoster(
+  blob: Blob,
+  planName: string,
+  runtime: PosterDeliveryRuntime = createBrowserDeliveryRuntime(),
+): Promise<PosterDeliveryResult> {
+  const filename = posterFilename(planName)
+  const file = new File([blob], filename, { type: 'image/png' })
+  const shareData: ShareData = {
+    title: '哈基米练臂力动训练海报',
+    files: [file],
+  }
+
+  if (runtime.canShare(shareData)) {
+    try {
+      await runtime.share(shareData)
+      return 'shared'
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return 'cancelled'
+    }
+  }
+
+  runtime.download(file, filename)
+  return 'downloaded'
 }
