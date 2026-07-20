@@ -64,6 +64,16 @@ const statusLabel = computed(() => {
   if (session.value.pauseReason === 'recovered') return '已恢复并暂停'
   return '训练已暂停'
 })
+const startActionLabel = computed(() => {
+  if (session.value?.status === 'ready_to_continue') return '准备继续'
+  if (
+    session.value?.status === 'paused'
+    && (session.value.pauseReason === 'before_start' || session.value.pauseReason === 'between_actions')
+  ) {
+    return '开始本组'
+  }
+  return '继续训练'
+})
 const petState = computed(() => derivePetState({
   sessionStatus: session.value?.status ?? null,
   pauseReason: session.value?.pauseReason ?? null,
@@ -277,6 +287,7 @@ onBeforeUnmount(() => {
           <strong v-else>{{ item.reps.value }} 次</strong>
           <small>
             已完成 {{ progress?.completedSets ?? 0 }} / {{ targetSets }} 组
+            <template v-if="item.weightKg.value !== null"> · {{ item.weightKg.value }} kg</template>
           </small>
         </div>
 
@@ -287,7 +298,7 @@ onBeforeUnmount(() => {
           :disabled="commandPending || training.commandLocked"
           @click="startOrContinue"
         >
-          {{ session.status === 'ready_to_continue' ? '准备继续' : '开始本组' }}
+          {{ startActionLabel }}
         </button>
         <button
           v-else-if="session.status === 'resting'"

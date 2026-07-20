@@ -165,4 +165,21 @@ describe('动作分析 store', () => {
     expect(store.retryAfterSeconds).toBe(15)
     expect(store.error?.message).toBe('真实动作分析名额正在使用中')
   })
+
+  it('closes a failed result stream instead of leaving analysis active in the background', async () => {
+    const client = new FakeClient()
+    const events = new FakeEventFactory()
+    const store = useAnalysisStore()
+    client.getRun = async () => {
+      throw new Error('temporary result read failure')
+    }
+
+    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    events.emit('run.completed')
+    await flushPromises()
+
+    expect(store.status).toBe('failed')
+    expect(store.activeRunId).toBeNull()
+    expect(events.closed).toBe(true)
+  })
 })

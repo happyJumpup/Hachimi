@@ -134,6 +134,9 @@ export const useAnalysisStore = defineStore('analysis', () => {
       }
     } catch {
       if (generation !== currentGeneration || activeRunId.value !== runId) return
+      stream?.close()
+      stream = undefined
+      activeRunId.value = null
       status.value = 'failed'
       stage.value = 'failed'
       error.value = {

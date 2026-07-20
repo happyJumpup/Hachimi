@@ -54,10 +54,10 @@ test('quick plan completes through save-as, rest recovery, Pet, record, and post
   await page.getByRole('link', { name: /休息结束|准备继续训练/ }).click()
 
   await expect(page.getByText('准备继续', { exact: true }).first()).toBeVisible()
-  await page.getByRole('button', { name: '继续下一组' }).click()
+  await page.getByRole('button', { name: '准备继续' }).click()
   await expect(page.getByRole('heading', { name: '站姿弯举' })).toBeVisible()
   await page.getByRole('button', { name: '完成本组' }).click()
-  await page.getByRole('button', { name: '继续下一组' }).click()
+  await page.getByRole('button', { name: '准备继续' }).click()
   await expect(page.getByRole('heading', { name: '窄距俯卧撑' })).toBeVisible()
   await page.getByRole('button', { name: '完成本组' }).click()
 

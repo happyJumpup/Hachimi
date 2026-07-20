@@ -46,7 +46,7 @@ watch(selectedSourceId, async (next, previous) => {
 })
 
 onBeforeUnmount(() => {
-  if (analysis.isRunning) void analysis.cancel(analysisClient)
+  if (analysis.activeRunId) void analysis.cancel(analysisClient)
 })
 
 const syncTime = (): void => {

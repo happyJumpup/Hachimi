@@ -113,6 +113,30 @@ describe('训练页合同', () => {
     wrapper.unmount()
   })
 
+  it('labels a paused in-progress set as 继续训练 instead of restarting it', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    await useTrainingStore().load(new SessionEngine(trainingSession('paused')))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    expect(wrapper.get('button.primary-action').text()).toBe('继续训练')
+    wrapper.unmount()
+  })
+
+  it('shows a user-entered weight as part of the current set target', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('paused')
+    current.plan.items[0]!.weightKg = { value: 12.5, source: 'user' }
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    expect(wrapper.text()).toContain('12.5 kg')
+    wrapper.unmount()
+  })
+
   it('visibly pauses and stops ticking after another tab wins a revision conflict', async () => {
     vi.useFakeTimers()
     const pinia = createPinia()
