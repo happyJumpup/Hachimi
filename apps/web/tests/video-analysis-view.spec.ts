@@ -118,6 +118,38 @@ describe('视频动作分析页', () => {
     expect(wrapper.get('.stage-media-error a[href="/plan"]').text()).toBe('去方案草稿')
   })
 
+  it('uses the shorter browser media duration as the candidate segment limit', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const analysis = useAnalysisStore()
+    showCompletedCandidate(analysis)
+    analysis.sources[0]!.duration_seconds = 51
+    vi.spyOn(analysis, 'loadSources').mockResolvedValue()
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: VideoAnalysisView },
+        { path: '/plan', component: { template: '<p>plan</p>' } },
+        { path: '/mine', component: { template: '<p>mine</p>' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(VideoAnalysisView, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+    showCompletedCandidate(analysis)
+    analysis.sources[0]!.duration_seconds = 51
+    await flushPromises()
+    const media = wrapper.get<HTMLVideoElement>('video')
+    Object.defineProperty(media.element, 'duration', { configurable: true, value: 50 })
+
+    await media.trigger('loadedmetadata')
+    await flushPromises()
+
+    expect(wrapper.get('.panel-footer p').text()).toContain('不超过视频长度')
+    expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
+  })
+
   it('cancels an owned run on leave even after its visible state becomes failed', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

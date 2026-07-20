@@ -27,6 +27,13 @@ let resumeAfterCancel = false
 const selectedSource = computed(() =>
   analysis.sources.find((source) => source.id === selectedSourceId.value),
 )
+const segmentEndLimit = computed(() => {
+  const configuredDuration = selectedSource.value?.duration_seconds
+  if (configuredDuration === undefined) return undefined
+  return durationSeconds.value > 0
+    ? Math.min(configuredDuration, durationSeconds.value)
+    : configuredDuration
+})
 
 const formatTime = (seconds: number): string => {
   const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
@@ -49,6 +56,7 @@ watch(selectedSourceId, async (next, previous) => {
   analysis.clearResult()
   addCandidatesError.value = ''
   currentSeconds.value = 0
+  durationSeconds.value = 0
   previewEnd.value = null
   mediaLoadFailed.value = false
   video.value?.load()
@@ -269,7 +277,7 @@ const returnToVideo = async (): Promise<void> => {
           v-if="analysis.status === 'completed' && analysis.candidates.length"
           :candidates="analysis.candidates"
           :warnings="analysis.warnings"
-          :max-segment-end="selectedSource.duration_seconds"
+          :max-segment-end="segmentEndLimit"
           :submitting="addingCandidates"
           :submission-error="addCandidatesError"
           @preview="preview"

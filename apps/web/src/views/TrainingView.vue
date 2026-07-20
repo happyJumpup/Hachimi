@@ -121,6 +121,14 @@ const keepVideoInSegment = (): void => {
   }
 }
 
+const restartVideoSegment = (): void => {
+  const element = video.value
+  const range = segment.value
+  if (!element || !range) return
+  element.currentTime = range.start_seconds
+  if (session.value?.status === 'active') void element.play().catch(() => undefined)
+}
+
 watch(
   () => [session.value?.status, item.value?.id, training.commandLocked],
   () => { void syncVideo() },
@@ -286,6 +294,7 @@ onBeforeUnmount(() => {
           preload="metadata"
           @loadedmetadata="syncVideo"
           @timeupdate="keepVideoInSegment"
+          @ended="restartVideoSegment"
           @error="mediaLoadFailed = true"
         />
         <div v-else-if="item.sourceRef && analysis.sourcesLoading" class="media-placeholder">

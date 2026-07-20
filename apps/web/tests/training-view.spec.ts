@@ -99,7 +99,10 @@ const mountTraining = async (pinia: ReturnType<typeof createPinia>) => {
 }
 
 describe('训练页合同', () => {
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
 
   it('shows the action position and locks the ready CTA to 准备继续', async () => {
     const pinia = createPinia()
@@ -184,6 +187,37 @@ describe('训练页合同', () => {
 
     expect(wrapper.get('.media-placeholder[role="status"]').text()).toContain('参考视频暂时不可用')
     expect(wrapper.get('button.primary-action').text()).toBe('继续训练')
+    wrapper.unmount()
+  })
+
+  it('restarts an active segment when the real media ends before its manifest endpoint', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('active')
+    current.plan.items[0]!.sourceRef = {
+      sourceId: source.id,
+      title: source.title,
+    }
+    current.plan.items[0]!.segment = {
+      value: { start_seconds: 41, end_seconds: 51 },
+      source: 'video',
+    }
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [{ ...source, duration_seconds: 51 }]
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    const wrapper = await mountTraining(pinia)
+    play.mockClear()
+    const media = wrapper.get<HTMLVideoElement>('video')
+    Object.defineProperty(media.element, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: 50,
+    })
+    await media.trigger('ended')
+    await flushPromises()
+
+    expect(media.element.currentTime).toBe(41)
+    expect(play).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
