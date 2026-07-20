@@ -28,9 +28,9 @@ def _temporary_entries(root: Path) -> set[str]:
 
 def _is_expected_action(name: str) -> bool:
     normalized = "".join(name.lower().split())
-    return ("drag" in normalized and "curl" in normalized) or (
-        "拖" in normalized and "弯举" in normalized
-    )
+    has_drag = "drag" in normalized or "拖" in normalized
+    has_curl = "curl" in normalized or "弯举" in normalized
+    return has_drag and has_curl
 
 
 def _provider_call(response: httpx.Response) -> dict[str, object]:

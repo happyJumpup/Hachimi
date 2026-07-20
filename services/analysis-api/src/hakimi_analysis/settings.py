@@ -21,9 +21,9 @@ class Settings(BaseSettings):
     ark_model_id: str = "doubao-seed-2-0-lite-260215"
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     volc_asr_api_key: SecretStr | None = None
-    volc_asr_resource_id: str = "volc.bigasr.auc_turbo"
+    volc_asr_resource_id: str = "volc.seedasr.sauc.duration"
     volc_asr_url: str = (
-        "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+        "wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_nostream"
     )
     hakimi_demo_video_path: Path | None = None
     cors_origins: str = "http://localhost:5173"

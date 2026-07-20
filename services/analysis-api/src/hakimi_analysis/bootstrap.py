@@ -99,7 +99,6 @@ def build_pipeline(settings: Settings, http_client: httpx.AsyncClient) -> Analys
         api_key=settings.volc_asr_api_key.get_secret_value(),
         resource_id=settings.volc_asr_resource_id,
         url=settings.volc_asr_url,
-        http_client=http_client,
     )
     ark = ArkResponsesClient(
         api_key=settings.ark_api_key.get_secret_value(),
