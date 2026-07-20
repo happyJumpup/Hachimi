@@ -44,6 +44,7 @@ pnpm test:e2e
 ## 文档
 
 - [领域词汇表](CONTEXT.md)
+- [首个动作分析纵切片技术设计与开发准入](docs/technical/action-analysis-vertical-slice.md)
 - [架构决策](docs/adr)
 - [原始项目方案](docs/source/哈基米练臂力动%20-%20抖音内置健身小程序项目方案.md)
 
