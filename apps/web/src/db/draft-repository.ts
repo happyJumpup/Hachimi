@@ -1,11 +1,26 @@
 import type { DraftRepository } from '@/domain/types'
+import type { HachimiDatabase } from '@/db/hachimi-database'
 import { database } from '@/db/hachimi-database'
 
-export const draftRepository: DraftRepository = {
+export const createDexieDraftRepository = (db: HachimiDatabase): DraftRepository => ({
   async load() {
-    return database.drafts.get('current')
+    return db.drafts.get('current')
   },
   async save(plan) {
-    await database.drafts.put(plan)
+    await db.transaction('rw', db.drafts, db.plans, async () => {
+      await db.drafts.put(plan)
+      if (!plan.linkedPlanId) return
+
+      const linkedPlan = await db.plans.get(plan.linkedPlanId)
+      if (!linkedPlan) throw new Error('linked plan does not exist')
+      await db.plans.put({
+        ...linkedPlan,
+        name: plan.name,
+        items: structuredClone(plan.items),
+        updatedAt: plan.updatedAt,
+      })
+    })
   },
-}
+})
+
+export const draftRepository = createDexieDraftRepository(database)
