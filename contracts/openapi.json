@@ -293,6 +293,7 @@
         "additionalProperties": false,
         "properties": {
           "source_id": {
+            "maxLength": 128,
             "minLength": 1,
             "title": "Source Id",
             "type": "string"
@@ -458,6 +459,7 @@
         "additionalProperties": false,
         "properties": {
           "access_code": {
+            "maxLength": 256,
             "minLength": 1,
             "title": "Access Code",
             "type": "string"
