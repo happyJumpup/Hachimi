@@ -54,6 +54,11 @@ _SAFE_OBSERVATION_KEYS = {
     "annotated_source_count",
     "ark_upload_count",
     "ark_delete_count",
+    "candidate_count",
+    "semantic_match_count",
+    "temporal_overlap_count",
+    "semantic_temporal_match_count",
+    "dual_evidence_count",
 }
 
 
@@ -294,25 +299,71 @@ def _matching_candidate(
     candidates: list[AnalysisCandidate],
     checkpoint: SmokeCheckpoint,
 ) -> AnalysisCandidate | None:
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if _candidate_name_matches(candidate, checkpoint)
+            and _candidate_time_overlaps(candidate, checkpoint)
+        ),
+        None,
+    )
+
+
+def _candidate_name_matches(
+    candidate: AnalysisCandidate,
+    checkpoint: SmokeCheckpoint,
+) -> bool:
     accepted_names = {_normalized_name(name) for name in checkpoint.accepted_action_names}
-    for candidate in candidates:
-        normalized = _normalized_name(candidate.name)
-        if (
-            not any(
-                accepted in normalized
-                for accepted in accepted_names
-                if accepted and normalized
-            )
-            or candidate.segment is None
-        ):
-            continue
-        expected = checkpoint.expected_segment
-        if (
-            candidate.segment.start_seconds < expected.end_seconds
-            and candidate.segment.end_seconds > expected.start_seconds
-        ):
-            return candidate
-    return None
+    normalized = _normalized_name(candidate.name)
+    return any(
+        accepted in normalized
+        for accepted in accepted_names
+        if accepted and normalized
+    )
+
+
+def _candidate_time_overlaps(
+    candidate: AnalysisCandidate,
+    checkpoint: SmokeCheckpoint,
+) -> bool:
+    if candidate.segment is None:
+        return False
+    expected = checkpoint.expected_segment
+    return (
+        candidate.segment.start_seconds < expected.end_seconds
+        and candidate.segment.end_seconds > expected.start_seconds
+    )
+
+
+def _candidate_diagnostics(
+    candidates: list[AnalysisCandidate],
+    checkpoint: SmokeCheckpoint,
+) -> dict[str, object]:
+    name_matches = [
+        candidate for candidate in candidates if _candidate_name_matches(candidate, checkpoint)
+    ]
+    time_matches = [
+        candidate for candidate in candidates if _candidate_time_overlaps(candidate, checkpoint)
+    ]
+    combined_matches = [
+        candidate
+        for candidate in name_matches
+        if _candidate_time_overlaps(candidate, checkpoint)
+    ]
+    dual_evidence = [
+        candidate
+        for candidate in combined_matches
+        if {evidence.type for evidence in candidate.evidence}
+        >= {EvidenceType.SPEECH, EvidenceType.VISUAL}
+    ]
+    return {
+        "candidate_count": len(candidates),
+        "semantic_match_count": len(name_matches),
+        "temporal_overlap_count": len(time_matches),
+        "semantic_temporal_match_count": len(combined_matches),
+        "dual_evidence_count": len(dual_evidence),
+    }
 
 
 def _validate_checkpoint_result(
@@ -327,14 +378,18 @@ def _validate_checkpoint_result(
         for stage, _event_type, _data, _at in recorder.events
     ):
         raise SmokeFailure("fusion_stage_did_not_complete")
+    diagnostics = _candidate_diagnostics(candidates, checkpoint)
     matching = _matching_candidate(candidates, checkpoint)
     if matching is None:
-        raise SmokeFailure("expected_action_or_time_intersection_missing")
+        raise SmokeFailure(
+            "expected_action_or_time_intersection_missing",
+            observations=diagnostics,
+        )
     if {evidence.type for evidence in matching.evidence} < {
         EvidenceType.SPEECH,
         EvidenceType.VISUAL,
     }:
-        raise SmokeFailure("fused_dual_evidence_missing")
+        raise SmokeFailure("fused_dual_evidence_missing", observations=diagnostics)
     if _contains_weight_field([candidate.model_dump(mode="json") for candidate in candidates]):
         raise SmokeFailure("weight_leaked_into_candidate")
 

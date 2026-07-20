@@ -1,5 +1,7 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, TypedDict, Unpack
 
 import httpx
 import pytest
@@ -25,13 +27,23 @@ from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import SourceCatalog, VideoSource
 
 
+class SuccessfulPipelineOptions(TypedDict, total=False):
+    delete_upload: bool
+    evidence_types: tuple[EvidenceType, ...]
+    candidate_name: str
+    candidate_segment: tuple[float, float] | None
+    leave_temp_file: bool
+    fail_before_upload: bool
+    delete_file_id_override: str | None
+
+
 def write_smoke_manifest(tmp_path: Path, payload: dict[str, object]) -> Path:
     path = tmp_path / "smoke-annotations.json"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return path
 
 
-def valid_manifest() -> dict[str, object]:
+def valid_manifest() -> dict[str, Any]:
     return {
         "version": 1,
         "sources": [
@@ -69,16 +81,16 @@ def test_smoke_manifest_loads_versioned_sanitized_source_annotations(
     "mutate",
     [
         lambda payload: payload.update(version=2),
-        lambda payload: payload["sources"].append(payload["sources"][0]),  # type: ignore[union-attr]
-        lambda payload: payload["sources"][0].update(transcript="private"),  # type: ignore[index,union-attr]
+        lambda payload: payload["sources"].append(payload["sources"][0]),
+        lambda payload: payload["sources"][0].update(transcript="private"),
     ],
 )
 def test_smoke_manifest_rejects_unsupported_duplicate_or_content_fields(
     tmp_path: Path,
-    mutate: object,
+    mutate: Callable[[dict[str, Any]], None],
 ) -> None:
     payload = valid_manifest()
-    mutate(payload)  # type: ignore[operator]
+    mutate(payload)
 
     with pytest.raises(SmokeManifestError):
         load_smoke_manifest(write_smoke_manifest(tmp_path, payload))
@@ -117,6 +129,7 @@ def test_smoke_failure_payload_allows_only_sanitized_diagnostics() -> None:
             ],
             observations={
                 "ark_upload_count": 1,
+                "candidate_count": 2,
                 "candidate_name": "private candidate",
             },
         )
@@ -135,7 +148,7 @@ def test_smoke_failure_payload_allows_only_sanitized_diagnostics() -> None:
                 "provider_error_code": "redacted",
             }
         ],
-        "safe_observations": {"ark_upload_count": 1},
+        "safe_observations": {"ark_upload_count": 1, "candidate_count": 2},
     }
 
 
@@ -240,7 +253,7 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
     tmp_path: Path,
 ) -> None:
     annotations = valid_manifest()
-    annotations["sources"].append(  # type: ignore[union-attr]
+    annotations["sources"].append(
         {
             "source_id": "core-workout-02",
             "checkpoints": [
@@ -276,11 +289,12 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
         )
 
     def pipeline_builder(
-        _settings: Settings,
+        settings: Settings,
         http_client: httpx.AsyncClient,
         *,
         temp_root: Path | None = None,
     ) -> SuccessfulCloudPipeline:
+        del settings
         assert temp_root is not None
         return SuccessfulCloudPipeline(http_client, pipeline_calls)
 
@@ -316,7 +330,7 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
 
 async def run_single_source_fixture(
     tmp_path: Path,
-    **pipeline_options: object,
+    **pipeline_options: Unpack[SuccessfulPipelineOptions],
 ) -> dict[str, object]:
     annotation_path = write_smoke_manifest(tmp_path, valid_manifest())
     catalog = SourceCatalog(
@@ -331,11 +345,12 @@ async def run_single_source_fixture(
         return httpx.Response(200, json={"deleted": True})
 
     def pipeline_builder(
-        _settings: Settings,
+        settings: Settings,
         http_client: httpx.AsyncClient,
         *,
         temp_root: Path | None = None,
     ) -> SuccessfulCloudPipeline:
+        del settings
         return SuccessfulCloudPipeline(
             http_client,
             pipeline_calls,
@@ -379,7 +394,7 @@ async def run_single_source_fixture(
 )
 async def test_cloud_smoke_rejects_wrong_semantics_time_or_unfused_evidence(
     tmp_path: Path,
-    pipeline_options: dict[str, object],
+    pipeline_options: SuccessfulPipelineOptions,
     expected_code: str,
 ) -> None:
     with pytest.raises(SmokeFailure) as failure:
@@ -387,6 +402,32 @@ async def test_cloud_smoke_rejects_wrong_semantics_time_or_unfused_evidence(
 
     assert failure.value.code == expected_code
     assert failure.value.source_id == "arm-workout-01"
+    assert failure.value.observations["candidate_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_cloud_smoke_reports_only_safe_aggregate_mismatch_counts(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SmokeFailure) as semantic_failure:
+        await run_single_source_fixture(tmp_path, candidate_name="Unrelated Action")
+    with pytest.raises(SmokeFailure) as temporal_failure:
+        await run_single_source_fixture(tmp_path, candidate_segment=(1, 10))
+
+    assert semantic_failure.value.observations == {
+        "candidate_count": 1,
+        "semantic_match_count": 0,
+        "temporal_overlap_count": 1,
+        "semantic_temporal_match_count": 0,
+        "dual_evidence_count": 0,
+    }
+    assert temporal_failure.value.observations == {
+        "candidate_count": 1,
+        "semantic_match_count": 1,
+        "temporal_overlap_count": 0,
+        "semantic_temporal_match_count": 0,
+        "dual_evidence_count": 0,
+    }
 
 
 @pytest.mark.asyncio
@@ -400,7 +441,7 @@ async def test_cloud_smoke_rejects_wrong_semantics_time_or_unfused_evidence(
 )
 async def test_cloud_smoke_requires_provider_and_local_temp_cleanup(
     tmp_path: Path,
-    pipeline_options: dict[str, object],
+    pipeline_options: SuccessfulPipelineOptions,
     expected_code: str,
 ) -> None:
     with pytest.raises(SmokeFailure) as failure:
