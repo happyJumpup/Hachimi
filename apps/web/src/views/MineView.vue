@@ -42,6 +42,8 @@ const useQuickPlan = async (): Promise<void> => {
     const next = await library.useQuickExperience()
     draft.adoptPersistedPlan(next)
     await router.push('/plan')
+  } catch {
+    notice.value = '快速体验方案没有载入成功，请重试'
   } finally {
     draft.resumePersistence()
     pending.value = false
@@ -59,6 +61,26 @@ const openPlan = async (planId: string): Promise<void> => {
     await draft.quiescePersistence()
     draft.adoptPersistedPlan(await library.openPlan(planId))
     await router.push('/plan')
+  } catch {
+    notice.value = '这个方案没有打开成功，请重试'
+  } finally {
+    draft.resumePersistence()
+    pending.value = false
+  }
+}
+
+const deletePlan = async (planId: string, planName: string): Promise<void> => {
+  if (pending.value) return
+  if (!window.confirm(`删除“${planName}”？已有训练记录会保留。`)) return
+  pending.value = true
+  try {
+    if (draft.plan.linkedPlanId === planId) await draft.flushPersist()
+    await draft.quiescePersistence()
+    const nextDraft = await library.deletePlan(planId)
+    if (nextDraft) draft.adoptPersistedPlan(nextDraft)
+    notice.value = '方案已删除，训练记录仍然保留'
+  } catch {
+    notice.value = '这个方案没有删除成功，请重试'
   } finally {
     draft.resumePersistence()
     pending.value = false
@@ -68,13 +90,34 @@ const openPlan = async (planId: string): Promise<void> => {
 const saveProfile = async (
   profile: Omit<TrainingProfile, 'id' | 'updatedAt'>,
 ): Promise<void> => {
-  await library.saveProfile(profile)
-  notice.value = '训练档案已保存到本机'
+  try {
+    await library.saveProfile(profile)
+    notice.value = '训练档案已保存到本机'
+  } catch {
+    notice.value = '训练档案没有保存成功，请重试'
+  }
 }
 
 const clearProfile = async (): Promise<void> => {
-  await library.clearProfile()
-  notice.value = '训练档案已清除'
+  try {
+    await library.clearProfile()
+    notice.value = '训练档案已清除'
+  } catch {
+    notice.value = '训练档案没有清除成功，请重试'
+  }
+}
+
+const togglePet = async (): Promise<void> => {
+  if (pending.value || library.persistenceSuspended) return
+  pending.value = true
+  try {
+    await library.setPetVisible(!library.preferences.petVisible)
+    notice.value = library.preferences.petVisible ? '训练中将显示哈肌咪' : '训练中已隐藏哈肌咪'
+  } catch {
+    notice.value = '哈肌咪显示偏好没有保存成功，请重试'
+  } finally {
+    pending.value = false
+  }
 }
 
 const endCurrentTraining = async (): Promise<void> => {
@@ -109,7 +152,13 @@ const clearEverything = async (): Promise<void> => {
   }
 }
 
-onMounted(() => library.refreshHistory())
+onMounted(async () => {
+  try {
+    await library.refreshHistory()
+  } catch {
+    notice.value = '方案和记录暂时没有读取成功，请重试进入此页'
+  }
+})
 </script>
 
 <template>
@@ -167,10 +216,21 @@ onMounted(() => library.refreshHistory())
         <b>{{ library.plans.length }}</b>
       </div>
       <div v-if="library.plans.length" class="row-list">
-        <button v-for="plan in library.plans" :key="plan.id" type="button" @click="openPlan(plan.id)">
-          <span><strong>{{ plan.name }}</strong><small>{{ plan.items.length }} 个动作 · {{ formatDate(plan.updatedAt) }}</small></span>
-          <b>编辑 →</b>
-        </button>
+        <div v-for="plan in library.plans" :key="plan.id" class="plan-row">
+          <button type="button" class="plan-open" @click="openPlan(plan.id)">
+            <span><strong>{{ plan.name }}</strong><small>{{ plan.items.length }} 个动作 · {{ formatDate(plan.updatedAt) }}</small></span>
+            <b>编辑 →</b>
+          </button>
+          <button
+            type="button"
+            class="plan-delete"
+            :aria-label="`删除方案 ${plan.name}`"
+            :disabled="pending"
+            @click="deletePlan(plan.id, plan.name)"
+          >
+            删除
+          </button>
+        </div>
       </div>
       <p v-else class="section-empty">在方案页使用“另存为”，这里就会出现可复用方案。</p>
     </section>
@@ -203,7 +263,7 @@ onMounted(() => library.refreshHistory())
         type="button"
         :aria-pressed="library.preferences.petVisible"
         :disabled="pending || library.persistenceSuspended"
-        @click="library.setPetVisible(!library.preferences.petVisible)"
+        @click="togglePet"
       >
         {{ library.preferences.petVisible ? '已显示' : '已隐藏' }}
       </button>
@@ -221,31 +281,31 @@ onMounted(() => library.refreshHistory())
 .row-list button,
 .row-list a { display: flex; align-items: center; }
 .mine-header { justify-content: space-between; }
-.mine-header a { color: var(--ink); font-size: 11px; font-weight: 700; text-decoration: none; }
-.mine-header > span { color: var(--muted); font-size: 9px; }
+.mine-header a { display: inline-grid; min-height: 44px; place-items: center; color: var(--ink); font-size: 11px; font-weight: 700; text-decoration: none; }
+.mine-header > span { color: var(--muted); font-size: 11px; }
 .mine-hero { padding: 42px 0 24px; border-bottom: 1px solid var(--line); }
 .eyebrow,
 .section-heading span,
-.preference-row span { margin: 0; color: var(--cyan); font: 600 10px/1 var(--font-display); letter-spacing: .14em; }
+.preference-row span { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .14em; }
 .mine-hero h1 { margin: 8px 0 4px; font: 700 clamp(46px, 14vw, 72px)/.9 var(--font-display), var(--font-cn); }
 .mine-hero > p:last-child,
 .section-copy { margin: 0; color: var(--muted); font-size: 11px; }
 .notice { margin: 14px 0 0; padding: 10px; border-radius: 10px; color: var(--cyan); background: rgb(38 235 213 / 7%); font-size: 11px; }
 .quick-card { display: grid; gap: 12px; margin-top: 18px; padding: 18px; border: 1px solid rgb(255 111 97 / 35%); border-radius: 20px; background: linear-gradient(135deg, rgb(255 111 97 / 10%), rgb(38 235 213 / 4%)); }
-.quick-card span { color: var(--coral); font: 700 10px/1 var(--font-display); letter-spacing: .12em; }
+.quick-card span { color: var(--coral); font: 700 11px/1 var(--font-display); letter-spacing: .12em; }
 .quick-card h2 { margin: 5px 0; font: 700 30px/1 var(--font-display), var(--font-cn); }
 .quick-card p,
-.quick-card small { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.quick-card small { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
 .quick-card button { min-height: 46px; border: 0; border-radius: 12px; color: var(--bg); background: var(--coral); font-weight: 800; }
 .dashboard-grid { display: grid; gap: 10px; margin-top: 12px; }
 .dashboard-card { display: grid; gap: 5px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; color: var(--ink); background: var(--surface); text-decoration: none; }
 .dashboard-card span,
-.dashboard-card small { color: var(--muted); font-size: 9px; }
+.dashboard-card small { color: var(--muted); font-size: 11px; }
 .dashboard-card strong { font-size: 16px; }
 .active-session { border-color: rgb(38 235 213 / 35%); }
 .session-actions { display: flex; gap: 8px; margin-top: 8px; }
 .session-actions a,
-.session-actions button { display: grid; min-height: 44px; place-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 10px; font-weight: 700; text-decoration: none; }
+.session-actions button { display: grid; min-height: 44px; place-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 11px; font-weight: 700; text-decoration: none; }
 .session-actions a { color: var(--bg); border-color: var(--cyan); background: var(--cyan); }
 .session-actions button { color: var(--coral); background: transparent; }
 .session-actions button:disabled { opacity: .5; }
@@ -255,14 +315,18 @@ onMounted(() => library.refreshHistory())
 .preference-row h2 { margin: 4px 0 0; font-size: 18px; }
 .section-heading > b { color: var(--muted); font: 700 28px/1 var(--font-display); }
 .row-list { display: grid; margin-top: 12px; }
+.plan-row { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
 .row-list button,
 .row-list a { width: 100%; justify-content: space-between; gap: 12px; min-height: 58px; padding: 10px 0; border: 0; border-top: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; text-decoration: none; }
+.plan-row > button { border-top: 0; }
+.plan-row .plan-open { min-width: 0; flex: 1 1 auto; }
+.plan-row .plan-delete { width: auto; min-width: 44px; flex: 0 0 auto; padding-left: 12px; color: var(--coral); font-size: 11px; text-align: center; }
 .row-list span { min-width: 0; }
 .row-list strong,
 .row-list small { display: block; }
-.row-list small { margin-top: 4px; color: var(--muted); font-size: 9px; }
-.row-list b { color: var(--cyan); font-size: 10px; white-space: nowrap; }
-.section-empty { margin: 14px 0 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
+.row-list small { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.row-list b { color: var(--cyan); font-size: 11px; white-space: nowrap; }
+.section-empty { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .profile-section { display: grid; gap: 12px; }
 .preference-row { justify-content: space-between; }
 .preference-row button { min-width: 74px; min-height: 44px; border: 1px solid var(--line); border-radius: 999px; color: var(--cyan); background: var(--surface-raised); }

@@ -86,6 +86,38 @@ describe('视频动作分析页', () => {
     expect(loadSources).toHaveBeenCalledTimes(2)
   })
 
+  it('disables analysis and keeps plan navigation when source media cannot play', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const analysis = useAnalysisStore()
+    analysis.sources = [{
+      id: 'video-a',
+      title: '来源视频 A',
+      media_url: '/api/v1/sources/video-a/media',
+      duration_seconds: 60,
+      origin_url: null,
+    }]
+    vi.spyOn(analysis, 'loadSources').mockResolvedValue()
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: VideoAnalysisView },
+        { path: '/plan', component: { template: '<p>plan</p>' } },
+        { path: '/mine', component: { template: '<p>mine</p>' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(VideoAnalysisView, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+
+    await wrapper.get('video').trigger('error')
+
+    expect(wrapper.get('.stage-media-error[role="alert"]').text()).toContain('这个视频暂时无法播放')
+    expect(wrapper.find('.analyze-button').exists()).toBe(false)
+    expect(wrapper.get('.stage-media-error a[href="/plan"]').text()).toBe('去方案草稿')
+  })
+
   it('cancels an owned run on leave even after its visible state becomes failed', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -195,6 +227,48 @@ describe('视频动作分析页', () => {
     expect(analysis.candidates).toEqual([])
     expect(wrapper.find('.candidate-panel').exists()).toBe(false)
     expect(wrapper.get('.analyze-button').text()).toContain('添加动作')
+    expect(play).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores prior playback even when the remote cancel request fails', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const analysis = useAnalysisStore()
+    analysis.sources = [{
+      id: 'video-a',
+      title: '来源视频 A',
+      media_url: '/api/v1/sources/video-a/media',
+      duration_seconds: 60,
+      origin_url: null,
+    }]
+    vi.spyOn(analysis, 'loadSources').mockResolvedValue()
+    vi.spyOn(analysis, 'start').mockImplementation(async () => { analysis.status = 'running' })
+    vi.spyOn(analysis, 'cancel').mockImplementation(async () => {
+      analysis.status = 'cancelled'
+      throw new Error('delete request failed')
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: VideoAnalysisView },
+        { path: '/plan', component: { template: '<p>plan</p>' } },
+        { path: '/mine', component: { template: '<p>mine</p>' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(VideoAnalysisView, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+    const video = wrapper.get<HTMLVideoElement>('video').element
+    Object.defineProperty(video, 'paused', { configurable: true, value: false })
+    vi.spyOn(video, 'pause').mockImplementation(() => undefined)
+    const play = vi.spyOn(video, 'play').mockResolvedValue()
+
+    await wrapper.get('.analyze-button').trigger('click')
+    await flushPromises()
+    await wrapper.get('.cancel-button').trigger('click')
+    await flushPromises()
+
     expect(play).toHaveBeenCalledTimes(1)
   })
 

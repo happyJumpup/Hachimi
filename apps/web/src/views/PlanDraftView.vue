@@ -27,6 +27,9 @@ const saveAsName = ref('')
 const savingPlan = ref(false)
 const saveMessage = ref('')
 const operationError = ref<OperationError | null>(null)
+const planNameError = ref('')
+const quickPlanPending = ref(false)
+const quickPlanError = ref('')
 
 const totalSets = computed(() =>
   draft.items.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
@@ -100,6 +103,33 @@ const startTraining = async (): Promise<void> => {
   }
 }
 
+const updatePlanName = (event: Event): void => {
+  const input = event.target as HTMLInputElement
+  if (!input.value.trim()) {
+    input.value = draft.plan.name
+    planNameError.value = '方案名称不能为空'
+    return
+  }
+  draft.updatePlanName(input.value)
+  input.value = draft.plan.name
+  planNameError.value = ''
+}
+
+const useQuickPlan = async (): Promise<void> => {
+  if (quickPlanPending.value) return
+  quickPlanPending.value = true
+  quickPlanError.value = ''
+  try {
+    await draft.quiescePersistence()
+    draft.adoptPersistedPlan(await library.useQuickExperience())
+  } catch {
+    quickPlanError.value = '快速体验方案没有载入成功，请重试'
+  } finally {
+    draft.resumePersistence()
+    quickPlanPending.value = false
+  }
+}
+
 const beginSaveAs = (): void => {
   saveAsName.value = draft.plan.name === '未命名方案' ? '' : `${draft.plan.name}（副本）`
   showSaveAs.value = true
@@ -150,9 +180,11 @@ const retryOperation = async (): Promise<void> => {
             class="plan-title-input"
             :value="draft.plan.name"
             aria-label="方案名称"
-            @change="draft.updatePlanName(($event.target as HTMLInputElement).value)"
+            :aria-invalid="planNameError ? true : undefined"
+            @change="updatePlanName"
           />
         </h1>
+        <p v-if="planNameError" class="plan-name-error" role="alert">{{ planNameError }}</p>
         <p>来自不同视频的动作，在这里排成一次训练。</p>
       </div>
       <div class="plan-metrics">
@@ -296,6 +328,11 @@ const retryOperation = async (): Promise<void> => {
       <span>00</span>
       <h2>草稿还是空的</h2>
       <p>可以继续找动作，也可以直接创建一个没有参考视频的自建动作。</p>
+      <button type="button" :disabled="quickPlanPending" @click="useQuickPlan">
+        {{ quickPlanPending ? '正在载入…' : '使用快速体验方案' }}
+      </button>
+      <small>这是产品示例，不是 AI 分析结果。</small>
+      <p v-if="quickPlanError" class="empty-plan-error" role="alert">{{ quickPlanError }}</p>
     </section>
 
     <section class="manual-section">
@@ -323,7 +360,7 @@ const retryOperation = async (): Promise<void> => {
       </form>
     </section>
 
-    <section v-if="draft.items.length" class="start-training-panel">
+    <section v-if="draft.items.length || training.hasCurrent" class="start-training-panel">
       <div>
         <strong>{{ training.hasCurrent ? '已有未完成训练' : '方案结构会在开始前检查' }}</strong>
         <small>{{ training.hasCurrent ? '继续当前进度，不会覆盖原场次' : '不评价动作顺序或训练效果' }}</small>
@@ -420,7 +457,7 @@ const retryOperation = async (): Promise<void> => {
 
 .plan-header { justify-content: space-between; margin-bottom: 34px; }
 .back-link { display: inline-grid; min-height: 44px; place-items: center; color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; }
-.save-state { gap: 6px; margin-top: 12px; color: var(--muted); font-size: 10px; }
+.save-state { gap: 6px; margin-top: 12px; color: var(--muted); font-size: 11px; }
 .save-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
 .save-state small { color: inherit; font-size: inherit; }
 .save-state.failed { color: var(--coral); }
@@ -430,14 +467,15 @@ const retryOperation = async (): Promise<void> => {
 .plan-hero { align-items: end; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
 .eyebrow { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .15em; }
 .plan-title-heading { margin: 8px 0 4px; }
-.plan-title-input { display: block; width: min(100%, 520px); margin: 0; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 clamp(38px, 10vw, 64px)/.95 var(--font-display), var(--font-cn); letter-spacing: -.025em; }
-.plan-title-input:focus { outline: 0; text-decoration: underline; text-decoration-color: rgb(38 235 213 / 28%); text-underline-offset: 6px; }
+.plan-title-input { display: block; width: min(100%, 520px); min-height: 44px; margin: 0; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 clamp(38px, 10vw, 64px)/.95 var(--font-display), var(--font-cn); letter-spacing: -.025em; }
+.plan-title-input:focus { text-decoration: underline; text-decoration-color: rgb(38 235 213 / 28%); text-underline-offset: 6px; }
+.plan-name-error { margin: 7px 0 0; color: var(--coral); font-size: 11px; }
 .plan-hero p { margin: 0; color: var(--muted); font-size: 12px; }
 .plan-metrics { gap: 16px; flex-shrink: 0; }
-.plan-metrics span { color: var(--muted); font-size: 10px; text-align: right; }
+.plan-metrics span { color: var(--muted); font-size: 11px; text-align: right; }
 .plan-metrics b { display: block; color: var(--ink); font: 700 30px/1 var(--font-display); }
 .quick-notice,
-.save-message { margin: 12px 0 0; padding: 9px 11px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 6%); font-size: 10px; }
+.save-message { margin: 12px 0 0; padding: 9px 11px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 6%); font-size: 11px; }
 .save-message { border-left-color: var(--cyan); color: var(--cyan); background: rgb(38 235 213 / 5%); }
 
 .plan-list { display: grid; gap: 14px; margin-top: 20px; }
@@ -453,29 +491,29 @@ const retryOperation = async (): Promise<void> => {
 
 .card-content { min-width: 0; padding: 16px; }
 .source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.source-label { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
-.original-video-link { display: inline-grid; min-width: 44px; min-height: 44px; flex: 0 0 auto; place-items: center; color: var(--cyan); font-size: 10px; font-weight: 700; text-decoration: none; }
-.plan-name { width: 100%; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 28px/1.1 var(--font-display), var(--font-cn); }
+.source-label { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
+.original-video-link { display: inline-grid; min-width: 44px; min-height: 44px; flex: 0 0 auto; place-items: center; color: var(--cyan); font-size: 11px; font-weight: 700; text-decoration: none; }
+.plan-name { width: 100%; min-height: 44px; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 28px/1.1 var(--font-display), var(--font-cn); }
 .mode-toggle { display: inline-flex; gap: 4px; margin: 14px 0; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
 .mode-toggle button { min-width: 44px; min-height: 44px; padding: 7px 12px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; }
 .mode-toggle button.active { color: var(--bg); background: var(--cyan); font-weight: 800; }
 
 .parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .parameter-grid label { display: grid; gap: 5px; }
-.parameter-grid label > span { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
+.parameter-grid label > span { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
 .parameter-grid em,
-.segment-line em { color: var(--cyan); font-size: 9px; font-style: normal; }
+.segment-line em { color: var(--cyan); font-size: 11px; font-style: normal; }
 .parameter-grid input { width: 100%; min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); font: 600 18px/1 var(--font-display); }
-.parameter-grid input:focus { border-color: var(--cyan); outline: none; box-shadow: 0 0 0 3px rgb(38 235 213 / 8%); }
+.parameter-grid input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgb(38 235 213 / 8%); }
 
-.segment-line { gap: 8px; margin-top: 12px; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 5%); font-size: 10px; }
+.segment-line { gap: 8px; margin-top: 12px; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 5%); font-size: 11px; }
 .segment-line b { margin-left: auto; color: var(--ink); font: 600 14px/1 var(--font-display); }
 .card-actions { justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.card-actions button { min-width: 44px; min-height: 44px; padding: 6px 9px; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
+.card-actions button { min-width: 44px; min-height: 44px; padding: 6px 9px; border: 0; color: var(--muted); background: transparent; font-size: 11px; }
 .card-actions .danger { color: var(--coral); }
 .card-validation { margin-top: 10px; padding: 10px 12px; border-left: 2px solid var(--coral); color: var(--coral); background: rgb(255 111 97 / 6%); }
 .card-validation strong { font-size: 11px; }
-.card-validation p { margin: 4px 0 0; font-size: 10px; }
+.card-validation p { margin: 4px 0 0; font-size: 11px; }
 
 .manual-section { margin-top: 16px; }
 .manual-trigger { width: 100%; gap: 13px; padding: 15px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--ink); background: transparent; text-align: left; }
@@ -496,6 +534,9 @@ const retryOperation = async (): Promise<void> => {
 .empty-plan > span { color: var(--coral); font: 700 24px/1 var(--font-display); }
 .empty-plan h2 { margin: 8px 0; }
 .empty-plan p { max-width: 320px; margin: auto; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.empty-plan button { min-height: 46px; margin-top: 18px; padding: 0 18px; border: 0; border-radius: 12px; color: var(--bg); background: var(--coral); font-weight: 800; }
+.empty-plan small { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; }
+.empty-plan .empty-plan-error { margin-top: 10px; color: var(--coral); }
 
 .start-training-panel {
   position: sticky;
@@ -516,7 +557,7 @@ const retryOperation = async (): Promise<void> => {
 .start-training-panel strong,
 .start-training-panel small { display: block; }
 .start-training-panel strong { font-size: 12px; }
-.start-training-panel small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.start-training-panel small { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .start-training-panel .training-safety-tip { margin-top: 6px; color: var(--ink); }
 .start-training-panel button,
 .start-training-panel a {
@@ -535,7 +576,7 @@ const retryOperation = async (): Promise<void> => {
 .save-as-panel { display: grid; gap: 10px; margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgb(255 255 255 / 2%); }
 .save-as-panel > button { justify-self: start; min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); background: transparent; font-weight: 700; }
 .save-as-panel form { display: grid; gap: 10px; }
-.save-as-panel form label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
+.save-as-panel form label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .save-as-panel form input { min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); }
 .save-as-panel form div { display: flex; justify-content: flex-end; gap: 8px; }
 .save-as-panel form button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }

@@ -6,6 +6,17 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await expect(sourceSelect).toHaveValue('legacy-arm-workout')
   await expect(sourceSelect.locator('option:checked')).toContainText('哈基米手臂训练')
 
+  for (const target of [
+    sourceSelect,
+    page.getByRole('link', { name: '我的训练' }),
+    page.getByRole('link', { name: /方案草稿/ }),
+  ]) {
+    const box = await target.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.width).toBeGreaterThanOrEqual(44)
+    expect(box!.height).toBeGreaterThanOrEqual(44)
+  }
+
   await page.locator('video').evaluate((video: HTMLVideoElement) => {
     video.currentTime = 2
   })

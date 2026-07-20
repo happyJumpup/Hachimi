@@ -12,6 +12,7 @@ interface EditableCandidate extends Omit<AnalysisCandidate, 'segment'> {
 const props = defineProps<{
   candidates: AnalysisCandidate[]
   warnings: AnalysisWarning[]
+  maxSegmentEnd?: number
   submitting?: boolean
   submissionError?: string
 }>()
@@ -71,6 +72,10 @@ const invalidSegment = computed(() =>
       || !Number.isFinite(candidate.segment.end_seconds)
       || candidate.segment.start_seconds < 0
       || candidate.segment.end_seconds <= candidate.segment.start_seconds
+      || (
+        props.maxSegmentEnd !== undefined
+        && candidate.segment.end_seconds > props.maxSegmentEnd
+      )
     ),
   ),
 )
@@ -219,7 +224,7 @@ const submit = (): void => {
       <p v-else-if="needsMode">先为选中的动作选择训练方式</p>
       <p v-else-if="invalidName">动作名称不能为空</p>
       <p v-else-if="missingSegment">这个候选缺少可预览片段，请重新分析</p>
-      <p v-else-if="invalidSegment">请填写有效时间，且结束时间晚于开始时间</p>
+      <p v-else-if="invalidSegment">请填写有效时间，结束时间需晚于开始且不超过视频长度</p>
       <p v-else>参数缺失时会使用可修改的规则默认值</p>
       <button type="button" class="primary-action" :disabled="!canAdd" @click="submit">
         {{ props.submitting ? '正在加入草稿…' : `加入草稿 · ${selected.length}` }}
@@ -414,7 +419,7 @@ const submit = (): void => {
 
 .play-mark {
   margin-right: 5px;
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .mode-picker {

@@ -48,10 +48,10 @@ test('quick plan completes through save-as, rest recovery, Pet, record, and post
 
   await page.getByRole('link', { name: '返回方案' }).click()
   await page.getByRole('link', { name: '我的训练' }).click()
-  await expect(page.getByRole('link', { name: /休息中|休息结束/ })).toBeVisible()
+  await expect(page.getByRole('link', { name: '继续训练', exact: true })).toBeVisible()
   await page.reload()
   await page.waitForTimeout(3_100)
-  await page.getByRole('link', { name: /休息结束|准备继续训练/ }).click()
+  await page.getByRole('link', { name: '继续训练', exact: true }).click()
 
   await expect(page.getByText('准备继续', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '准备继续' }).click()
@@ -91,4 +91,8 @@ test('Pet asset failure does not block early ending and no completion poster is 
   await expect(page.getByText('提前结束只保留实际记录，不生成完成海报。')).toBeVisible()
   await expect(page.getByRole('button', { name: '分享海报' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '下载海报' })).toHaveCount(0)
+
+  await page.getByRole('button', { name: '再练一次' }).click()
+  await expect(page).toHaveURL(/\/plan$/)
+  await expect(page.locator('.plan-card')).toHaveCount(3)
 })

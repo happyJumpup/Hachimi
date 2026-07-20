@@ -12,7 +12,7 @@
 4. 哈肌咪以五种状态陪练，可随时隐藏；训练档案只在本机用于卡路里约值。
 5. 完整或提前结束的实际完成量进入训练记录；完整训练可生成 1080×1920 PNG 海报并分享或下载。
 
-普通访客可使用明确标注的“快速体验方案”。它是静态产品样例，不是 AI 结果或运行时 Mock 回退。评委体验码只提升真实分析访问级别，并通过安全 Cookie 保存。
+普通访客可使用明确标注的“快速体验方案”。它是静态产品样例，不是 AI 结果或运行时 Mock 回退。评委体验码只用于验证，验证后的访问级别通过安全 Cookie 保存。
 
 主要页面：`/` 视频分析、`/plan` 方案编辑、`/mine` 我的训练、`/training` 训练执行、`/result/:recordId` 结果与海报。
 
@@ -49,7 +49,7 @@ pnpm api:generate
 
 ## 文档
 
-- [项目进展与下一步（团队同步版）](docs/team/project-status-and-next-steps.md)
+- [当前竞赛版进展、发布缺口与下一步（团队同步版）](docs/team/project-status-and-next-steps.md)
 - [领域词汇表](CONTEXT.md)
 - [首个动作分析纵切片技术设计与开发准入](docs/technical/action-analysis-vertical-slice.md)
 - [竞赛版产品规格](docs/specs/competition-web-mvp.md)

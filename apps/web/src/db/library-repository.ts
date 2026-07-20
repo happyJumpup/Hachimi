@@ -18,6 +18,7 @@ export interface LibraryRepository {
   savePreferences(preferences: Omit<Preferences, 'id' | 'updatedAt'>): Promise<Preferences>
   saveCurrentDraftAs(name: string): Promise<{ plan: SavedPlan; draft: DraftPlan }>
   openPlan(planId: string): Promise<DraftPlan>
+  deletePlan(planId: string): Promise<DraftPlan | null>
   replaceCurrentDraft(input: { name: string; items: DraftItem[] }): Promise<DraftPlan>
   clearAllLocalData(): Promise<void>
 }
@@ -117,6 +118,22 @@ export const createDexieLibraryRepository = (
       }
       await db.drafts.put(draft)
       return draft
+    })
+  },
+
+  async deletePlan(planId) {
+    writeFence.assertWritable()
+    return db.transaction('rw', db.drafts, db.plans, async () => {
+      await db.plans.delete(planId)
+      const current = await db.drafts.get('current')
+      if (!current || current.linkedPlanId !== planId) return null
+      const nextDraft: DraftPlan = {
+        ...structuredClone(current),
+        linkedPlanId: null,
+        updatedAt: now().toISOString(),
+      }
+      await db.drafts.put(nextDraft)
+      return nextDraft
     })
   },
 

@@ -68,7 +68,9 @@ class MemoryLibraryRepository implements LibraryRepository {
   plans: SavedPlan[] = []
   records: TrainingRecord[] = []
   openCalls: string[] = []
+  deleteCalls: string[] = []
   clearCalls = 0
+  failPreferences = false
 
   async listPlans() { return structuredClone(this.plans) }
   async listRecords() { return structuredClone(this.records) }
@@ -78,6 +80,7 @@ class MemoryLibraryRepository implements LibraryRepository {
     return { ...profile, id: 'current' as const, updatedAt: new Date(0).toISOString() }
   }
   async savePreferences(preferences: Omit<Preferences, 'id' | 'updatedAt'>) {
+    if (this.failPreferences) throw new Error('indexeddb write failed')
     return { ...preferences, id: 'current' as const, updatedAt: new Date(0).toISOString() }
   }
   async saveCurrentDraftAs(): Promise<never> { throw new Error('not used') }
@@ -91,6 +94,16 @@ class MemoryLibraryRepository implements LibraryRepository {
       linkedPlanId: plan.id,
       items: structuredClone(plan.items),
       updatedAt: new Date(0).toISOString(),
+    }
+  }
+  async deletePlan(planId: string): Promise<DraftPlan | null> {
+    this.deleteCalls.push(planId)
+    this.plans = this.plans.filter((plan) => plan.id !== planId)
+    const current = useDraftStore().plan
+    if (current.linkedPlanId !== planId) return null
+    return {
+      ...(JSON.parse(JSON.stringify(current)) as DraftPlan),
+      linkedPlanId: null,
     }
   }
   async replaceCurrentDraft(): Promise<never> { throw new Error('not used') }
@@ -252,6 +265,26 @@ describe('我的训练', () => {
     expect(router.currentRoute.value.path).toBe('/plan')
   })
 
+  it('does not replace a non-empty draft with quick experience when confirmation is cancelled', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const draft = useDraftStore()
+    await draft.load({ load: async () => undefined, save: async () => undefined })
+    draft.addManualAction({ name: '当前草稿动作', mode: 'reps' })
+    const repository = new MemoryLibraryRepository()
+    await useLibraryStore().load(repository)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { router, wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    await wrapper.get('.quick-card button').trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith('使用快速体验方案会替换当前草稿，确定继续吗？')
+    expect(draft.items[0]?.name).toBe('当前草稿动作')
+    expect(router.currentRoute.value.path).toBe('/mine')
+  })
+
   it('waits for an in-flight draft save before replacing the current draft', async () => {
     vi.useFakeTimers()
     const pinia = createPinia()
@@ -284,6 +317,83 @@ describe('我的训练', () => {
 
     expect(repository.openCalls).toEqual(['plan-a'])
     expect(draft.plan.linkedPlanId).toBe('plan-a')
+  })
+
+  it('deletes a linked saved plan without deleting the current draft contents', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const draft = useDraftStore()
+    await draft.load({ load: async () => undefined, save: async () => undefined })
+    const items = createQuickExperienceDraftItems()
+    draft.adoptPersistedPlan({
+      id: 'current',
+      name: '已存方案',
+      linkedPlanId: 'plan-a',
+      items,
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    })
+    const repository = new MemoryLibraryRepository()
+    repository.plans = [{
+      id: 'plan-a',
+      name: '已存方案',
+      items,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    }]
+    await useLibraryStore().load(repository)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    await wrapper.get('button[aria-label="删除方案 已存方案"]').trigger('click')
+    await flushPromises()
+
+    expect(repository.deleteCalls).toEqual(['plan-a'])
+    expect(useLibraryStore().plans).toEqual([])
+    expect(draft.plan.linkedPlanId).toBeNull()
+    expect(draft.items).toHaveLength(items.length)
+    expect(wrapper.get('.notice').text()).toContain('训练记录仍然保留')
+  })
+
+  it('persists pending linked-draft edits before deleting the saved plan', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const draftRepository = new DeferredDraftRepository()
+    const draft = useDraftStore()
+    await draft.load(draftRepository)
+    const items = createQuickExperienceDraftItems()
+    draft.adoptPersistedPlan({
+      id: 'current',
+      name: '已存方案',
+      linkedPlanId: 'plan-a',
+      items,
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    })
+    draft.updateName(items[0]!.id, '刚刚修改的动作')
+    const repository = new MemoryLibraryRepository()
+    repository.plans = [{
+      id: 'plan-a',
+      name: '已存方案',
+      items,
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    }]
+    await useLibraryStore().load(repository)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    const deletion = wrapper.get('button[aria-label="删除方案 已存方案"]').trigger('click')
+    await draftRepository.started
+
+    expect(repository.deleteCalls).toEqual([])
+    draftRepository.releaseSave()
+    await deletion
+    await flushPromises()
+
+    expect(repository.deleteCalls).toEqual(['plan-a'])
+    expect(draft.plan.linkedPlanId).toBeNull()
+    expect(draft.items[0]?.name).toBe('刚刚修改的动作')
   })
 
   it('waits for draft persistence to quiesce before clearing all local data', async () => {
@@ -328,5 +438,21 @@ describe('我的训练', () => {
     expect(libraryRepository.clearCalls).toBe(0)
     expect(wrapper.get('.notice').text()).toContain('数据没有清除')
     expect(wrapper.get('.notice').text()).not.toBe('本机训练数据已清除')
+  })
+
+  it('shows a safe notice when the Pet preference cannot be saved', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new MemoryLibraryRepository()
+    await useLibraryStore().load(repository)
+    repository.failPreferences = true
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    await wrapper.get('.preference-row button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.notice').text()).toContain('显示偏好没有保存成功')
+    expect(wrapper.text()).not.toContain('indexeddb write failed')
   })
 })

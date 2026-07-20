@@ -125,6 +125,21 @@ describe('CandidateReviewPanel', () => {
     await wrapper.get('.segment-editor input').setValue('')
 
     expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
-    expect(wrapper.text()).toContain('请填写有效时间，且结束时间晚于开始时间')
+    expect(wrapper.text()).toContain('请填写有效时间，结束时间需晚于开始且不超过视频长度')
+  })
+
+  it('does not accept an edited segment beyond the source duration', async () => {
+    const wrapper = mount(CandidateReviewPanel, {
+      props: {
+        candidates: [{ ...candidates[1], parameters: { ...candidates[1].parameters } }],
+        warnings: [],
+        maxSegmentEnd: 60,
+      },
+    })
+
+    await wrapper.findAll('.segment-editor input')[1]!.setValue(61)
+
+    expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('不超过视频长度')
   })
 })

@@ -22,7 +22,7 @@ const submit = async (): Promise<void> => {
       <p>
         <strong>{{ access.message }}</strong>
         <small v-if="access.tier === 'public'">评委可输入共享体验码使用预留通道</small>
-        <small v-else>体验码只保存在安全 Cookie 中</small>
+        <small v-else>验证状态仅保存在安全 Cookie 中</small>
       </p>
       <button
         v-if="access.tier === 'public'"
@@ -66,16 +66,16 @@ const submit = async (): Promise<void> => {
 .access-summary p { min-width: 0; flex: 1; margin: 0; }
 .access-summary strong,
 .access-summary small { display: block; }
-.access-summary strong { font-size: 10px; }
-.access-summary small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.access-summary strong { font-size: 11px; }
+.access-summary small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .access-summary button,
-.access-fallback button { min-height: 44px; padding: 0 7px; border: 0; color: var(--cyan); background: transparent; font-size: 9px; }
+.access-fallback button { min-width: 44px; min-height: 44px; padding: 0 7px; border: 0; color: var(--cyan); background: transparent; font-size: 11px; }
 .access-status form { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-.access-status form label { display: grid; gap: 4px; color: var(--muted); font-size: 8px; }
+.access-status form label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
 .access-status form input { min-width: 0; min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface-raised); }
-.access-status form > button { min-height: 44px; align-self: end; padding: 0 11px; border: 0; border-radius: 9px; color: var(--bg); background: var(--cyan); font-size: 9px; font-weight: 800; }
+.access-status form > button { min-height: 44px; align-self: end; padding: 0 11px; border: 0; border-radius: 9px; color: var(--bg); background: var(--cyan); font-size: 11px; font-weight: 800; }
 .access-status form > button:disabled { opacity: .5; }
 .access-fallback { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; border-top: 1px solid var(--line); }
-.access-fallback a { color: var(--coral); font-size: 9px; font-weight: 700; text-decoration: none; }
-.access-error { margin: 6px 0 0; color: var(--coral); font-size: 9px; }
+.access-fallback a { display: inline-grid; min-height: 44px; place-items: center; color: var(--coral); font-size: 11px; font-weight: 700; text-decoration: none; }
+.access-error { margin: 6px 0 0; color: var(--coral); font-size: 11px; }
 </style>

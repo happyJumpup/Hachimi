@@ -14,6 +14,8 @@ import {
   createQuickExperienceDraftItems,
 } from '@/features/quick-experience/fixture'
 
+const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+
 const emptyProfile = (): TrainingProfile => ({
   id: 'current',
   sex: null,
@@ -37,6 +39,7 @@ export const useLibraryStore = defineStore('library', () => {
   const loaded = ref(false)
   const persistenceSuspended = ref(false)
   let repository: LibraryRepository | null = null
+  let plansRevision = 0
   const operations = new Set<Promise<unknown>>()
 
   const requireRepository = (): LibraryRepository => {
@@ -74,29 +77,34 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function reload(): Promise<void> {
     const currentRepository = requireRepository()
+    const expectedPlansRevision = plansRevision
     const [savedPlans, savedRecords, savedProfile, savedPreferences] = await Promise.all([
       currentRepository.listPlans(),
       currentRepository.listRecords(),
       currentRepository.loadProfile(),
       currentRepository.loadPreferences(),
     ])
-    plans.value = savedPlans
+    if (plansRevision === expectedPlansRevision) plans.value = savedPlans
     records.value = savedRecords
     profile.value = savedProfile ?? emptyProfile()
     preferences.value = savedPreferences ?? defaultPreferences()
   }
 
   async function refreshHistory(): Promise<void> {
+    const expectedPlansRevision = plansRevision
     await runOperation(async () => {
       const currentRepository = requireRepository()
-      ;[plans.value, records.value] = await Promise.all([
+      const [savedPlans, savedRecords] = await Promise.all([
         currentRepository.listPlans(),
         currentRepository.listRecords(),
       ])
+      if (plansRevision === expectedPlansRevision) plans.value = savedPlans
+      records.value = savedRecords
     })
   }
 
   async function saveCurrentDraftAs(name: string): Promise<DraftPlan> {
+    plansRevision += 1
     return runOperation(async () => {
       const result = await requireRepository().saveCurrentDraftAs(name)
       plans.value = [result.plan, ...plans.value.filter((plan) => plan.id !== result.plan.id)]
@@ -108,11 +116,24 @@ export const useLibraryStore = defineStore('library', () => {
     return runOperation(() => requireRepository().openPlan(planId))
   }
 
+  async function deletePlan(planId: string): Promise<DraftPlan | null> {
+    plansRevision += 1
+    return runOperation(async () => {
+      const nextDraft = await requireRepository().deletePlan(planId)
+      plans.value = plans.value.filter((plan) => plan.id !== planId)
+      return nextDraft
+    })
+  }
+
   async function useQuickExperience(): Promise<DraftPlan> {
     return runOperation(() => requireRepository().replaceCurrentDraft({
       name: QUICK_EXPERIENCE_PLAN_NAME,
       items: createQuickExperienceDraftItems(),
     }))
+  }
+
+  async function replaceCurrentDraft(input: Pick<DraftPlan, 'name' | 'items'>): Promise<DraftPlan> {
+    return runOperation(() => requireRepository().replaceCurrentDraft(cloneJson(input)))
   }
 
   async function saveProfile(
@@ -148,6 +169,7 @@ export const useLibraryStore = defineStore('library', () => {
   }
 
   function resetLocalState(keepSuspended = false): void {
+    plansRevision += 1
     plans.value = []
     records.value = []
     profile.value = emptyProfile()
@@ -167,7 +189,9 @@ export const useLibraryStore = defineStore('library', () => {
     refreshHistory,
     saveCurrentDraftAs,
     openPlan,
+    deletePlan,
     useQuickExperience,
+    replaceCurrentDraft,
     saveProfile,
     clearProfile,
     setPetVisible,

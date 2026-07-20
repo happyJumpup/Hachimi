@@ -94,6 +94,11 @@ def build_catalog(settings: Settings) -> SourceCatalog:
             )
         except SourceManifestError:
             return EmptySourceCatalog()
+    if settings.app_env == "production":
+        # Production media is allowlisted only by the versioned manifest. A legacy
+        # developer path must never become public when deployment configuration is
+        # missing or incomplete.
+        return EmptySourceCatalog()
     path = settings.hakimi_demo_video_path
     if path is None:
         return EmptySourceCatalog()

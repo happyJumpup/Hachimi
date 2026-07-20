@@ -191,6 +191,22 @@ describe('动作分析 store', () => {
     expect(store.error?.message).toBe('真实动作分析名额正在使用中')
   })
 
+  it('does not expose technical details when creating an analysis run fails', async () => {
+    const client = new FakeClient()
+    const events = new FakeEventFactory()
+    const store = useAnalysisStore()
+    client.createRun = async () => {
+      throw new Error('Failed to fetch C:\\private\\media\\video.mp4')
+    }
+
+    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+
+    expect(store.status).toBe('failed')
+    expect(store.failureKind).toBe('system')
+    expect(store.error?.message).toBe('动作分析暂时不可用，请重试')
+    expect(store.error?.message).not.toContain('private')
+  })
+
   it('closes a failed result stream instead of leaving analysis active in the background', async () => {
     const client = new FakeClient()
     const events = new FakeEventFactory()

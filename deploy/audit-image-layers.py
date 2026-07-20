@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tarfile
@@ -28,6 +29,24 @@ MEDIA_SUFFIXES = {
     ".trace",
     ".wav",
     ".webm",
+}
+VISUAL_MEDIA_SUFFIXES = {
+    ".bmp",
+    ".gif",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
+SUBTITLE_SUFFIXES = {".ass", ".srt", ".ssa", ".vtt"}
+REGISTERED_VISUAL_SHA256 = {
+    "5518f49229cc0331bfdf9c5351e6a7806bf97cac6c882b2d5dc40e620f85561c",
+    "bdab0d00707684a80f44f31fc09f0325ac0b608060ca746b63e15e6d940b44ab",
+    "730f5c6b4b2b91d11ea23085eac3739a4d22841014d7c21752b207b63ff4db30",
+    "d775c21bc2df5bd2156638247066f7f836b9b800c9d8f3044f595a81f906f91c",
+    "74ffadcabdb1124680efcb0dbf2d4b2c2f5c5a88b79a6d811cf108a8552a92a9",
 }
 FORBIDDEN_PREFIXES = tuple(
     PurePosixPath(value)
@@ -66,7 +85,7 @@ def _whiteout_target(path: PurePosixPath) -> PurePosixPath | None:
     return path.parent / path.name.removeprefix(".wh.")
 
 
-def _violation(path: PurePosixPath) -> str | None:
+def _violation(path: PurePosixPath, *, content_sha256: str | None = None) -> str | None:
     lowered = str(path).lower()
     basename = path.name.lower()
 
@@ -82,6 +101,14 @@ def _violation(path: PurePosixPath) -> str | None:
         return "environment file"
     if path.suffix.lower() in MEDIA_SUFFIXES:
         return "raw media or trace"
+    if path.suffix.lower() in SUBTITLE_SUFFIXES:
+        return "subtitle or transcript artifact"
+    if any(token in basename for token in ("transcript", "transcription", "subtitle")):
+        return "transcript artifact"
+    if path.suffix.lower() in VISUAL_MEDIA_SUFFIXES:
+        if content_sha256 in REGISTERED_VISUAL_SHA256:
+            return None
+        return "raw frame or unregistered visual asset"
     if path.suffix.lower() == ".map" and _is_under(path, WEB_DIST):
         return "frontend source map"
     if any(_is_under(path, prefix) for prefix in FORBIDDEN_PREFIXES):
@@ -114,11 +141,23 @@ def _audit_layer(archive: tarfile.TarFile, layer_name: str) -> None:
     with tarfile.open(fileobj=extracted, mode="r|*") as layer:
         for member in layer:
             path = _normalize(member.name)
+            content_sha256 = None
+            if member.isfile() and path.suffix.lower() in VISUAL_MEDIA_SUFFIXES:
+                extracted_member = layer.extractfile(member)
+                if extracted_member is None:
+                    raise ImageAuditError(f"could not read visual asset: {path}")
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: extracted_member.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                content_sha256 = digest.hexdigest()
             candidates = (path, _whiteout_target(path))
             for candidate in candidates:
                 if candidate is None:
                     continue
-                reason = _violation(candidate)
+                reason = _violation(
+                    candidate,
+                    content_sha256=content_sha256 if candidate == path else None,
+                )
                 if reason is not None:
                     raise ImageAuditError(f"{reason} found in image layer: {candidate}")
 

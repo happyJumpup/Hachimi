@@ -5,6 +5,8 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 
 import type { LibraryRepository } from '@/db/library-repository'
 import type { DraftPlan, DraftRepository } from '@/domain/types'
+import type { TrainingSession } from '@/domain/training'
+import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
@@ -34,7 +36,28 @@ const failingSaveAsRepository = (): LibraryRepository => ({
   savePreferences: async () => { throw new Error('not used') },
   saveCurrentDraftAs: async () => { throw new Error('indexeddb transaction failed') },
   openPlan: async () => { throw new Error('not used') },
+  deletePlan: async () => { throw new Error('not used') },
   replaceCurrentDraft: async () => { throw new Error('not used') },
+  clearAllLocalData: async () => undefined,
+})
+
+const quickPlanRepository = (): LibraryRepository => ({
+  listPlans: async () => [],
+  listRecords: async () => [],
+  loadProfile: async () => null,
+  loadPreferences: async () => null,
+  saveProfile: async () => { throw new Error('not used') },
+  savePreferences: async () => { throw new Error('not used') },
+  saveCurrentDraftAs: async () => { throw new Error('not used') },
+  openPlan: async () => { throw new Error('not used') },
+  deletePlan: async () => { throw new Error('not used') },
+  replaceCurrentDraft: async ({ name, items }) => ({
+    id: 'current',
+    name,
+    linkedPlanId: null,
+    items: structuredClone(items),
+    updatedAt: '2026-07-21T00:00:00.000Z',
+  }),
   clearAllLocalData: async () => undefined,
 })
 
@@ -75,6 +98,37 @@ class InvalidPlanEngine implements TrainingEngine {
   }
 }
 
+class ExistingSessionEngine implements TrainingEngine {
+  async restore(): Promise<TrainingEngineResult> {
+    const item = createQuickExperienceDraftItems()[0]!
+    const session: TrainingSession = {
+      id: 'current',
+      sessionId: 'session-1',
+      revision: 1,
+      status: 'paused',
+      pauseReason: 'recovered',
+      plan: { name: '未完成训练', source: 'draft', sourcePlanId: null, items: [item] },
+      currentItemIndex: 0,
+      currentSetIndex: 0,
+      currentSetActiveMilliseconds: 0,
+      activeStartedAt: null,
+      restStartedAt: null,
+      restEndsAt: null,
+      scheduledRestSeconds: null,
+      creditedRestMilliseconds: 0,
+      progress: [{ itemId: item.id, completedSets: 0, activeMilliseconds: 0, skipped: false }],
+      petId: 'hachimi',
+      startedAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:01:00.000Z',
+    }
+    return { ok: true, session, record: null, events: [] }
+  }
+
+  async dispatch(_command: TrainingCommand): Promise<TrainingEngineResult> {
+    throw new Error('not used')
+  }
+}
+
 describe('方案草稿保存状态', () => {
   afterEach(() => vi.useRealTimers())
 
@@ -105,6 +159,76 @@ describe('方案草稿保存状态', () => {
 
     expect(wrapper.text()).toContain('已自动保存到本机')
     expect(repository.value?.items[0]?.name).toBe('平板支撑')
+  })
+
+  it('keeps a continue-training entry when the current draft is empty', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    await useDraftStore().load(repository)
+    await useTrainingStore().load(new ExistingSessionEngine())
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/plan', component: PlanDraftView },
+        { path: '/training', component: { template: '<p>training</p>' } },
+      ],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
+
+    expect(wrapper.find('.plan-card').exists()).toBe(false)
+    expect(wrapper.get('.start-training-panel').text()).toContain('已有未完成训练')
+    expect(wrapper.get('.start-training-panel a').text()).toBe('继续训练')
+  })
+
+  it('installs the labelled quick experience directly from an empty plan', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    await useLibraryStore().load(quickPlanRepository())
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/plan', component: PlanDraftView }],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
+
+    await wrapper.get('.empty-plan button').trigger('click')
+    await flushPromises()
+
+    expect(draft.items).toHaveLength(3)
+    expect(wrapper.text()).toContain('这个方案不是 AI 分析结果')
+  })
+
+  it('rejects an empty plan title without leaving a hidden stale value', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    draft.addManualAction({ name: '平板支撑', mode: 'duration' })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/plan', component: PlanDraftView }],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
+    const title = wrapper.get<HTMLInputElement>('input[aria-label="方案名称"]')
+
+    await title.setValue('   ')
+
+    expect(title.element.value).toBe('未命名方案')
+    expect(draft.plan.name).toBe('未命名方案')
+    expect(wrapper.get('.plan-name-error[role="alert"]').text()).toBe('方案名称不能为空')
   })
 
   it('keeps the save failure visible when deleting the final draft action fails', async () => {

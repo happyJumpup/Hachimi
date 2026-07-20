@@ -116,7 +116,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
         code: 'provider_error',
         message: capacityError
           ? '真实动作分析名额正在使用中'
-          : caught instanceof Error ? caught.message : '动作分析暂时不可用',
+          : '动作分析暂时不可用，请重试',
         retryable: true,
       }
     }

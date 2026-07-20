@@ -69,6 +69,20 @@ describe('training library repository', () => {
     database.close()
   })
 
+  it('deletes a saved plan while retaining and unlinking its current draft', async () => {
+    const { database, draftRepository, library } = setup()
+    await draftRepository.save(draft())
+    const saved = await library.saveCurrentDraftAs('手臂计划 A')
+
+    const unlinked = await library.deletePlan(saved.plan.id)
+
+    expect(await database.plans.get(saved.plan.id)).toBeUndefined()
+    expect(unlinked?.linkedPlanId).toBeNull()
+    expect(unlinked?.items).toEqual(saved.draft.items)
+    expect((await database.drafts.get('current'))?.linkedPlanId).toBeNull()
+    database.close()
+  })
+
   it('persists profile and preference, then clears every local table explicitly', async () => {
     const { database, draftRepository, library } = setup()
     await draftRepository.save(draft())

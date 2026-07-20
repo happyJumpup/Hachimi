@@ -141,6 +141,33 @@ const setup = () => {
 }
 
 describe('TrainingEngine public command interface', () => {
+  it('credits a paused partial set to both the record total and action detail', async () => {
+    const { clock, engine } = setup()
+    expectSuccess(await engine.dispatch({ type: 'session.create', plan: plan(repsAction()) }))
+    expectSuccess(await engine.dispatch({
+      type: 'set.start',
+      sessionId: 'session-1',
+      expectedRevision: 0,
+    }))
+    clock.advance(1_600)
+    const paused = expectSuccess(await engine.dispatch({
+      type: 'session.pause',
+      sessionId: 'session-1',
+      expectedRevision: 1,
+      reason: 'user',
+    }))
+    expect(paused.session?.currentSetActiveMilliseconds).toBe(1_600)
+
+    const ended = expectSuccess(await engine.dispatch({
+      type: 'session.end_early',
+      sessionId: 'session-1',
+      expectedRevision: 2,
+    }))
+
+    expect(ended.record?.activeSeconds).toBe(2)
+    expect(ended.record?.actions[0]?.activeSeconds).toBe(2)
+  })
+
   it('completes a reps session once and replays the same terminal record idempotently', async () => {
     const { clock, engine, persistence } = setup()
     const sourcePlan = plan(repsAction())

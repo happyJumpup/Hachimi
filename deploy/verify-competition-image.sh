@@ -54,6 +54,33 @@ audit_output="$({
       -name "*.aac" -o -name "*.flac" -o -name "*.trace" \
     \) -print
 
+    find /workspace -type f \( \
+      -name "*.bmp" -o -name "*.gif" -o -name "*.jpeg" -o \
+      -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o \
+      -name "*.tiff" -o -name "*.webp" -o -name "*.ass" -o \
+      -name "*.srt" -o -name "*.ssa" -o -name "*.vtt" \
+    \) -print | while IFS= read -r artifact_path; do
+      case "${artifact_path}" in
+        *.webp)
+          artifact_sha="$(sha256sum "${artifact_path}" | awk "{print \$1}")"
+          case "${artifact_sha}" in
+            5518f49229cc0331bfdf9c5351e6a7806bf97cac6c882b2d5dc40e620f85561c|\
+            bdab0d00707684a80f44f31fc09f0325ac0b608060ca746b63e15e6d940b44ab|\
+            730f5c6b4b2b91d11ea23085eac3739a4d22841014d7c21752b207b63ff4db30|\
+            d775c21bc2df5bd2156638247066f7f836b9b800c9d8f3044f595a81f906f91c|\
+            74ffadcabdb1124680efcb0dbf2d4b2c2f5c5a88b79a6d811cf108a8552a92a9)
+              ;;
+            *) printf "%s\n" "${artifact_path}" ;;
+          esac
+          ;;
+        *) printf "%s\n" "${artifact_path}" ;;
+      esac
+    done
+
+    find /workspace -type f \( \
+      -iname "*transcript*" -o -iname "*transcription*" -o -iname "*subtitle*" \
+    \) -print
+
     find /workspace/apps/web/dist -type f -name "*.map" -print
 
     for forbidden_path in \

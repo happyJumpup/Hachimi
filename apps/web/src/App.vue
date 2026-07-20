@@ -56,7 +56,7 @@ onBeforeUnmount(() => {
         </Transition>
       </RouterView>
       <RouterLink
-        v-if="training.hasCurrent && route.name !== 'training' && route.name !== 'plan'"
+        v-if="training.hasCurrent && !['training', 'plan', 'mine'].includes(String(route.name))"
         class="global-training-entry"
         to="/training"
       >
@@ -82,7 +82,7 @@ onBeforeUnmount(() => {
 }
 
 .bootstrap-shell section { display: grid; gap: 10px; }
-.bootstrap-eyebrow { margin: 0; color: var(--cyan); font: 600 10px/1 var(--font-display); letter-spacing: .14em; }
+.bootstrap-eyebrow { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .14em; }
 .bootstrap-shell h1 { max-width: 340px; margin: 0; font: 700 42px/.95 var(--font-display), var(--font-cn); }
 .bootstrap-shell p:not(.bootstrap-eyebrow) { max-width: 320px; margin: 0 auto; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .bootstrap-shell button { min-height: 46px; margin-top: 8px; border: 0; border-radius: 12px; color: var(--bg); background: var(--cyan); font-weight: 800; }

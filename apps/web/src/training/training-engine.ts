@@ -602,11 +602,13 @@ export const createTrainingEngine = ({
       let terminal = clone(previous)
       if (terminal.status === 'active') {
         terminal = flushActive(terminal)
+      } else if (terminal.status === 'resting') {
+        terminal = settleRest(terminal, now, 'ready_to_continue')
+      }
+      if (terminal.currentSetActiveMilliseconds > 0) {
         const progress = terminal.progress[terminal.currentItemIndex]
         progress.activeMilliseconds += terminal.currentSetActiveMilliseconds
         terminal.currentSetActiveMilliseconds = 0
-      } else if (terminal.status === 'resting') {
-        terminal = settleRest(terminal, now, 'ready_to_continue')
       }
       terminal = withRevision({ ...terminal, activeStartedAt: null }, now)
       activeCheckpoint = null

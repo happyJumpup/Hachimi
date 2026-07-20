@@ -30,6 +30,7 @@ const repository = (): LibraryRepository => ({
   })),
   saveCurrentDraftAs: vi.fn(),
   openPlan: vi.fn(),
+  deletePlan: vi.fn().mockResolvedValue(null),
   replaceCurrentDraft: vi.fn().mockResolvedValue(currentDraft),
   clearAllLocalData: vi.fn().mockResolvedValue(undefined),
 })

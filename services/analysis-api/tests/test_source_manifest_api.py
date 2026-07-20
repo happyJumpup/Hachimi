@@ -1,12 +1,15 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 
 from hakimi_analysis.app import create_app
+from hakimi_analysis.bootstrap import build_catalog
 from hakimi_analysis.pipeline import PipelineOutput
+from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import SourceCatalog, SourceManifestError, VideoSource
 
 
@@ -96,6 +99,54 @@ async def test_manifest_sources_expose_origin_and_redirect_to_controlled_cdn(
     ]
     assert media.status_code == 307
     assert media.headers["location"] == "https://media.example.com/hachimi/competition/arm-01.mp4"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "manifest_configuration",
+    [
+        {},
+        {
+            "source_manifest_path": "missing-sources.json",
+            "source_media_root": "media",
+        },
+        {
+            "source_manifest_path": "missing-sources.json",
+            "source_media_root": "media",
+            "public_media_base_url": "https://media.example.com/hachimi/",
+        },
+    ],
+)
+async def test_production_never_exposes_legacy_media_when_manifest_is_unavailable(
+    tmp_path: Path,
+    manifest_configuration: dict[str, Any],
+) -> None:
+    legacy_path = tmp_path / "legacy-unlicensed.mp4"
+    legacy_path.write_bytes(b"legacy-local-video")
+    resolved_configuration = {
+        key: tmp_path / value if key != "public_media_base_url" else value
+        for key, value in manifest_configuration.items()
+    }
+    settings = Settings(
+        _env_file=None,
+        app_env="production",
+        hakimi_demo_video_path=legacy_path,
+        **resolved_configuration,
+    )
+    catalog = build_catalog(settings)
+    app = create_app(catalog=catalog, pipeline=EmptyPipeline(), app_env="production")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://test",
+    ) as client:
+        sources = await client.get("/api/v1/sources")
+        media = await client.get("/api/v1/sources/legacy-arm-workout/media")
+
+    assert catalog.manifest_backed is False
+    assert sources.status_code == 200
+    assert sources.json() == []
+    assert media.status_code == 404
 
 
 def test_manifest_rejects_media_paths_outside_the_controlled_root(tmp_path: Path) -> None:

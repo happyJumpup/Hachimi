@@ -19,6 +19,7 @@ const selectedSourceId = ref('')
 const currentSeconds = ref(0)
 const durationSeconds = ref(0)
 const previewEnd = ref<number | null>(null)
+const mediaLoadFailed = ref(false)
 const addingCandidates = ref(false)
 const addCandidatesError = ref('')
 let resumeAfterCancel = false
@@ -43,19 +44,20 @@ onMounted(loadSources)
 
 watch(selectedSourceId, async (next, previous) => {
   if (previous && next !== previous && analysis.isRunning) {
-    await analysis.cancel(analysisClient)
+    await analysis.cancel(analysisClient).catch(() => undefined)
   }
   analysis.clearResult()
   addCandidatesError.value = ''
   currentSeconds.value = 0
   previewEnd.value = null
+  mediaLoadFailed.value = false
   video.value?.load()
 })
 
 onBeforeUnmount(() => {
   // Always advance the store generation. If createRun is still in flight,
   // start() will cancel the returned run before it can open an SSE stream.
-  void analysis.cancel(analysisClient)
+  void analysis.cancel(analysisClient).catch(() => undefined)
 })
 
 const syncTime = (): void => {
@@ -69,7 +71,7 @@ const syncTime = (): void => {
 }
 
 const startAnalysis = async (): Promise<void> => {
-  if (!video.value || !selectedSourceId.value || analysis.isRunning) return
+  if (!video.value || !selectedSourceId.value || analysis.isRunning || mediaLoadFailed.value) return
   resumeAfterCancel = !video.value.paused
   video.value.pause()
   previewEnd.value = null
@@ -83,9 +85,14 @@ const startAnalysis = async (): Promise<void> => {
 }
 
 const cancelAnalysis = async (): Promise<void> => {
-  await analysis.cancel(analysisClient)
-  if (resumeAfterCancel) await video.value?.play().catch(() => undefined)
-  resumeAfterCancel = false
+  try {
+    await analysis.cancel(analysisClient)
+  } catch {
+    // Local cancellation is already applied by the store; DELETE is best effort.
+  } finally {
+    if (resumeAfterCancel) await video.value?.play().catch(() => undefined)
+    resumeAfterCancel = false
+  }
 }
 
 const preview = async (segment: Segment): Promise<void> => {
@@ -189,7 +196,18 @@ const returnToVideo = async (): Promise<void> => {
           preload="metadata"
           @loadedmetadata="syncTime"
           @timeupdate="syncTime"
+          @error="mediaLoadFailed = true"
         />
+
+        <div v-if="mediaLoadFailed" class="stage-media-error" role="alert">
+          <span class="empty-code">VIDEO UNAVAILABLE</span>
+          <strong>这个视频暂时无法播放</strong>
+          <small>可以切换视频，或继续编辑已有方案。</small>
+          <div>
+            <RouterLink to="/plan">去方案草稿</RouterLink>
+            <RouterLink to="/mine">我的训练</RouterLink>
+          </div>
+        </div>
 
         <div class="video-vignette" aria-hidden="true" />
         <div class="time-readout" aria-live="polite">
@@ -233,7 +251,7 @@ const returnToVideo = async (): Promise<void> => {
         </div>
 
         <button
-          v-if="!analysis.isRunning && !(analysis.status === 'completed' && analysis.candidates.length)"
+          v-if="!mediaLoadFailed && !analysis.isRunning && !(analysis.status === 'completed' && analysis.candidates.length)"
           type="button"
           class="analyze-button"
           :disabled="access.loaded && !access.canAnalyze"
@@ -251,6 +269,7 @@ const returnToVideo = async (): Promise<void> => {
           v-if="analysis.status === 'completed' && analysis.candidates.length"
           :candidates="analysis.candidates"
           :warnings="analysis.warnings"
+          :max-segment-end="selectedSource.duration_seconds"
           :submitting="addingCandidates"
           :submission-error="addCandidatesError"
           @preview="preview"
@@ -309,7 +328,7 @@ const returnToVideo = async (): Promise<void> => {
 
 .brand-lockup { gap: 10px; }
 .top-actions { gap: 7px; }
-.mine-link { display: inline-grid; min-height: 44px; padding: 0 10px; place-items: center; color: var(--muted); font-size: 10px; font-weight: 700; text-decoration: none; }
+.mine-link { display: inline-grid; min-height: 44px; padding: 0 10px; place-items: center; color: var(--muted); font-size: 11px; font-weight: 700; text-decoration: none; }
 
 .brand-mark {
   display: grid;
@@ -325,9 +344,10 @@ const returnToVideo = async (): Promise<void> => {
 .brand-lockup strong,
 .brand-lockup small { display: block; }
 .brand-lockup strong { font-size: 13px; letter-spacing: .02em; }
-.brand-lockup small { margin-top: 2px; color: var(--muted); font: 500 9px/1 var(--font-display); letter-spacing: .12em; }
+.brand-lockup small { margin-top: 2px; color: var(--muted); font: 500 11px/1 var(--font-display); letter-spacing: .12em; }
 
 .draft-link {
+  min-height: 44px;
   gap: 8px;
   padding: 8px 10px 8px 12px;
   border: 1px solid var(--line);
@@ -352,8 +372,7 @@ const returnToVideo = async (): Promise<void> => {
 .video-stage {
   position: relative;
   width: min(100%, 430px);
-  height: min(72dvh, 700px);
-  min-height: 560px;
+  aspect-ratio: 9 / 16;
   margin: 0 auto;
   overflow: hidden;
   border: 1px solid var(--line-strong);
@@ -369,7 +388,8 @@ const returnToVideo = async (): Promise<void> => {
   left: 14px;
   right: 14px;
   gap: 7px;
-  padding: 8px 10px;
+  min-height: 46px;
+  padding: 0 10px;
   border: 1px solid rgb(255 255 255 / 12%);
   border-radius: 10px;
   background: rgb(4 6 7 / 68%);
@@ -384,16 +404,19 @@ const returnToVideo = async (): Promise<void> => {
   box-shadow: 0 0 0 4px rgb(255 111 97 / 15%);
 }
 
-.source-rail label { color: var(--muted); font-size: 10px; }
+.source-rail label { color: var(--muted); font-size: 11px; }
 .source-rail select {
   min-width: 0;
+  min-height: 44px;
   flex: 1;
   border: 0;
   color: var(--ink);
   background: transparent;
   font-size: 11px;
-  outline: none;
+  outline: 2px solid transparent;
+  outline-offset: 3px;
 }
+.source-rail select:focus-visible { outline-color: var(--cyan); }
 .source-rail option { color: #111; }
 
 .source-video {
@@ -441,11 +464,29 @@ const returnToVideo = async (): Promise<void> => {
   box-shadow: 0 18px 40px rgb(38 235 213 / 24%);
   text-align: left;
 }
+
+.stage-media-error {
+  position: absolute;
+  z-index: 8;
+  inset: 76px 14px 20px;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  padding: 24px;
+  border: 1px solid rgb(255 111 97 / 35%);
+  border-radius: 16px;
+  background: rgb(3 5 6 / 92%);
+  text-align: center;
+}
+.stage-media-error strong { color: var(--ink); font-size: 18px; }
+.stage-media-error small { color: var(--muted); font-size: 11px; }
+.stage-media-error div { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+.stage-media-error a { display: inline-grid; min-width: 44px; min-height: 44px; padding: 0 12px; place-items: center; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--cyan); font-size: 11px; font-weight: 700; text-decoration: none; }
 .analyze-button:disabled { cursor: not-allowed; filter: saturate(.35); opacity: .72; }
 
 .analyze-button span span,
 .analyze-button small { display: block; }
-.analyze-button small { margin-bottom: 2px; color: rgb(3 17 15 / 60%); font: 600 10px/1 var(--font-display); letter-spacing: .12em; }
+.analyze-button small { margin-bottom: 2px; color: rgb(3 17 15 / 60%); font: 600 11px/1 var(--font-display); letter-spacing: .12em; }
 .analyze-button span { font-weight: 900; }
 .analyze-button b { justify-self: end; font-size: 26px; font-weight: 300; }
 
@@ -494,6 +535,8 @@ const returnToVideo = async (): Promise<void> => {
 .cancel-button {
   position: absolute;
   bottom: 28px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 9px 16px;
   border: 1px solid var(--line-strong);
   border-radius: 999px;
@@ -519,9 +562,9 @@ const returnToVideo = async (): Promise<void> => {
 .result-toast strong,
 .result-toast span { display: block; }
 .result-toast strong { font-size: 13px; }
-.result-toast span { margin-top: 3px; color: var(--muted); font-size: 10px; }
+.result-toast span { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .result-toast button,
-.result-toast a { color: var(--cyan); background: transparent; border: 0; font-weight: 700; text-decoration: none; }
+.result-toast a { display: inline-grid; min-width: 44px; min-height: 44px; place-items: center; color: var(--cyan); background: transparent; border: 0; font-weight: 700; text-decoration: none; }
 .error-toast { border-color: rgb(255 111 97 / 35%); }
 .error-toast button { color: var(--coral); }
 .busy-toast { border-color: rgb(255 111 97 / 35%); }
@@ -549,7 +592,7 @@ const returnToVideo = async (): Promise<void> => {
 .page-caption span { color: var(--coral); font: 700 18px/1 var(--font-display); }
 .page-caption p { margin: 0; font-size: 11px; }
 .page-caption i { height: 1px; flex: 1; background: var(--line); }
-.page-caption small { font: 500 9px/1 var(--font-display); letter-spacing: .1em; }
+.page-caption small { font: 500 11px/1 var(--font-display); letter-spacing: .1em; }
 
 @keyframes scan { 0%, 100% { top: 20%; opacity: .4; } 50% { top: 78%; opacity: 1; } }
 @keyframes pulse { 50% { transform: scale(.86); opacity: .65; } }
@@ -557,9 +600,13 @@ const returnToVideo = async (): Promise<void> => {
 @media (min-width: 900px) {
   .video-page { padding-inline: 28px; }
   .video-stage {
+    width: min(100%, 430px);
+  }
+  .video-stage.has-review {
     width: min(100%, 1180px);
     height: min(78dvh, 760px);
     min-height: 620px;
+    aspect-ratio: auto;
   }
   .source-video { width: min(100%, 430px); margin-left: calc((100% - 430px) / 2); border-inline: 1px solid var(--line); }
   .video-vignette { left: calc((100% - 430px) / 2); right: calc((100% - 430px) / 2); }

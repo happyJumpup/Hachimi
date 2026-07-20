@@ -108,6 +108,7 @@ describe('应用本机数据启动壳', () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
+        { path: '/', name: 'home', component: { template: '<p>视频页</p>' } },
         { path: '/plan', name: 'plan', component: { template: '<p>方案页</p>' } },
         { path: '/mine', name: 'mine', component: { template: '<p>我的训练</p>' } },
       ],
@@ -123,6 +124,11 @@ describe('应用本机数据启动壳', () => {
     expect(wrapper.find('.global-training-entry').exists()).toBe(false)
 
     await router.push('/mine')
+    await flushPromises()
+
+    expect(wrapper.find('.global-training-entry').exists()).toBe(false)
+
+    await router.push('/')
     await flushPromises()
 
     expect(wrapper.get('.global-training-entry').text()).toContain('继续训练')
