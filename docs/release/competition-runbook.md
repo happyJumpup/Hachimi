@@ -68,12 +68,13 @@ Issue #8 应版本化 `deploy/compose.yml` 与 `deploy/Caddyfile`。服务器目
 /opt/hachimi/releases/<git-sha>/    # 该 SHA 对应的 Compose、Caddy 与媒体清单
 /opt/hachimi/current                # 指向当前 release 的链接
 /opt/hachimi/shared/.env.production # 仅 root/发布用户可读的生产环境文件
+/opt/hachimi/shared/bin/ffmpeg      # 单独审计、只读挂载的 FFmpeg；不进入 GHCR 镜像
 /var/lib/hachimi/media              # 只读受控媒体缓存
 ```
 
 Compose 只包含：
 
-- `app`：`ghcr.io/happyjumpup/hachimi:<git-sha>`；镜像同时包含构建后的 Vue SPA 与 FastAPI，生产命令必须显式使用 `--workers 1`，媒体缓存以只读方式挂载。
+- `app`：`ghcr.io/happyjumpup/hachimi:<git-sha>`；镜像同时包含构建后的 Vue SPA 与 FastAPI，但不包含 FFmpeg 可执行文件。生产命令必须显式使用 `--workers 1`，媒体缓存与服务器管理的 FFmpeg 均以只读方式挂载。
 - `caddy`：固定版本镜像；只暴露 80/443，只向内部 `app` 转发。
 
 Caddy 必须：
@@ -101,6 +102,9 @@ Caddy 必须：
 | `SOURCE_MANIFEST_PATH` | 指向容器内只读挂载的该 release 来源清单，例如 `/config/media-manifest.json` |
 | `SOURCE_MEDIA_ROOT` | 固定为 `/var/lib/hachimi/media` |
 | `PUBLIC_MEDIA_BASE_URL` | 受控 COS/CDN HTTPS 基地址；只与清单文件名拼接 |
+| `IMAGEIO_FFMPEG_EXE` | 固定为 `/opt/hachimi/bin/ffmpeg`；对应服务器只读挂载，文件必须完成版本、配置、许可和 SHA-256 审计 |
+| `FFMPEG_EXPECTED_SHA256` | 上述可执行文件的 64 位小写 SHA-256；必须与发布登记一致 |
+| `FFMPEG_EXPECTED_CONFIGURATION_SHA256` | `ffmpeg -version` 中完整、去除首尾空白后的 `configuration:` 行 SHA-256；必须与发布登记一致 |
 | `SMOKE_ANNOTATIONS_PATH` | 指向容器内只读挂载的该 release 人工 smoke 标注清单，例如 `/config/smoke-annotations.json`；不得包含转录或模型响应 |
 | `JUDGE_ACCESS_CODE` | 必填高熵秘密，不进入前端构建或 URL |
 | `ACCESS_COOKIE_SECRET` | 必填随机签名秘密，与体验码分离 |
@@ -111,6 +115,8 @@ Caddy 必须：
 | `RUN_TTL_SECONDS` | `600` |
 
 `HAKIMI_DEMO_VIDEO_PATH` 仅用于当前单视频本地开发，竞赛生产来源由清单和媒体根目录提供，生产环境不得同时依赖二者。Docker/服务器若需读取私有 GHCR，只配置最小 `read:packages` 凭据到 Docker credential store，不写进应用环境文件。
+
+生产 FFmpeg 不从 `imageio-ffmpeg` wheel 或 GHCR 镜像分发。发布人须把经审核的可执行文件放在 `/opt/hachimi/shared/bin/ffmpeg`，设为不可由应用用户写入，并按 [`licenses/FFMPEG_RUNTIME.md`](../../licenses/FFMPEG_RUNTIME.md) 记录版本、完整配置行、可执行文件与配置行两个 SHA-256、适用许可证和对应源码位置。应用以 FFmpeg 内建 `mpeg4` 编码器生成精确到非关键帧的分析窗口；预期 LGPL 边界不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。生产就绪探针会执行、校验并锁定该二进制；如实际构建包含 GPL 组件，必须先完成相应分发义务，不能用“仅服务器使用”跳过审计。
 
 发布人检查环境文件时只检查“变量存在、权限正确、值不是空白”，不得把值输出到终端。GitHub Actions 不注入真实 Ark/ASR 密钥；真实云 smoke 只能在受控发布机或服务器执行。
 
@@ -195,8 +201,8 @@ docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml pul
 | 检查 | 通过条件 |
 | --- | --- |
 | `/api/v1/health` | 200，固定非敏感状态；不调用云提供方 |
-| `/api/v1/ready` | 200；生产 Provider、两项 API key、来源清单、全部媒体哈希、SPA 入口、可信代理、临时目录和单实例配置均有效 |
-| 未就绪 | 503 + 脱敏错误码；可包含 `web_static_unavailable` 或 `proxy_configuration_invalid`，不得暴露路径、地址或密钥，也不得把缺密钥伪装成健康 |
+| `/api/v1/ready` | 200；生产 Provider、两项 API key、来源清单、全部媒体哈希、服务器 FFmpeg 可执行性/版本/双哈希/许可配置、SPA 入口、可信代理、临时目录和单实例配置均有效 |
+| 未就绪 | 503 + 脱敏错误码；可包含 `media_processor_unavailable`、`web_static_unavailable` 或 `proxy_configuration_invalid`，不得暴露路径、地址或密钥，也不得把缺密钥伪装成健康 |
 | SSE | 立即收到真实阶段/心跳，代理不聚合；连接超过常规 60 秒仍持续，终态或断开时运行被清理 |
 | 取消 | DELETE、切换视频或断开 SSE 后不再接纳迟到结果 |
 
@@ -284,7 +290,7 @@ PUBLIC_ANALYSIS_CONCURRENCY=0
 | 哈肌咪 Pet 五状态 | 团队确认拥有使用权；补记确认人和日期 | 赛事/Web 展示及优化使用确认 | 优化后透明 WebP；不从旧 GPL 代码复制组件 | 部署时填写 | 部署时填写 |
 | 完成海报装饰资源 | 部署时填写 | 自制或可再分发许可 | 前端构建资源 | 部署时填写 | 部署时填写 |
 | 中文字体 | 部署时填写 | 许可证允许 Web 使用/再分发；否则使用系统字体栈 | 前端或系统字体 | 部署时填写 | 部署时填写 |
-| `imageio-ffmpeg` 携带的 FFmpeg | 上游发行包 | 按实际二进制构建和链接方式复核许可证 | 仅服务器运行时，不另行分发安装包 | 部署时填写 | 部署时填写 |
+| 服务器管理的 FFmpeg | 部署时填写；不使用 wheel 内置二进制 | 记录完整配置行、适用许可证与对应源码位置；预期构建不含 `--enable-gpl`/`--enable-nonfree` | 服务器只读文件挂载；不进入 Git 或 GHCR | 可执行文件与配置行两个 SHA-256 | 部署时填写 |
 | 项目源代码 | Hachimi Contributors | MIT；第三方依赖许可证另审 | GHCR 镜像与 GitHub 仓库 | 发布 SHA | 部署时填写 |
 
 任何状态未确认、来源不明或授权范围不覆盖公开赛事展示的素材都不能进入候选版本。
