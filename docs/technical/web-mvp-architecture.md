@@ -183,10 +183,16 @@ interface AccessSessionView {
 | `SOURCE_MEDIA_ROOT` | 校验后的本地分析媒体根目录 |
 | `PUBLIC_MEDIA_BASE_URL` | COS/CDN 的 HTTPS 公共播放前缀 |
 | `IMAGEIO_FFMPEG_EXE` | 生产服务器只读挂载、已完成许可与哈希审计的 FFmpeg 绝对路径 |
+| `FFMPEG_EXPECTED_SHA256` | 被挂载 FFmpeg 可执行文件的 SHA-256 |
+| `FFMPEG_EXPECTED_CONFIGURATION_SHA256` | `ffmpeg -version` 中完整 `configuration:` 行的 SHA-256 |
+| `SMOKE_ANNOTATIONS_PATH` | 与受控来源一一对应的人工 smoke 标注清单 |
+| `WEB_STATIC_ROOT` | 构建后 SPA 的只读目录 |
 | `JUDGE_ACCESS_CODE` | 评委体验码 |
 | `ACCESS_COOKIE_SECRET` | 匿名访问 Cookie 的签名密钥 |
 | `JUDGE_ANALYSIS_CONCURRENCY` | 评委保留分析槽位，安全默认 2；通过容量门禁后可设为 3 |
 | `PUBLIC_ANALYSIS_CONCURRENCY` | 公共分析槽位，安全默认 0；通过容量门禁后可设为 1 |
+| `TRUSTED_PROXY_CIDRS` | 唯一受信任的同机 Caddy 网段；不能使用全网段 |
+| `CORS_ORIGINS` | 生产环境只允许精确 HTTPS Origin；同源部署不使用通配符 |
 
 现有 Ark、ASR、超时和 TTL 变量继续有效。部署流程通过同镜像的一次性同步命令准备媒体，并在切换流量前检查 `/api/v1/ready`；宿主机不要求安装 Python 或 uv，但必须按发布手册提供单独审计的 FFmpeg 文件。完整发布与回滚步骤由竞赛发布运行手册定义。
 
