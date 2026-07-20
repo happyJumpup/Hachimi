@@ -14,10 +14,16 @@ from hakimi_analysis.settings import PROJECT_ROOT, Settings
 
 
 class SmokeFailure(RuntimeError):
-    def __init__(self, code: str, provider_calls: list[dict[str, object]]) -> None:
+    def __init__(
+        self,
+        code: str,
+        provider_calls: list[dict[str, object]],
+        observations: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.provider_calls = provider_calls
+        self.observations = observations or {}
 
 
 def _temporary_entries(root: Path) -> set[str]:
@@ -89,6 +95,12 @@ async def run_smoke() -> dict[str, Any]:
                 result = await pipeline.analyze(source, 45, emit)
         except (PipelineFailure, ProviderError) as error:
             raise SmokeFailure(error.code, provider_calls) from error
+        except TimeoutError as error:
+            raise SmokeFailure(
+                "timeout",
+                provider_calls,
+                {"timeout_seconds": settings.run_timeout_seconds},
+            ) from error
     elapsed_seconds = round(time.perf_counter() - started, 2)
 
     after_entries = _temporary_entries(temp_root)
@@ -118,7 +130,26 @@ async def run_smoke() -> dict[str, Any]:
         >= {EvidenceType.SPEECH, EvidenceType.VISUAL}
         for candidate in matching
     ):
-        raise SmokeFailure("fused_dual_evidence_missing", provider_calls)
+        branch_evidence_counts: dict[str, int] = {}
+        for event_type, data in events:
+            if event_type != "branch.completed":
+                continue
+            evidence_count = data.get("evidence_count", 0)
+            branch_evidence_counts[str(data.get("branch"))] = (
+                evidence_count if isinstance(evidence_count, int) else 0
+            )
+        raise SmokeFailure(
+            "fused_dual_evidence_missing",
+            provider_calls,
+            {
+                "elapsed_seconds": elapsed_seconds,
+                "branch_evidence_counts": branch_evidence_counts,
+                "matching_candidate_evidence": [
+                    sorted(evidence.type.value for evidence in candidate.evidence)
+                    for candidate in matching
+                ],
+            },
+        )
     if any(
         "weight" in json.dumps(candidate.model_dump(mode="json"), ensure_ascii=False).lower()
         for candidate in result.candidates
@@ -141,6 +172,7 @@ async def main() -> int:
                     "status": "FAIL",
                     "error_code": error.code,
                     "provider_diagnostics": error.provider_calls,
+                    "safe_observations": error.observations,
                 },
                 ensure_ascii=False,
             )
