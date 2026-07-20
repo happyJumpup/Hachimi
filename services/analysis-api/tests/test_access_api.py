@@ -123,6 +123,62 @@ async def test_invalid_access_code_has_one_safe_failure_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_access_code_attempts_are_rate_limited_by_client_ip() -> None:
+    access = AccessManager(
+        cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
+        judge_access_code="judge-demo-code",
+        upgrade_attempt_limit=2,
+        upgrade_attempt_window_seconds=600,
+    )
+    app = create_app(access=access)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        first = await client.post(
+            "/api/v1/access/session",
+            json={"access_code": "wrong-one"},
+            headers={"Origin": "https://test"},
+        )
+        second = await client.post(
+            "/api/v1/access/session",
+            json={"access_code": "wrong-two"},
+            headers={"Origin": "https://test"},
+        )
+        blocked = await client.post(
+            "/api/v1/access/session",
+            json={"access_code": "judge-demo-code"},
+            headers={"Origin": "https://test"},
+        )
+
+    assert first.status_code == 401
+    assert second.status_code == 401
+    assert blocked.status_code == 429
+    assert blocked.headers["retry-after"] == "600"
+    assert blocked.json() == {"detail": "体验码尝试过于频繁，请稍后重试"}
+
+
+@pytest.mark.asyncio
+async def test_access_and_analysis_payload_strings_have_bounded_lengths() -> None:
+    app = create_app(access=access_manager())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        access_response = await client.post(
+            "/api/v1/access/session",
+            json={"access_code": "x" * 257},
+            headers={"Origin": "https://test"},
+        )
+        analysis_response = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "x" * 129, "trigger_seconds": 10},
+            headers={"Origin": "https://test"},
+        )
+
+    assert access_response.status_code == 422
+    assert analysis_response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_production_rejects_cross_origin_session_changes() -> None:
     app = create_app(access=access_manager(), app_env="production")
     async with httpx.AsyncClient(

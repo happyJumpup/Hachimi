@@ -15,6 +15,10 @@
 		-Server
 	}
 
+	request_body {
+		max_size 64KB
+	}
+
 	reverse_proxy app:8000 {
 		flush_interval -1
 		header_up X-Forwarded-For {remote_host}

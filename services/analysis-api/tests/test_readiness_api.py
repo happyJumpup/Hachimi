@@ -149,6 +149,7 @@ def configured_readiness(
     *,
     include_web_root: bool = True,
     trusted_proxy_cidrs: str = "172.30.248.2/32",
+    judge_access_code: str = "judge-access-code-at-least-16-bytes",
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -195,7 +196,7 @@ def configured_readiness(
         source_manifest_path=manifest_path,
         source_media_root=media_root,
         public_media_base_url="https://media.example.com/hachimi/",
-        judge_access_code="judge-code",
+        judge_access_code=judge_access_code,
         access_cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
         web_static_root=web_static_root,
         trusted_proxy_cidrs=trusted_proxy_cidrs,
@@ -216,6 +217,23 @@ def configured_readiness(
         ),
         media_path,
     )
+
+
+@pytest.mark.asyncio
+async def test_production_ready_requires_a_high_entropy_judge_code(tmp_path: Path) -> None:
+    readiness, _ = configured_readiness(tmp_path, judge_access_code="short")
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "code": "access_configuration_invalid",
+    }
 
 
 @pytest.mark.asyncio

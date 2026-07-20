@@ -147,12 +147,12 @@ class Transcript(StrictModel):
 
 
 class CreateAnalysisRunRequest(StrictModel):
-    source_id: str = Field(min_length=1)
+    source_id: str = Field(min_length=1, max_length=128)
     trigger_seconds: float = Field(ge=0)
 
 
 class UpgradeAccessSessionRequest(StrictModel):
-    access_code: str = Field(min_length=1)
+    access_code: str = Field(min_length=1, max_length=256)
 
 
 class AccessSessionView(StrictModel):

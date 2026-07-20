@@ -28,6 +28,12 @@ class AdmissionDenied(RuntimeError):
         self.retry_after_seconds = retry_after_seconds
 
 
+class AccessCodeRateLimited(RuntimeError):
+    def __init__(self, *, retry_after_seconds: int) -> None:
+        super().__init__("access code attempts rate limited")
+        self.retry_after_seconds = retry_after_seconds
+
+
 @dataclass(slots=True)
 class AnalysisLease:
     manager: "AccessManager"
@@ -62,6 +68,8 @@ class AccessManager:
         judge_attempt_window_seconds: int = 3_600,
         public_attempt_limit: int = 1,
         public_attempt_window_seconds: int = 600,
+        upgrade_attempt_limit: int = 5,
+        upgrade_attempt_window_seconds: int = 600,
         time_source: Callable[[], float] = time.monotonic,
     ) -> None:
         if len(cookie_secret.encode("utf-8")) < 32:
@@ -75,6 +83,8 @@ class AccessManager:
             judge_attempt_window_seconds,
             public_attempt_limit,
             public_attempt_window_seconds,
+            upgrade_attempt_limit,
+            upgrade_attempt_window_seconds,
         ) < 1:
             raise ValueError("analysis attempt policy must be positive")
         self._cookie_secret = cookie_secret.encode("utf-8")
@@ -91,6 +101,10 @@ class AccessManager:
         self._active_by_session: dict[str, AnalysisLease] = {}
         self._session_attempts: dict[tuple[AccessTier, str], list[float]] = {}
         self._ip_attempts: dict[tuple[AccessTier, str], list[float]] = {}
+        self._upgrade_attempt_limit = upgrade_attempt_limit
+        self._upgrade_attempt_window_seconds = upgrade_attempt_window_seconds
+        self._upgrade_session_attempts: dict[str, list[float]] = {}
+        self._upgrade_ip_attempts: dict[str, list[float]] = {}
         self._time_source = time_source
         self._lock = asyncio.Lock()
 
@@ -105,14 +119,29 @@ class AccessManager:
             expires_at=int(time.time()) + ACCESS_SESSION_SECONDS,
         )
 
-    def upgrade(self, session: AccessSession, access_code: str) -> AccessSession | None:
-        if not hmac.compare_digest(access_code, self._judge_access_code):
-            return None
-        return AccessSession(
-            id=session.id,
-            tier=AccessTier.JUDGE,
-            expires_at=int(time.time()) + ACCESS_SESSION_SECONDS,
-        )
+    async def upgrade(
+        self,
+        session: AccessSession,
+        access_code: str,
+        *,
+        client_ip: str,
+    ) -> AccessSession | None:
+        async with self._lock:
+            retry_after = self._upgrade_retry_after(session.id, client_ip)
+            if retry_after is not None:
+                raise AccessCodeRateLimited(retry_after_seconds=retry_after)
+            if not hmac.compare_digest(access_code, self._judge_access_code):
+                now = self._time_source()
+                self._upgrade_session_attempts.setdefault(session.id, []).append(now)
+                self._upgrade_ip_attempts.setdefault(client_ip, []).append(now)
+                return None
+            self._upgrade_session_attempts.pop(session.id, None)
+            self._upgrade_ip_attempts.pop(client_ip, None)
+            return AccessSession(
+                id=session.id,
+                tier=AccessTier.JUDGE,
+                expires_at=int(time.time()) + ACCESS_SESSION_SECONDS,
+            )
 
     def encode(self, session: AccessSession) -> str:
         payload = json.dumps(
@@ -218,6 +247,45 @@ class AccessManager:
             )
         active_retries = [value for value in retry_values if value is not None]
         return max(active_retries, default=None)
+
+    def _upgrade_retry_after(self, session_id: str, client_ip: str) -> int | None:
+        now = self._time_source()
+        retries = (
+            self._retry_for_simple_window(
+                self._upgrade_session_attempts,
+                session_id,
+                now=now,
+                limit=self._upgrade_attempt_limit,
+                window_seconds=self._upgrade_attempt_window_seconds,
+            ),
+            self._retry_for_simple_window(
+                self._upgrade_ip_attempts,
+                client_ip,
+                now=now,
+                limit=self._upgrade_attempt_limit,
+                window_seconds=self._upgrade_attempt_window_seconds,
+            ),
+        )
+        return max((value for value in retries if value is not None), default=None)
+
+    @staticmethod
+    def _retry_for_simple_window(
+        attempts_by_key: dict[str, list[float]],
+        key: str,
+        *,
+        now: float,
+        limit: int,
+        window_seconds: int,
+    ) -> int | None:
+        cutoff = now - window_seconds
+        attempts = [attempt for attempt in attempts_by_key.get(key, []) if attempt > cutoff]
+        if attempts:
+            attempts_by_key[key] = attempts
+        else:
+            attempts_by_key.pop(key, None)
+        if len(attempts) < limit:
+            return None
+        return max(1, math.ceil(window_seconds - (now - attempts[-limit])))
 
     @staticmethod
     def _retry_for_window(

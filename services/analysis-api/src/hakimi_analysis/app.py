@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from hakimi_analysis.access import (
     ACCESS_COOKIE_NAME,
     ACCESS_SESSION_SECONDS,
+    AccessCodeRateLimited,
     AccessManager,
     AccessSession,
     AdmissionDenied,
@@ -148,7 +149,21 @@ def create_app(
             development_origins=resolved_cors_origins,
         )
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
-        upgraded = access_manager.upgrade(session, payload.access_code)
+        try:
+            upgraded = await access_manager.upgrade(
+                session,
+                payload.access_code,
+                client_ip=_client_ip(request, trusted_proxy_networks),
+            )
+        except AccessCodeRateLimited as error:
+            raise HTTPException(
+                status_code=429,
+                detail="体验码尝试过于频繁，请稍后重试",
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": str(error.retry_after_seconds),
+                },
+            ) from error
         if upgraded is None:
             raise HTTPException(
                 status_code=401,

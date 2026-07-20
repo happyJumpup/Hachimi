@@ -88,7 +88,7 @@ class ProductionReadiness:
         if (
             self._settings.judge_access_code is None
             or self._settings.access_cookie_secret is None
-            or not self._settings.judge_access_code.get_secret_value()
+            or len(self._settings.judge_access_code.get_secret_value().encode("utf-8")) < 16
             or len(self._settings.access_cookie_secret.get_secret_value().encode("utf-8")) < 32
         ):
             return "access_configuration_invalid"
