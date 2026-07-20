@@ -18,6 +18,7 @@ def test_ffmpeg_runtime_is_pinned_and_uses_an_audited_lgpl_configuration(
 ) -> None:
     executable = tmp_path / "ffmpeg"
     executable.write_bytes(b"audited-ffmpeg")
+    executable.chmod(0o755)
     configuration_line = "configuration: --disable-debug --enable-shared"
 
     def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -51,6 +52,7 @@ def test_ffmpeg_runtime_rejects_gpl_or_nonfree_configuration(
 ) -> None:
     executable = tmp_path / "ffmpeg"
     executable.write_bytes(b"unsafe-ffmpeg")
+    executable.chmod(0o755)
 
     def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
@@ -75,6 +77,7 @@ def test_ffmpeg_runtime_rejects_an_unpinned_binary(
 ) -> None:
     executable = tmp_path / "ffmpeg"
     executable.write_bytes(b"changed-ffmpeg")
+    executable.chmod(0o755)
     called = False
 
     def run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:

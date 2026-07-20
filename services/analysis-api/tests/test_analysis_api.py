@@ -317,7 +317,7 @@ async def test_terminal_run_is_unavailable_from_every_http_path_after_ttl(
         catalog=source_catalog(tmp_path),
         pipeline=SuccessfulPipeline(),
         access=make_test_access(),
-        ttl_seconds=0.01,
+        ttl_seconds=1,
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://test"
@@ -328,7 +328,7 @@ async def test_terminal_run_is_unavailable_from_every_http_path_after_ttl(
         )
         run_id = created.json()["id"]
         await wait_for_status(client, run_id, "completed")
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(1.05)
 
         response = await client.request(
             method,
@@ -344,7 +344,7 @@ async def test_manager_event_stream_prunes_a_terminal_run_after_ttl(tmp_path: Pa
         catalog=source_catalog(tmp_path),
         pipeline=SuccessfulPipeline(),
         access=make_test_access(),
-        ttl_seconds=0.01,
+        ttl_seconds=1,
     )
     manager = app.state.run_manager
     source = app.state.source_catalog.get("legacy-arm-workout")
@@ -355,7 +355,7 @@ async def test_manager_event_stream_prunes_a_terminal_run_after_ttl(tmp_path: Pa
         await asyncio.sleep(0.001)
     else:
         raise AssertionError("run did not complete")
-    await asyncio.sleep(0.03)
+    await asyncio.sleep(1.05)
 
     events = manager.events(created.id)
     with pytest.raises(KeyError):
