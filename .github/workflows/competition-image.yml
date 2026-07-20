@@ -68,8 +68,8 @@ jobs:
           ACME_EMAIL: ci@example.invalid
         run: |
           set -Eeuo pipefail
-          sudo install -d -m 0700 /opt/hachimi/shared
-          sudo install -m 0600 /dev/null /opt/hachimi/shared/.env.production
+          sudo install -d -m 0700 -o "$(id -u)" -g "$(id -g)" /opt/hachimi/shared
+          install -m 0600 /dev/null /opt/hachimi/shared/.env.production
           rendered="$(docker compose --file deploy/compose.yml config --no-env-resolution --format json)"
           jq --exit-status '.services.app.stop_grace_period == "4m0s"' <<<"$rendered"
 
