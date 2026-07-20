@@ -4,6 +4,7 @@ services:
   app:
     image: ${HACHIMI_IMAGE:?Set HACHIMI_IMAGE to an immutable commit SHA tag}
     restart: unless-stopped
+    stop_grace_period: 240s
     command:
       - services/analysis-api/.venv/bin/uvicorn
       - hakimi_analysis.main:app
