@@ -63,6 +63,33 @@ async def test_prepared_media_is_bounded_and_removed_after_use(tmp_path: Path) -
 
 
 @pytest.mark.asyncio
+async def test_visual_window_uses_stream_copy_without_a_gpl_encoder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    output = tmp_path / "window.mp4"
+    source.write_bytes(b"not-read")
+    processor = LocalMediaProcessor()
+    captured: tuple[str, ...] = ()
+
+    async def capture(_operation: str, *arguments: str) -> None:
+        nonlocal captured
+        captured = arguments
+
+    monkeypatch.setattr(processor, "_run_ffmpeg", capture)
+    await processor._extract_video(
+        source,
+        output,
+        AnalysisWindow(start_seconds=5, end_seconds=12, expanded=False),
+    )
+
+    assert "libx264" not in captured
+    assert captured[captured.index("-c:v") + 1] == "copy"
+    assert captured[captured.index("-avoid_negative_ts") + 1] == "make_zero"
+
+
+@pytest.mark.asyncio
 async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

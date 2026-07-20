@@ -34,6 +34,8 @@ COPY licenses licenses
 COPY --from=web-builder /workspace/apps/web/dist apps/web/dist
 
 RUN uv sync --project services/analysis-api --frozen --no-dev \
+    && find /workspace/services/analysis-api/.venv/lib -type f -path '*/imageio_ffmpeg/binaries/ffmpeg-*' -delete \
+    && test -z "$(find /workspace/services/analysis-api/.venv/lib -type f -path '*/imageio_ffmpeg/binaries/ffmpeg-*' -print -quit)" \
     && groupadd --system --gid 10001 hachimi \
     && useradd --system --uid 10001 --gid hachimi --home-dir /nonexistent --shell /usr/sbin/nologin hachimi \
     && mkdir -p /workspace/tmp/analysis-runs \

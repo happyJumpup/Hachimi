@@ -1,12 +1,17 @@
 import type { DraftRepository } from '@/domain/types'
 import type { HachimiDatabase } from '@/db/hachimi-database'
 import { database } from '@/db/hachimi-database'
+import { localDataEpochFence, type LocalDataEpochFence } from '@/local-data/epoch-fence'
 
-export const createDexieDraftRepository = (db: HachimiDatabase): DraftRepository => ({
+export const createDexieDraftRepository = (
+  db: HachimiDatabase,
+  writeFence: LocalDataEpochFence = localDataEpochFence,
+): DraftRepository => ({
   async load() {
     return db.drafts.get('current')
   },
   async save(plan) {
+    writeFence.assertWritable()
     await db.transaction('rw', db.drafts, db.plans, async () => {
       await db.drafts.put(plan)
       if (!plan.linkedPlanId) return

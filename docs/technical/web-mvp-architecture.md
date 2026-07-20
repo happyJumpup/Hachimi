@@ -135,10 +135,11 @@ interface AccessSessionView {
 
 - `APP_ENV=production`、`ANALYSIS_PROVIDER=cloud`，两项云端密钥和三个 Skill 均已配置；
 - 来源清单可解析，所有本地媒体的路径、哈希和时长校验通过；
+- `IMAGEIO_FFMPEG_EXE` 指向服务器只读挂载的真实文件，生产镜像不含 wheel 自带二进制；
 - 分析临时根目录可创建、写入和删除探针文件；
 - 访问 Cookie 密钥、评委码以及并发配置有效，未启用测试 Provider。
 
-失败返回 503 和安全检查码，例如 `source_manifest_invalid`、`media_cache_invalid`、`provider_configuration_invalid`、`web_static_unavailable`、`proxy_configuration_invalid`、`temp_storage_unavailable`；响应不能包含本机路径、密钥片段或提供方正文。就绪检查不为每次探针调用真实模型；真实 Provider 可用性由发布 smoke 验证。
+失败返回 503 和安全检查码，例如 `source_manifest_invalid`、`media_cache_invalid`、`media_processor_unavailable`、`provider_configuration_invalid`、`web_static_unavailable`、`proxy_configuration_invalid`、`temp_storage_unavailable`；响应不能包含本机路径、密钥片段或提供方正文。就绪检查不为每次探针调用真实模型；真实 Provider 可用性由发布 smoke 验证。
 
 | 故障 | 外部行为 |
 | --- | --- |
@@ -181,12 +182,13 @@ interface AccessSessionView {
 | `SOURCE_MANIFEST_PATH` | 受控来源清单绝对路径 |
 | `SOURCE_MEDIA_ROOT` | 校验后的本地分析媒体根目录 |
 | `PUBLIC_MEDIA_BASE_URL` | COS/CDN 的 HTTPS 公共播放前缀 |
+| `IMAGEIO_FFMPEG_EXE` | 生产服务器只读挂载、已完成许可与哈希审计的 FFmpeg 绝对路径 |
 | `JUDGE_ACCESS_CODE` | 评委体验码 |
 | `ACCESS_COOKIE_SECRET` | 匿名访问 Cookie 的签名密钥 |
 | `JUDGE_ANALYSIS_CONCURRENCY` | 评委保留分析槽位，安全默认 2；通过容量门禁后可设为 3 |
 | `PUBLIC_ANALYSIS_CONCURRENCY` | 公共分析槽位，安全默认 0；通过容量门禁后可设为 1 |
 
-现有 Ark、ASR、超时和 TTL 变量继续有效。部署流程通过同镜像的一次性同步命令准备媒体，并在切换流量前检查 `/api/v1/ready`；宿主机不要求安装 Python 或 uv。完整发布与回滚步骤由竞赛发布运行手册定义。
+现有 Ark、ASR、超时和 TTL 变量继续有效。部署流程通过同镜像的一次性同步命令准备媒体，并在切换流量前检查 `/api/v1/ready`；宿主机不要求安装 Python 或 uv，但必须按发布手册提供单独审计的 FFmpeg 文件。完整发布与回滚步骤由竞赛发布运行手册定义。
 
 ## 10. 关联决策
 

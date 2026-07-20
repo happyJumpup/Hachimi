@@ -7,8 +7,14 @@ import type { LibraryRepository } from '@/db/library-repository'
 import type { DraftPlan, DraftRepository } from '@/domain/types'
 import type { Preferences, TrainingProfile, TrainingRecord, TrainingSession } from '@/domain/training'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
+import {
+  LocalDataCoordinationUnavailableError,
+  type LocalDataClearCoordinator,
+  type LocalDataClearParticipant,
+} from '@/local-data/clear-coordinator'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
+import { useLocalDataClearStore } from '@/stores/local-data-clear'
 import { useTrainingStore } from '@/stores/training'
 import type { TrainingCommand, TrainingEngine, TrainingEngineResult } from '@/training/training-engine'
 import MineView from '@/views/MineView.vue'
@@ -100,6 +106,41 @@ class DeferredDraftRepository implements DraftRepository {
   }
 }
 
+class InlineClearCoordinator implements LocalDataClearCoordinator {
+  readonly supported = true
+  private participant: LocalDataClearParticipant | null = null
+
+  connect(participant: LocalDataClearParticipant): void {
+    this.participant = participant
+  }
+
+  async clear(clearDatabase: () => Promise<void>): Promise<void> {
+    if (!this.participant) throw new Error('not connected')
+    await this.participant.prepare('epoch-2')
+    try {
+      await clearDatabase()
+      await this.participant.commit('epoch-2')
+    } catch (error) {
+      await this.participant.abort('epoch-2')
+      throw error
+    }
+  }
+
+  close(): void {}
+}
+
+class UnsupportedClearCoordinator implements LocalDataClearCoordinator {
+  readonly supported = false
+
+  connect(): void {}
+
+  async clear(): Promise<void> {
+    throw new LocalDataCoordinationUnavailableError()
+  }
+
+  close(): void {}
+}
+
 const mountMine = async (pinia: ReturnType<typeof createPinia>) => {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -151,6 +192,7 @@ describe('我的训练', () => {
     await draftRepository.started
     const libraryRepository = new MemoryLibraryRepository()
     await useLibraryStore().load(libraryRepository)
+    useLocalDataClearStore().initialize(new InlineClearCoordinator())
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { wrapper } = await mountMine(pinia)
 
@@ -162,5 +204,23 @@ describe('我的训练', () => {
     await flushPromises()
     expect(libraryRepository.clearCalls).toBe(1)
     expect(draft.items).toHaveLength(0)
+  })
+
+  it('does not claim data was cleared when safe cross-tab coordination is unavailable', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const libraryRepository = new MemoryLibraryRepository()
+    await useLibraryStore().load(libraryRepository)
+    useLocalDataClearStore().initialize(new UnsupportedClearCoordinator())
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    await wrapper.get('button.clear-data').trigger('click')
+    await flushPromises()
+
+    expect(libraryRepository.clearCalls).toBe(0)
+    expect(wrapper.get('.notice').text()).toContain('数据没有清除')
+    expect(wrapper.get('.notice').text()).not.toBe('本机训练数据已清除')
   })
 })

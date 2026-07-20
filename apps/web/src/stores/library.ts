@@ -35,11 +35,26 @@ export const useLibraryStore = defineStore('library', () => {
   const profile = ref<TrainingProfile>(emptyProfile())
   const preferences = ref<Preferences>(defaultPreferences())
   const loaded = ref(false)
+  const persistenceSuspended = ref(false)
   let repository: LibraryRepository | null = null
+  const operations = new Set<Promise<unknown>>()
 
   const requireRepository = (): LibraryRepository => {
     if (!repository) throw new Error('local training library is not loaded')
     return repository
+  }
+
+  const runOperation = <T>(operation: () => Promise<T>): Promise<T> => {
+    if (persistenceSuspended.value) {
+      return Promise.reject(new Error('local data persistence is suspended'))
+    }
+    const pending = operation()
+    operations.add(pending)
+    void pending.then(
+      () => operations.delete(pending),
+      () => operations.delete(pending),
+    )
+    return pending
   }
 
   async function load(nextRepository: LibraryRepository): Promise<void> {
@@ -57,35 +72,55 @@ export const useLibraryStore = defineStore('library', () => {
     loaded.value = true
   }
 
-  async function refreshHistory(): Promise<void> {
+  async function reload(): Promise<void> {
     const currentRepository = requireRepository()
-    ;[plans.value, records.value] = await Promise.all([
+    const [savedPlans, savedRecords, savedProfile, savedPreferences] = await Promise.all([
       currentRepository.listPlans(),
       currentRepository.listRecords(),
+      currentRepository.loadProfile(),
+      currentRepository.loadPreferences(),
     ])
+    plans.value = savedPlans
+    records.value = savedRecords
+    profile.value = savedProfile ?? emptyProfile()
+    preferences.value = savedPreferences ?? defaultPreferences()
+  }
+
+  async function refreshHistory(): Promise<void> {
+    await runOperation(async () => {
+      const currentRepository = requireRepository()
+      ;[plans.value, records.value] = await Promise.all([
+        currentRepository.listPlans(),
+        currentRepository.listRecords(),
+      ])
+    })
   }
 
   async function saveCurrentDraftAs(name: string): Promise<DraftPlan> {
-    const result = await requireRepository().saveCurrentDraftAs(name)
-    plans.value = [result.plan, ...plans.value.filter((plan) => plan.id !== result.plan.id)]
-    return result.draft
+    return runOperation(async () => {
+      const result = await requireRepository().saveCurrentDraftAs(name)
+      plans.value = [result.plan, ...plans.value.filter((plan) => plan.id !== result.plan.id)]
+      return result.draft
+    })
   }
 
   async function openPlan(planId: string): Promise<DraftPlan> {
-    return requireRepository().openPlan(planId)
+    return runOperation(() => requireRepository().openPlan(planId))
   }
 
   async function useQuickExperience(): Promise<DraftPlan> {
-    return requireRepository().replaceCurrentDraft({
+    return runOperation(() => requireRepository().replaceCurrentDraft({
       name: QUICK_EXPERIENCE_PLAN_NAME,
       items: createQuickExperienceDraftItems(),
-    })
+    }))
   }
 
   async function saveProfile(
     input: Omit<TrainingProfile, 'id' | 'updatedAt'>,
   ): Promise<void> {
-    profile.value = await requireRepository().saveProfile(input)
+    await runOperation(async () => {
+      profile.value = await requireRepository().saveProfile(input)
+    })
   }
 
   async function clearProfile(): Promise<void> {
@@ -93,15 +128,31 @@ export const useLibraryStore = defineStore('library', () => {
   }
 
   async function setPetVisible(petVisible: boolean): Promise<void> {
-    preferences.value = await requireRepository().savePreferences({ petVisible })
+    await runOperation(async () => {
+      preferences.value = await requireRepository().savePreferences({ petVisible })
+    })
   }
 
   async function clearAllLocalData(): Promise<void> {
     await requireRepository().clearAllLocalData()
+    resetLocalState(persistenceSuspended.value)
+  }
+
+  async function quiescePersistence(): Promise<void> {
+    persistenceSuspended.value = true
+    await Promise.allSettled([...operations])
+  }
+
+  function resumePersistence(): void {
+    persistenceSuspended.value = false
+  }
+
+  function resetLocalState(keepSuspended = false): void {
     plans.value = []
     records.value = []
     profile.value = emptyProfile()
     preferences.value = defaultPreferences()
+    persistenceSuspended.value = keepSuspended
   }
 
   return {
@@ -110,7 +161,9 @@ export const useLibraryStore = defineStore('library', () => {
     profile,
     preferences,
     loaded,
+    persistenceSuspended,
     load,
+    reload,
     refreshHistory,
     saveCurrentDraftAs,
     openPlan,
@@ -119,5 +172,8 @@ export const useLibraryStore = defineStore('library', () => {
     clearProfile,
     setPetVisible,
     clearAllLocalData,
+    quiescePersistence,
+    resumePersistence,
+    resetLocalState,
   }
 })

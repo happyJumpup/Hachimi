@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     public_media_base_url: str | None = None
     smoke_annotations_path: Path | None = None
     web_static_root: Path | None = None
+    imageio_ffmpeg_exe: Path | None = None
     judge_access_code: SecretStr | None = None
     access_cookie_secret: SecretStr | None = None
     judge_analysis_concurrency: int = Field(default=2, ge=0)

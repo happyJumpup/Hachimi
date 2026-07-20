@@ -150,6 +150,7 @@ def configured_readiness(
     include_web_root: bool = True,
     trusted_proxy_cidrs: str = "172.30.248.2/32",
     judge_access_code: str = "judge-access-code-at-least-16-bytes",
+    include_ffmpeg: bool = True,
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
@@ -187,6 +188,9 @@ def configured_readiness(
     if include_web_root:
         web_static_root.mkdir()
         (web_static_root / "index.html").write_text("<main>ready</main>", encoding="utf-8")
+    ffmpeg_path = tmp_path / "ffmpeg"
+    if include_ffmpeg:
+        ffmpeg_path.write_bytes(b"server-managed-ffmpeg")
     settings = Settings(
         _env_file=None,
         app_env="production",
@@ -200,6 +204,7 @@ def configured_readiness(
         access_cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
         web_static_root=web_static_root,
         trusted_proxy_cidrs=trusted_proxy_cidrs,
+        imageio_ffmpeg_exe=ffmpeg_path if include_ffmpeg else None,
     )
     catalog = SourceCatalog.from_manifest(
         manifest_path=manifest_path,
@@ -233,6 +238,23 @@ async def test_production_ready_requires_a_high_entropy_judge_code(tmp_path: Pat
     assert response.json() == {
         "status": "not_ready",
         "code": "access_configuration_invalid",
+    }
+
+
+@pytest.mark.asyncio
+async def test_production_ready_requires_a_server_managed_ffmpeg(tmp_path: Path) -> None:
+    readiness, _ = configured_readiness(tmp_path, include_ffmpeg=False)
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "code": "media_processor_unavailable",
     }
 
 

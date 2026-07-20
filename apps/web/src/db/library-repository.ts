@@ -7,6 +7,7 @@ import type {
   TrainingProfile,
   TrainingRecord,
 } from '@/domain/training'
+import { localDataEpochFence, type LocalDataEpochFence } from '@/local-data/epoch-fence'
 
 export interface LibraryRepository {
   listPlans(): Promise<SavedPlan[]>
@@ -24,6 +25,7 @@ export interface LibraryRepository {
 interface LibraryRepositoryOptions {
   createId?: () => string
   now?: () => Date
+  writeFence?: LocalDataEpochFence
 }
 
 export const createDexieLibraryRepository = (
@@ -31,6 +33,7 @@ export const createDexieLibraryRepository = (
   {
     createId = () => crypto.randomUUID(),
     now = () => new Date(),
+    writeFence = localDataEpochFence,
   }: LibraryRepositoryOptions = {},
 ): LibraryRepository => ({
   async listPlans() {
@@ -50,6 +53,7 @@ export const createDexieLibraryRepository = (
   },
 
   async saveProfile(profile) {
+    writeFence.assertWritable()
     const saved: TrainingProfile = {
       ...profile,
       id: 'current',
@@ -60,6 +64,7 @@ export const createDexieLibraryRepository = (
   },
 
   async savePreferences(preferences) {
+    writeFence.assertWritable()
     const saved: Preferences = {
       ...preferences,
       id: 'current',
@@ -70,6 +75,7 @@ export const createDexieLibraryRepository = (
   },
 
   async saveCurrentDraftAs(name) {
+    writeFence.assertWritable()
     const normalizedName = name.trim()
     if (!normalizedName) throw new Error('plan name is required')
 
@@ -98,6 +104,7 @@ export const createDexieLibraryRepository = (
   },
 
   async openPlan(planId) {
+    writeFence.assertWritable()
     return db.transaction('rw', db.drafts, db.plans, async () => {
       const plan = await db.plans.get(planId)
       if (!plan) throw new Error('saved plan does not exist')
@@ -114,6 +121,7 @@ export const createDexieLibraryRepository = (
   },
 
   async replaceCurrentDraft(input) {
+    writeFence.assertWritable()
     const draft: DraftPlan = {
       id: 'current',
       name: input.name.trim() || '未命名方案',

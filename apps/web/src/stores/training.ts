@@ -25,6 +25,7 @@ export const useTrainingStore = defineStore('training', () => {
   const validationIssues = ref<PlanValidationIssue[]>([])
   const loaded = ref(false)
   const conflictLocked = ref(false)
+  const persistenceSuspended = ref(false)
   let engine: TrainingEngine | null = null
   let commandQueue: Promise<void> = Promise.resolve()
 
@@ -116,6 +117,7 @@ export const useTrainingStore = defineStore('training', () => {
 
   async function createFromDraft(draft: DraftPlan): Promise<TrainingEngineResult> {
     return serialize(async () => {
+      if (persistenceSuspended.value) return applyResult(unavailable())
       if (!engine) return applyResult(unavailable())
       const snapshot: PlanSnapshot = {
         name: draft.name,
@@ -136,6 +138,7 @@ export const useTrainingStore = defineStore('training', () => {
     ) => Parameters<TrainingEngine['dispatch']>[0],
   ): Promise<TrainingEngineResult> {
     return serialize(async () => {
+      if (persistenceSuspended.value) return applyResult(unavailable())
       if (commandLocked.value) {
         const storageFailure = errorCode.value === 'storage_unavailable'
         return applyResult({
@@ -202,7 +205,16 @@ export const useTrainingStore = defineStore('training', () => {
     expectedRevision: current.revision,
   }))
 
-  function resetLocalState(): void {
+  async function quiescePersistence(): Promise<void> {
+    persistenceSuspended.value = true
+    await commandQueue
+  }
+
+  function resumePersistence(): void {
+    persistenceSuspended.value = false
+  }
+
+  function resetLocalState(keepSuspended = false): void {
     commandQueue = Promise.resolve()
     session.value = null
     lastRecord.value = null
@@ -210,6 +222,7 @@ export const useTrainingStore = defineStore('training', () => {
     errorMessage.value = null
     validationIssues.value = []
     conflictLocked.value = false
+    persistenceSuspended.value = keepSuspended
   }
 
   return {
@@ -220,6 +233,7 @@ export const useTrainingStore = defineStore('training', () => {
     validationIssues,
     loaded,
     conflictLocked,
+    persistenceSuspended,
     hasCurrent,
     currentItem,
     currentProgress,
@@ -234,6 +248,8 @@ export const useTrainingStore = defineStore('training', () => {
     continueRest,
     skipAction,
     endEarly,
+    quiescePersistence,
+    resumePersistence,
     resetLocalState,
   }
 })

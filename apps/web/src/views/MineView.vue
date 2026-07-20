@@ -5,13 +5,16 @@ import { useRouter } from 'vue-router'
 import type { TrainingProfile } from '@/domain/training'
 import ProfileForm from '@/features/experience/ProfileForm.vue'
 import { QUICK_EXPERIENCE_LABEL } from '@/features/quick-experience/fixture'
+import { LocalDataCoordinationUnavailableError } from '@/local-data/clear-coordinator'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
+import { useLocalDataClearStore } from '@/stores/local-data-clear'
 import { useTrainingStore } from '@/stores/training'
 
 const router = useRouter()
 const draft = useDraftStore()
 const library = useLibraryStore()
+const localDataClear = useLocalDataClearStore()
 const training = useTrainingStore()
 const pending = ref(false)
 const notice = ref('')
@@ -82,15 +85,13 @@ const endCurrentTraining = async (): Promise<void> => {
 const clearEverything = async (): Promise<void> => {
   if (!window.confirm('将清除本机上的草稿、方案、未完成训练、记录和训练档案。确定继续吗？')) return
   pending.value = true
-  await draft.quiescePersistence()
   try {
-    await library.clearAllLocalData()
-    draft.resetLocalState()
-    training.resetLocalState()
+    await localDataClear.clearAllLocalData()
     notice.value = '本机训练数据已清除'
-  } catch {
-    draft.resumePersistence()
-    notice.value = '本机训练数据没有清除成功，请重试'
+  } catch (error) {
+    notice.value = error instanceof LocalDataCoordinationUnavailableError
+      ? '当前浏览器无法安全协调其他标签页，数据没有清除'
+      : '本机训练数据没有清除成功，请重试'
   } finally {
     pending.value = false
   }
@@ -189,13 +190,14 @@ onMounted(() => library.refreshHistory())
       <button
         type="button"
         :aria-pressed="library.preferences.petVisible"
+        :disabled="pending || library.persistenceSuspended"
         @click="library.setPetVisible(!library.preferences.petVisible)"
       >
         {{ library.preferences.petVisible ? '已显示' : '已隐藏' }}
       </button>
     </section>
 
-    <button type="button" class="clear-data" @click="clearEverything">清除本机训练数据</button>
+    <button type="button" class="clear-data" :disabled="pending" @click="clearEverything">清除本机训练数据</button>
   </main>
 </template>
 

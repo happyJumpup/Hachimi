@@ -30,6 +30,14 @@ def test_web_static_root_is_an_optional_backend_path(tmp_path: Path) -> None:
     assert with_static.web_static_root == tmp_path / "dist"
 
 
+def test_production_ffmpeg_is_an_explicit_optional_path(tmp_path: Path) -> None:
+    without_ffmpeg = Settings(_env_file=None)
+    with_ffmpeg = Settings(_env_file=None, imageio_ffmpeg_exe=tmp_path / "ffmpeg")
+
+    assert without_ffmpeg.imageio_ffmpeg_exe is None
+    assert with_ffmpeg.imageio_ffmpeg_exe == tmp_path / "ffmpeg"
+
+
 def test_trusted_proxy_cidrs_are_split_without_wildcard_defaults() -> None:
     default = Settings(_env_file=None)
     configured = Settings(

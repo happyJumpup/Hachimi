@@ -21,6 +21,7 @@ services:
       APP_ENV: production
       SOURCE_MANIFEST_PATH: /config/media-manifest.json
       SOURCE_MEDIA_ROOT: /var/lib/hachimi/media
+      IMAGEIO_FFMPEG_EXE: /opt/hachimi/bin/ffmpeg
       SMOKE_ANNOTATIONS_PATH: /config/smoke-annotations.json
       WEB_STATIC_ROOT: /workspace/apps/web/dist
       TRUSTED_PROXY_CIDRS: 172.30.248.2/32
@@ -29,6 +30,7 @@ services:
     volumes:
       - /opt/hachimi/current/media-manifest.json:/config/media-manifest.json:ro
       - /opt/hachimi/current/smoke-annotations.json:/config/smoke-annotations.json:ro
+      - /opt/hachimi/shared/bin/ffmpeg:/opt/hachimi/bin/ffmpeg:ro
       - /var/lib/hachimi/media:/var/lib/hachimi/media:ro
     read_only: true
     tmpfs:

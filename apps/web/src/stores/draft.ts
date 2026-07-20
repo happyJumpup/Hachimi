@@ -96,6 +96,12 @@ export const useDraftStore = defineStore('draft', () => {
     loaded.value = true
   }
 
+  async function reload(): Promise<void> {
+    if (!repository) return
+    plan.value = (await repository.load()) ?? emptyPlan()
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
+  }
+
   function schedulePersist(): void {
     if (!repository || persistenceSuspended) {
       return
@@ -166,14 +172,14 @@ export const useDraftStore = defineStore('draft', () => {
     plan.value = cloneJson(nextPlan)
   }
 
-  function resetLocalState(): void {
+  function resetLocalState(keepSuspended = false): void {
     if (persistTimer) {
       clearTimeout(persistTimer)
       persistTimer = undefined
     }
     plan.value = emptyPlan()
     persistState.value = 'idle'
-    persistenceSuspended = false
+    persistenceSuspended = keepSuspended
   }
 
   function updatePlanName(name: string): void {
@@ -276,6 +282,7 @@ export const useDraftStore = defineStore('draft', () => {
     persistState,
     persistMessage,
     load,
+    reload,
     flushPersist,
     retryPersist,
     quiescePersistence,

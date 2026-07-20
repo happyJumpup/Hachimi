@@ -79,6 +79,9 @@ class ProductionReadiness:
         parsed_media_url = urlparse(self._settings.public_media_base_url)
         if parsed_media_url.scheme != "https" or not parsed_media_url.netloc:
             return "source_manifest_invalid"
+        ffmpeg_executable = self._settings.imageio_ffmpeg_exe
+        if ffmpeg_executable is None or not ffmpeg_executable.is_file():
+            return "media_processor_unavailable"
         if not self._catalog.validate_media(self._duration_probe):
             return "media_cache_invalid"
         try:

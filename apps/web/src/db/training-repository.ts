@@ -1,6 +1,7 @@
 import type { HachimiDatabase } from '@/db/hachimi-database'
 import { database } from '@/db/hachimi-database'
 import type { TrainingProfile, TrainingRecord, TrainingSession } from '@/domain/training'
+import { localDataEpochFence, type LocalDataEpochFence } from '@/local-data/epoch-fence'
 
 export type CreateCurrentResult =
   | { status: 'created'; session: TrainingSession }
@@ -31,6 +32,7 @@ export interface TrainingPersistence {
 
 export const createDexieTrainingRepository = (
   db: HachimiDatabase,
+  writeFence: LocalDataEpochFence = localDataEpochFence,
 ): TrainingPersistence => ({
   async loadCurrent() {
     return (await db.sessions.get('current')) ?? null
@@ -45,6 +47,7 @@ export const createDexieTrainingRepository = (
   },
 
   async createCurrent(session) {
+    writeFence.assertWritable()
     return db.transaction('rw', db.sessions, async () => {
       const existing = await db.sessions.get('current')
       if (existing) return { status: 'exists' as const, session: existing }
@@ -55,6 +58,7 @@ export const createDexieTrainingRepository = (
   },
 
   async commit(change) {
+    writeFence.assertWritable()
     return db.transaction('rw', db.sessions, db.records, async () => {
       const existingRecord = await db.records.get(change.sessionId)
       if (existingRecord) {

@@ -8,6 +8,7 @@ import { createHachimiDatabase } from '@/db/hachimi-database'
 import { createDexieLibraryRepository } from '@/db/library-repository'
 import type { DraftPlan } from '@/domain/types'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
+import { LocalDataEpochFence, type EpochStorage } from '@/local-data/epoch-fence'
 
 const databases: string[] = []
 
@@ -79,6 +80,30 @@ describe('training library repository', () => {
 
     await library.clearAllLocalData()
     expect(await Promise.all(database.tables.map((table) => table.count()))).toEqual([0, 0, 0, 0, 0, 0])
+    database.close()
+  })
+
+  it('rejects a stale tab preference write after a newer clear epoch emptied the tables', async () => {
+    const values = new Map<string, string>()
+    const storage: EpochStorage = {
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => { values.set(key, value) },
+    }
+    const staleFence = new LocalDataEpochFence(storage)
+    const clearingFence = new LocalDataEpochFence(storage)
+    const name = `hachimi-fitness-library-${crypto.randomUUID()}`
+    databases.push(name)
+    const database = createHachimiDatabase(name)
+    const staleTab = createDexieLibraryRepository(database, { writeFence: staleFence })
+    await staleTab.savePreferences({ petVisible: false })
+
+    clearingFence.beginClear('epoch-2')
+    await staleTab.clearAllLocalData()
+
+    await expect(staleTab.savePreferences({ petVisible: true })).rejects.toThrow(
+      /stale local data epoch/,
+    )
+    expect(await database.preferences.count()).toBe(0)
     database.close()
   })
 })
