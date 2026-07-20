@@ -4,6 +4,24 @@
  */
 
 export interface paths {
+    "/api/v1/access/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Access Session */
+        get: operations["get_access_session_api_v1_access_session_get"];
+        put?: never;
+        /** Upgrade Access Session */
+        post: operations["upgrade_access_session_api_v1_access_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analysis-runs": {
         parameters: {
             query?: never;
@@ -73,6 +91,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ready */
+        get: operations["ready_api_v1_ready_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sources": {
         parameters: {
             query?: never;
@@ -111,6 +146,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccessSessionView */
+        AccessSessionView: {
+            /** Can Analyze */
+            can_analyze: boolean;
+            /** Retry After Seconds */
+            retry_after_seconds?: number | null;
+            tier: components["schemas"]["AccessTier"];
+        };
+        /**
+         * AccessTier
+         * @enum {string}
+         */
+        AccessTier: "public" | "judge";
         /**
          * ActionMode
          * @enum {string}
@@ -244,8 +292,15 @@ export interface components {
             id: string;
             /** Media Url */
             media_url: string;
+            /** Origin Url */
+            origin_url?: string | null;
             /** Title */
             title: string;
+        };
+        /** UpgradeAccessSessionRequest */
+        UpgradeAccessSessionRequest: {
+            /** Access Code */
+            access_code: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -269,6 +324,59 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_access_session_api_v1_access_session_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSessionView"];
+                };
+            };
+        };
+    };
+    upgrade_access_session_api_v1_access_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeAccessSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSessionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_run_api_v1_analysis_runs_post: {
         parameters: {
             query?: never;
@@ -417,6 +525,26 @@ export interface operations {
             };
         };
     };
+    ready_api_v1_ready_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     list_sources_api_v1_sources_get: {
         parameters: {
             query?: never;
@@ -453,7 +581,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

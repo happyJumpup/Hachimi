@@ -1,7 +1,12 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
-import type { AnalysisClient, AnalysisEventStream, AnalysisEventStreamFactory } from '@/api/client'
+import {
+  AnalysisApiError,
+  type AnalysisClient,
+  type AnalysisEventStream,
+  type AnalysisEventStreamFactory,
+} from '@/api/client'
 import type {
   AnalysisCandidate,
   AnalysisError,
@@ -33,6 +38,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
   const error = ref<AnalysisError | null>(null)
   const emptyReason = ref<'no_evidence' | null>(null)
   const activeRunId = ref<string | null>(null)
+  const failureKind = ref<'capacity' | 'system' | null>(null)
+  const retryAfterSeconds = ref<number | null>(null)
   let stream: AnalysisEventStream | undefined
   let generation = 0
 
@@ -62,6 +69,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
     warnings.value = []
     error.value = null
     emptyReason.value = null
+    failureKind.value = null
+    retryAfterSeconds.value = null
     status.value = 'queued'
     stage.value = 'queued'
 
@@ -96,9 +105,14 @@ export const useAnalysisStore = defineStore('analysis', () => {
       if (generation !== currentGeneration) return
       status.value = 'failed'
       stage.value = 'failed'
+      const capacityError = caught instanceof AnalysisApiError && caught.status === 429
+      failureKind.value = capacityError ? 'capacity' : 'system'
+      retryAfterSeconds.value = capacityError ? caught.retryAfterSeconds : null
       error.value = {
         code: 'provider_error',
-        message: caught instanceof Error ? caught.message : '动作分析暂时不可用',
+        message: capacityError
+          ? '真实动作分析名额正在使用中'
+          : caught instanceof Error ? caught.message : '动作分析暂时不可用',
         retryable: true,
       }
     }
@@ -127,6 +141,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
         message: '无法读取分析结果，请重试',
         retryable: true,
       }
+      failureKind.value = 'system'
     }
   }
 
@@ -137,6 +152,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
     warnings.value = run.warnings
     error.value = run.error
     emptyReason.value = run.empty_reason
+    failureKind.value = run.status === 'failed' ? 'system' : null
+    retryAfterSeconds.value = null
   }
 
   async function cancel(client: AnalysisClient): Promise<void> {
@@ -149,6 +166,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
     warnings.value = []
     error.value = null
     emptyReason.value = null
+    failureKind.value = null
+    retryAfterSeconds.value = null
     if (runId) {
       try {
         await client.cancelRun(runId)
@@ -173,6 +192,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
     warnings.value = []
     error.value = null
     emptyReason.value = null
+    failureKind.value = null
+    retryAfterSeconds.value = null
   }
 
   return {
@@ -186,6 +207,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
     error,
     emptyReason,
     activeRunId,
+    failureKind,
+    retryAfterSeconds,
     isRunning,
     loadSources,
     start,

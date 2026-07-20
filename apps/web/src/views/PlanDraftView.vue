@@ -3,19 +3,29 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import type { ActionMode, DraftItem } from '@/domain/types'
+import { QUICK_EXPERIENCE_PLAN_NAME } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
+import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
 
 const router = useRouter()
 const draft = useDraftStore()
+const library = useLibraryStore()
 const training = useTrainingStore()
 const manualName = ref('')
 const manualMode = ref<ActionMode>('reps')
 const showManual = ref(false)
 const starting = ref(false)
+const showSaveAs = ref(false)
+const saveAsName = ref('')
+const savingPlan = ref(false)
+const saveMessage = ref('')
 
 const totalSets = computed(() =>
   draft.items.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
+)
+const isQuickExperience = computed(() =>
+  draft.plan.linkedPlanId === null && draft.plan.name === QUICK_EXPERIENCE_PLAN_NAME,
 )
 
 const sourceLabel = (item: DraftItem): string =>
@@ -50,19 +60,45 @@ const startTraining = async (): Promise<void> => {
     starting.value = false
   }
 }
+
+const beginSaveAs = (): void => {
+  saveAsName.value = draft.plan.name === '未命名方案' ? '' : `${draft.plan.name}（副本）`
+  showSaveAs.value = true
+  saveMessage.value = ''
+}
+
+const saveAs = async (): Promise<void> => {
+  if (!saveAsName.value.trim() || savingPlan.value) return
+  savingPlan.value = true
+  try {
+    await draft.flushPersist()
+    draft.adoptPersistedPlan(await library.saveCurrentDraftAs(saveAsName.value))
+    showSaveAs.value = false
+    saveMessage.value = '已另存为新方案'
+  } finally {
+    savingPlan.value = false
+  }
+}
 </script>
 
 <template>
   <main class="plan-page">
     <header class="plan-header">
       <RouterLink to="/" class="back-link">← 继续找动作</RouterLink>
-      <span class="save-state"><i /> 已自动保存到本机</span>
+      <RouterLink to="/mine" class="back-link">我的训练</RouterLink>
     </header>
 
     <section class="plan-hero">
       <div>
-        <p class="eyebrow">CURRENT DRAFT / 01</p>
-        <h1>训练方案草稿</h1>
+        <p class="eyebrow">{{ draft.plan.linkedPlanId ? 'SAVED PLAN' : 'CURRENT DRAFT' }}</p>
+        <h1 class="plan-title-heading" aria-label="训练方案草稿">
+          <input
+            class="plan-title-input"
+            :value="draft.plan.name"
+            aria-label="方案名称"
+            @change="draft.updatePlanName(($event.target as HTMLInputElement).value)"
+          />
+        </h1>
         <p>来自不同视频的动作，在这里排成一次训练。</p>
       </div>
       <div class="plan-metrics">
@@ -70,6 +106,9 @@ const startTraining = async (): Promise<void> => {
         <span><b>{{ totalSets }}</b> 组</span>
       </div>
     </section>
+
+    <p v-if="isQuickExperience" class="quick-notice">快速体验方案 · 这个方案不是 AI 分析结果</p>
+    <p v-if="saveMessage" class="save-message" role="status">{{ saveMessage }}</p>
 
     <section v-if="draft.items.length" class="plan-list" aria-label="动作安排">
       <article v-for="(item, index) in draft.items" :key="item.id" class="plan-card">
@@ -207,6 +246,23 @@ const startTraining = async (): Promise<void> => {
       <RouterLink v-else to="/training">继续训练</RouterLink>
     </section>
 
+    <section v-if="draft.items.length" class="save-as-panel">
+      <button v-if="!showSaveAs" type="button" @click="beginSaveAs">另存为</button>
+      <form v-else @submit.prevent="saveAs">
+        <label>
+          新方案名称
+          <input v-model="saveAsName" aria-label="新方案名称" autofocus maxlength="40" />
+        </label>
+        <div>
+          <button type="button" @click="showSaveAs = false">取消</button>
+          <button type="submit" class="confirm" :disabled="!saveAsName.trim() || savingPlan">
+            {{ savingPlan ? '保存中…' : '保存副本' }}
+          </button>
+        </div>
+      </form>
+      <span class="save-state"><i /> {{ draft.plan.linkedPlanId ? '修改会同步到当前已存方案' : '草稿已自动保存到本机' }}</span>
+    </section>
+
     <section v-if="training.errorCode === 'invalid_plan'" class="plan-error" role="alert">
       <strong>方案还不能开始训练</strong>
       <p v-for="issue in training.validationIssues" :key="`${issue.itemId}-${issue.field}`">
@@ -243,11 +299,16 @@ const startTraining = async (): Promise<void> => {
 
 .plan-hero { align-items: end; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
 .eyebrow { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .15em; }
-.plan-hero h1 { margin: 8px 0 4px; font: 700 clamp(38px, 10vw, 64px)/.95 var(--font-display), var(--font-cn); letter-spacing: -.025em; }
+.plan-title-heading { margin: 8px 0 4px; }
+.plan-title-input { display: block; width: min(100%, 520px); margin: 0; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 clamp(38px, 10vw, 64px)/.95 var(--font-display), var(--font-cn); letter-spacing: -.025em; }
+.plan-title-input:focus { outline: 0; text-decoration: underline; text-decoration-color: rgb(38 235 213 / 28%); text-underline-offset: 6px; }
 .plan-hero p { margin: 0; color: var(--muted); font-size: 12px; }
 .plan-metrics { gap: 16px; flex-shrink: 0; }
 .plan-metrics span { color: var(--muted); font-size: 10px; text-align: right; }
 .plan-metrics b { display: block; color: var(--ink); font: 700 30px/1 var(--font-display); }
+.quick-notice,
+.save-message { margin: 12px 0 0; padding: 9px 11px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 6%); font-size: 10px; }
+.save-message { border-left-color: var(--cyan); color: var(--cyan); background: rgb(38 235 213 / 5%); }
 
 .plan-list { display: grid; gap: 14px; margin-top: 20px; }
 .plan-card { display: grid; grid-template-columns: 52px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1%)); }
@@ -333,6 +394,14 @@ const startTraining = async (): Promise<void> => {
 }
 .start-training-panel a { display: grid; place-items: center; }
 .start-training-panel button:disabled { opacity: .55; }
+.save-as-panel { display: grid; gap: 10px; margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgb(255 255 255 / 2%); }
+.save-as-panel > button { justify-self: start; min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); background: transparent; font-weight: 700; }
+.save-as-panel form { display: grid; gap: 10px; }
+.save-as-panel form label { display: grid; gap: 5px; color: var(--muted); font-size: 10px; }
+.save-as-panel form input { min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); }
+.save-as-panel form div { display: flex; justify-content: flex-end; gap: 8px; }
+.save-as-panel form button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }
+.save-as-panel form .confirm { color: var(--bg); border-color: var(--cyan); background: var(--cyan); font-weight: 800; }
 .plan-error {
   margin-top: 12px;
   padding: 14px;

@@ -58,6 +58,10 @@ class AccessManager:
         judge_access_code: str,
         judge_concurrency: int = 2,
         public_concurrency: int = 0,
+        judge_attempt_limit: int = 10,
+        judge_attempt_window_seconds: int = 3_600,
+        public_attempt_limit: int = 1,
+        public_attempt_window_seconds: int = 600,
         time_source: Callable[[], float] = time.monotonic,
     ) -> None:
         if len(cookie_secret.encode("utf-8")) < 32:
@@ -66,6 +70,13 @@ class AccessManager:
             raise ValueError("judge access code must not be empty")
         if judge_concurrency < 0 or public_concurrency < 0:
             raise ValueError("analysis concurrency must not be negative")
+        if min(
+            judge_attempt_limit,
+            judge_attempt_window_seconds,
+            public_attempt_limit,
+            public_attempt_window_seconds,
+        ) < 1:
+            raise ValueError("analysis attempt policy must be positive")
         self._cookie_secret = cookie_secret.encode("utf-8")
         self._judge_access_code = judge_access_code
         self._capacities = {
@@ -73,6 +84,10 @@ class AccessManager:
             AccessTier.PUBLIC: public_concurrency,
         }
         self._active_counts = {AccessTier.JUDGE: 0, AccessTier.PUBLIC: 0}
+        self._attempt_policies = {
+            AccessTier.JUDGE: (judge_attempt_limit, judge_attempt_window_seconds),
+            AccessTier.PUBLIC: (public_attempt_limit, public_attempt_window_seconds),
+        }
         self._active_by_session: dict[str, AnalysisLease] = {}
         self._session_attempts: dict[tuple[AccessTier, str], list[float]] = {}
         self._ip_attempts: dict[tuple[AccessTier, str], list[float]] = {}
@@ -180,7 +195,7 @@ class AccessManager:
         session_id: str,
         client_ip: str | None,
     ) -> int | None:
-        limit, window_seconds = (1, 600) if tier == AccessTier.PUBLIC else (10, 3600)
+        limit, window_seconds = self._attempt_policies[tier]
         now = self._time_source()
         retry_values = [
             self._retry_for_window(

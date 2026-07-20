@@ -95,4 +95,22 @@ describe('方案草稿 store', () => {
     expect(reloaded.items).toHaveLength(1)
     expect(reloaded.items[0].name).toBe('平板支撑（副本）')
   })
+
+  it('adopts an already-persisted library draft without writing it again', async () => {
+    const repository = new MemoryDraftRepository()
+    const store = useDraftStore()
+    await store.load(repository)
+
+    store.adoptPersistedPlan({
+      id: 'current',
+      name: '已存方案',
+      linkedPlanId: 'plan-a',
+      items: [],
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    })
+
+    expect(store.plan.name).toBe('已存方案')
+    expect(store.plan.linkedPlanId).toBe('plan-a')
+    expect(repository.saveCount).toBe(0)
+  })
 })

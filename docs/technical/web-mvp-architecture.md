@@ -138,7 +138,7 @@ interface AccessSessionView {
 - 分析临时根目录可创建、写入和删除探针文件；
 - 访问 Cookie 密钥、评委码以及并发配置有效，未启用测试 Provider。
 
-失败返回 503 和安全检查码，例如 `source_manifest_invalid`、`media_cache_invalid`、`provider_configuration_invalid`、`temp_storage_unavailable`；响应不能包含本机路径、密钥片段或提供方正文。就绪检查不为每次探针调用真实模型；真实 Provider 可用性由发布 smoke 验证。
+失败返回 503 和安全检查码，例如 `source_manifest_invalid`、`media_cache_invalid`、`provider_configuration_invalid`、`web_static_unavailable`、`proxy_configuration_invalid`、`temp_storage_unavailable`；响应不能包含本机路径、密钥片段或提供方正文。就绪检查不为每次探针调用真实模型；真实 Provider 可用性由发布 smoke 验证。
 
 | 故障 | 外部行为 |
 | --- | --- |

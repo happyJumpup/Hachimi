@@ -10,10 +10,14 @@ import {
 import { onBeforeRouteLeave } from 'vue-router'
 
 import { analysisClient } from '@/api/client'
+import HachimiPet from '@/features/experience/HachimiPet.vue'
+import { derivePetState } from '@/features/experience/pet-state'
 import { useAnalysisStore } from '@/stores/analysis'
+import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
 
 const analysis = useAnalysisStore()
+const library = useLibraryStore()
 const training = useTrainingStore()
 const video = ref<HTMLVideoElement | null>(null)
 const nowMilliseconds = ref(Date.now())
@@ -56,6 +60,11 @@ const statusLabel = computed(() => {
   if (session.value.pauseReason === 'recovered') return '已恢复并暂停'
   return '训练已暂停'
 })
+const petState = computed(() => derivePetState({
+  sessionStatus: session.value?.status ?? null,
+  pauseReason: session.value?.pauseReason ?? null,
+  outcome: training.lastRecord?.outcome ?? null,
+}))
 
 const formatDuration = (seconds: number): string => {
   const safe = Math.max(0, Math.round(seconds))
@@ -179,18 +188,29 @@ onBeforeUnmount(() => {
   <main class="training-page">
     <header class="training-header">
       <RouterLink to="/plan">← 返回方案</RouterLink>
-      <span>{{ statusLabel }}</span>
+      <div>
+        <button type="button" @click="library.setPetVisible(!library.preferences.petVisible)">
+          {{ library.preferences.petVisible ? '隐藏哈肌咪' : '显示哈肌咪' }}
+        </button>
+        <span>{{ statusLabel }}</span>
+      </div>
     </header>
 
     <section v-if="!session && training.lastRecord" class="terminal-card">
       <p class="eyebrow">SESSION SAVED</p>
       <h1>{{ training.lastRecord.outcome === 'completed' ? '训练完成' : '已提前结束' }}</h1>
+      <HachimiPet
+        v-if="training.lastRecord.outcome === 'completed'"
+        state="completed"
+        :visible="library.preferences.petVisible"
+      />
       <div class="terminal-metrics">
         <span><b>{{ training.lastRecord.completedActionCount }}</b> 完成动作</span>
         <span><b>{{ formatDuration(training.lastRecord.trainingDurationSeconds) }}</b> 训练时长</span>
+        <span><b>约 {{ training.lastRecord.calorie.value }}</b> 千卡</span>
       </div>
       <p>实际完成量已保存到本机。</p>
-      <RouterLink class="primary-link" to="/plan">返回方案</RouterLink>
+      <RouterLink class="primary-link" :to="`/result/${training.lastRecord.id}`">查看训练结果</RouterLink>
     </section>
 
     <section v-else-if="!session" class="training-empty">
@@ -231,6 +251,11 @@ onBeforeUnmount(() => {
           <strong>这个动作没有参考视频</strong>
           <small>按自己的节奏完成本组即可</small>
         </div>
+        <HachimiPet
+          class="training-pet"
+          :state="petState"
+          :visible="library.preferences.petVisible"
+        />
         <div class="stage-badge">{{ item.sourceRef ? '演示片段循环' : '自建动作' }}</div>
       </section>
 
@@ -323,8 +348,10 @@ onBeforeUnmount(() => {
 .session-title,
 .terminal-metrics,
 .secondary-actions { display: flex; align-items: center; }
-.training-header { justify-content: space-between; margin-bottom: 22px; }
+.training-header { justify-content: space-between; gap: 12px; margin-bottom: 22px; }
 .training-header a { color: var(--ink); font-size: 11px; font-weight: 700; text-decoration: none; }
+.training-header > div { display: flex; align-items: center; gap: 8px; }
+.training-header button { min-height: 44px; padding: 0 8px; border: 0; color: var(--muted); background: transparent; font-size: 9px; }
 .training-header span { color: var(--cyan); font-size: 10px; letter-spacing: .08em; }
 .eyebrow { margin: 0; color: var(--cyan); font: 600 10px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase; }
 .session-title { justify-content: space-between; gap: 16px; margin-bottom: 16px; }
@@ -339,6 +366,7 @@ onBeforeUnmount(() => {
 .media-placeholder small { font-size: 11px; }
 .no-video-mark { color: var(--coral); font: 700 12px/1 var(--font-display); letter-spacing: .16em; }
 .stage-badge { position: absolute; top: 12px; left: 12px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: rgb(7 9 11 / 78%); font-size: 9px; backdrop-filter: blur(10px); }
+.training-pet { position: absolute; right: 12px; bottom: 38px; z-index: 3; }
 .training-console { position: relative; z-index: 2; margin-top: -28px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 20px; background: rgb(16 20 23 / 96%); box-shadow: 0 20px 50px rgb(0 0 0 / 48%); }
 .status-readout { display: grid; justify-items: center; margin-bottom: 14px; }
 .status-readout span { color: var(--cyan); font-size: 10px; font-weight: 700; }
@@ -362,4 +390,5 @@ onBeforeUnmount(() => {
 .terminal-metrics { justify-content: center; gap: 26px; margin: 24px 0; }
 .terminal-metrics span { color: var(--muted); font-size: 10px; }
 .terminal-metrics b { display: block; color: var(--ink); font: 700 28px/1 var(--font-display); }
+.terminal-card :deep(.hachimi-pet) { margin: 18px auto -8px; }
 </style>

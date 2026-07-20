@@ -7,6 +7,7 @@ import type {
   TrainingRecord,
   TrainingSession,
 } from '@/domain/training'
+import { QUICK_EXPERIENCE_PLAN_NAME } from '@/features/quick-experience/fixture'
 import type {
   PlanValidationIssue,
   TrainingEngine,
@@ -24,6 +25,13 @@ export const useTrainingStore = defineStore('training', () => {
   const validationIssues = ref<PlanValidationIssue[]>([])
   const loaded = ref(false)
   let engine: TrainingEngine | null = null
+  let commandQueue: Promise<void> = Promise.resolve()
+
+  const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = commandQueue.then(operation, operation)
+    commandQueue = result.then(() => undefined, () => undefined)
+    return result
+  }
 
   const hasCurrent = computed(() => session.value !== null)
   const currentItem = computed(() =>
@@ -65,19 +73,25 @@ export const useTrainingStore = defineStore('training', () => {
   }
 
   async function restore(): Promise<TrainingEngineResult> {
-    if (!engine) return applyResult(unavailable())
-    return applyResult(await engine.restore())
+    return serialize(async () => {
+      if (!engine) return applyResult(unavailable())
+      return applyResult(await engine.restore())
+    })
   }
 
   async function createFromDraft(draft: DraftPlan): Promise<TrainingEngineResult> {
-    if (!engine) return applyResult(unavailable())
-    const snapshot: PlanSnapshot = {
-      name: draft.name,
-      source: 'draft',
-      sourcePlanId: draft.linkedPlanId,
-      items: cloneJson(draft.items),
-    }
-    return applyResult(await engine.dispatch({ type: 'session.create', plan: snapshot }))
+    return serialize(async () => {
+      if (!engine) return applyResult(unavailable())
+      const snapshot: PlanSnapshot = {
+        name: draft.name,
+        source: draft.linkedPlanId
+          ? 'saved'
+          : draft.name === QUICK_EXPERIENCE_PLAN_NAME ? 'sample' : 'draft',
+        sourcePlanId: draft.linkedPlanId,
+        items: cloneJson(draft.items),
+      }
+      return applyResult(await engine.dispatch({ type: 'session.create', plan: snapshot }))
+    })
   }
 
   async function runVersioned(
@@ -85,15 +99,17 @@ export const useTrainingStore = defineStore('training', () => {
       current: TrainingSession,
     ) => Parameters<TrainingEngine['dispatch']>[0],
   ): Promise<TrainingEngineResult> {
-    if (!engine || !session.value) {
-      return applyResult({
-        ok: false,
-        code: 'no_active_session',
-        message: '没有可继续的训练',
-        session: null,
-      })
-    }
-    return applyResult(await engine.dispatch(command(session.value)))
+    return serialize(async () => {
+      if (!engine || !session.value) {
+        return applyResult({
+          ok: false,
+          code: 'no_active_session',
+          message: '没有可继续的训练',
+          session: null,
+        })
+      }
+      return applyResult(await engine.dispatch(command(session.value)))
+    })
   }
 
   const startSet = () => runVersioned((current) => ({
@@ -139,6 +155,15 @@ export const useTrainingStore = defineStore('training', () => {
     expectedRevision: current.revision,
   }))
 
+  function resetLocalState(): void {
+    commandQueue = Promise.resolve()
+    session.value = null
+    lastRecord.value = null
+    errorCode.value = null
+    errorMessage.value = null
+    validationIssues.value = []
+  }
+
   return {
     session,
     lastRecord,
@@ -159,5 +184,6 @@ export const useTrainingStore = defineStore('training', () => {
     continueRest,
     skipAction,
     endEarly,
+    resetLocalState,
   }
 })

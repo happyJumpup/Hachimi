@@ -7,9 +7,13 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 
 import App from '@/App.vue'
+import { accessClient } from '@/api/client'
 import { draftRepository } from '@/db/draft-repository'
+import { libraryRepository } from '@/db/library-repository'
 import { router } from '@/router'
 import { useDraftStore } from '@/stores/draft'
+import { useAccessStore } from '@/stores/access'
+import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
 import { trainingEngine } from '@/training/runtime'
 
@@ -20,7 +24,9 @@ app.use(pinia)
 app.use(router)
 
 await Promise.all([
+  useAccessStore(pinia).load(accessClient),
   useDraftStore(pinia).load(draftRepository),
+  useLibraryStore(pinia).load(libraryRepository),
   useTrainingStore(pinia).load(trainingEngine),
 ])
 app.mount('#app')

@@ -1,6 +1,44 @@
 {
   "components": {
     "schemas": {
+      "AccessSessionView": {
+        "additionalProperties": false,
+        "properties": {
+          "can_analyze": {
+            "title": "Can Analyze",
+            "type": "boolean"
+          },
+          "retry_after_seconds": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After Seconds"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/AccessTier"
+          }
+        },
+        "required": [
+          "tier",
+          "can_analyze"
+        ],
+        "title": "AccessSessionView",
+        "type": "object"
+      },
+      "AccessTier": {
+        "enum": [
+          "public",
+          "judge"
+        ],
+        "title": "AccessTier",
+        "type": "string"
+      },
       "ActionMode": {
         "enum": [
           "reps",
@@ -391,6 +429,17 @@
             "title": "Media Url",
             "type": "string"
           },
+          "origin_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Url"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -403,6 +452,21 @@
           "duration_seconds"
         ],
         "title": "SourceSummary",
+        "type": "object"
+      },
+      "UpgradeAccessSessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "access_code": {
+            "minLength": 1,
+            "title": "Access Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_code"
+        ],
+        "title": "UpgradeAccessSessionRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -453,6 +517,60 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/access/session": {
+      "get": {
+        "operationId": "get_access_session_api_v1_access_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Access Session"
+      },
+      "post": {
+        "operationId": "upgrade_access_session_api_v1_access_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeAccessSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upgrade Access Session"
+      }
+    },
     "/api/v1/analysis-runs": {
       "post": {
         "operationId": "create_run_api_v1_analysis_runs_post",
@@ -626,6 +744,22 @@
         "summary": "Health"
       }
     },
+    "/api/v1/ready": {
+      "get": {
+        "operationId": "ready_api_v1_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ready"
+      }
+    },
     "/api/v1/sources": {
       "get": {
         "operationId": "list_sources_api_v1_sources_get",
@@ -664,6 +798,11 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
             "description": "Successful Response"
           },
           "422": {

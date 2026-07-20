@@ -13,7 +13,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: 'http://127.0.0.1:15173',
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off',
@@ -29,24 +29,29 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'uv run --project ../../services/analysis-api uvicorn hakimi_analysis.main:app --host 127.0.0.1 --port 8000',
+      command: 'uv run --project ../../services/analysis-api uvicorn hakimi_analysis.main:app --host 127.0.0.1 --port 18123',
       cwd: webRoot,
-      url: 'http://127.0.0.1:8000/api/v1/health',
-      reuseExistingServer: !process.env.CI,
+      url: 'http://127.0.0.1:18123/api/v1/health',
+      reuseExistingServer: false,
       timeout: 120_000,
       env: {
         ...process.env,
         APP_ENV: 'test',
         ANALYSIS_PROVIDER: 'test',
+        CORS_ORIGINS: 'http://127.0.0.1:15173',
         HAKIMI_DEMO_VIDEO_PATH: sourcePath,
       },
     },
     {
-      command: 'pnpm dev --host 127.0.0.1 --port 5173',
+      command: 'pnpm dev --host 127.0.0.1 --port 15173',
       cwd: webRoot,
-      url: 'http://127.0.0.1:5173',
-      reuseExistingServer: !process.env.CI,
+      url: 'http://127.0.0.1:15173',
+      reuseExistingServer: false,
       timeout: 120_000,
+      env: {
+        ...process.env,
+        VITE_API_TARGET: 'http://127.0.0.1:18123',
+      },
     },
   ],
 })

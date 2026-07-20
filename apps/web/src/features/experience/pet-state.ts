@@ -1,12 +1,11 @@
+import type { PauseReason, SessionStatus, TrainingRecord } from '@/domain/training'
+
 export type PetState = 'idle' | 'training' | 'resting' | 'paused' | 'completed'
-export type TrainingSessionStatus = 'active' | 'resting' | 'ready_to_continue' | 'paused'
-export type PauseReason = 'before_start' | 'user' | 'page_hidden' | 'recovered' | 'between_actions'
-export type TrainingOutcome = 'completed' | 'ended_early'
 
 export interface PetStateInput {
-  sessionStatus: TrainingSessionStatus | null
+  sessionStatus: SessionStatus | null
   pauseReason?: PauseReason | null
-  outcome?: TrainingOutcome | null
+  outcome?: TrainingRecord['outcome'] | null
 }
 
 export function derivePetState(input: PetStateInput): PetState {

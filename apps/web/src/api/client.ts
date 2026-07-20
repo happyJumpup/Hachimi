@@ -1,10 +1,15 @@
-import type { AnalysisRun, SourceSummary } from '@/domain/types'
+import type { AccessSession, AnalysisRun, SourceSummary } from '@/domain/types'
 
 export interface AnalysisClient {
   listSources(): Promise<SourceSummary[]>
   createRun(sourceId: string, triggerSeconds: number): Promise<AnalysisRun>
   getRun(runId: string): Promise<AnalysisRun>
   cancelRun(runId: string): Promise<AnalysisRun>
+}
+
+export interface AccessClient {
+  getSession(): Promise<AccessSession>
+  upgrade(accessCode: string): Promise<AccessSession>
 }
 
 export interface AnalysisEventStream {
@@ -23,6 +28,7 @@ export class AnalysisApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly retryAfterSeconds: number | null = null,
   ) {
     super(message)
   }
@@ -31,6 +37,7 @@ export class AnalysisApiError extends Error {
 const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(path, {
     ...init,
+    credentials: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       ...init?.headers,
@@ -44,7 +51,12 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
     } catch {
       // Keep the user-safe fallback; do not expose provider bodies.
     }
-    throw new AnalysisApiError(message, response.status)
+    const retryAfterHeader = response.headers.get('Retry-After')
+    const parsedRetryAfter = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader)
+    const retryAfterSeconds = Number.isInteger(parsedRetryAfter) && parsedRetryAfter > 0
+      ? parsedRetryAfter
+      : null
+    throw new AnalysisApiError(message, response.status, retryAfterSeconds)
   }
   return response.json() as Promise<T>
 }
@@ -59,6 +71,14 @@ export const analysisClient: AnalysisClient = {
   getRun: (runId) => request<AnalysisRun>(`/api/v1/analysis-runs/${runId}`),
   cancelRun: (runId) =>
     request<AnalysisRun>(`/api/v1/analysis-runs/${runId}`, { method: 'DELETE' }),
+}
+
+export const accessClient: AccessClient = {
+  getSession: () => request<AccessSession>('/api/v1/access/session'),
+  upgrade: (accessCode) => request<AccessSession>('/api/v1/access/session', {
+    method: 'POST',
+    body: JSON.stringify({ access_code: accessCode }),
+  }),
 }
 
 const eventNames = [

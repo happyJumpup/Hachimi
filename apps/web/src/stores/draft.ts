@@ -107,6 +107,29 @@ export const useDraftStore = defineStore('draft', () => {
     await repository.save(cloneJson(plan.value))
   }
 
+  function adoptPersistedPlan(nextPlan: DraftPlan): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    plan.value = cloneJson(nextPlan)
+  }
+
+  function resetLocalState(): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    plan.value = emptyPlan()
+  }
+
+  function updatePlanName(name: string): void {
+    const normalized = name.trim()
+    if (!normalized) return
+    plan.value.name = normalized
+    schedulePersist()
+  }
+
   function addCandidates(
     candidates: AnalysisCandidate[],
     editedSegmentIds: string[] = [],
@@ -199,6 +222,9 @@ export const useDraftStore = defineStore('draft', () => {
     loaded,
     load,
     flushPersist,
+    adoptPersistedPlan,
+    resetLocalState,
+    updatePlanName,
     addCandidates,
     addManualAction,
     updateValue,

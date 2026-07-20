@@ -25,10 +25,21 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   ).toHaveValue('拖拽弯举')
   await expect(page.getByText('规则', { exact: true }).first()).toBeVisible()
 
+  await page.getByRole('link', { name: '继续找动作' }).click()
+  await sourceSelect.selectOption('legacy-arm-workout-alt')
+  await expect(sourceSelect.locator('option:checked')).toContainText('合成测试来源')
+  await page.locator('video').evaluate((video: HTMLVideoElement) => {
+    video.currentTime = 2
+  })
+  await page.getByRole('button', { name: /添加动作/ }).click()
+  await expect(page.getByRole('heading', { name: '找到 1 个动作' })).toBeVisible()
+  await page.locator('.candidate-panel').getByRole('button', { name: '按次数' }).click()
+  await page.getByRole('button', { name: '加入草稿 · 1' }).click()
+  await expect(page.locator('.plan-card')).toHaveCount(2)
+  await expect(page.getByText(/合成测试来源/)).toBeVisible()
+
   await page.reload()
-  await expect(
-    page.locator('.plan-list').getByRole('textbox', { name: '动作名称' }).first(),
-  ).toHaveValue('拖拽弯举')
+  await expect(page.locator('.plan-card')).toHaveCount(2)
 
   await page.getByRole('button', { name: /创建动作/ }).click()
   await page.getByLabel('动作名称').last().fill('平板支撑')
@@ -42,8 +53,10 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await actionCards.nth(0).getByRole('spinbutton').nth(0).fill('1')
   await actionCards.nth(0).getByRole('spinbutton').nth(2).fill('0')
   await actionCards.nth(1).getByRole('spinbutton').nth(0).fill('1')
-  await actionCards.nth(1).getByRole('spinbutton').nth(1).fill('1')
   await actionCards.nth(1).getByRole('spinbutton').nth(2).fill('0')
+  await actionCards.nth(2).getByRole('spinbutton').nth(0).fill('1')
+  await actionCards.nth(2).getByRole('spinbutton').nth(1).fill('1')
+  await actionCards.nth(2).getByRole('spinbutton').nth(2).fill('0')
 
   await page.getByRole('button', { name: '开始训练' }).click()
   await expect(page).toHaveURL(/\/training$/)
@@ -55,6 +68,12 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await page.reload()
   await expect(page.getByText(/已恢复并暂停|训练已暂停/, { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '开始本组' }).click()
+  await page.getByRole('button', { name: '完成本组' }).click()
+
+  await expect(page.getByText('准备继续', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '继续下一组' }).click()
+  await expect(page.getByRole('heading', { name: '拖拽弯举' })).toBeVisible()
+  await expect(page.locator('.media-stage video')).toBeVisible()
   await page.getByRole('button', { name: '完成本组' }).click()
 
   await expect(page.getByText('准备继续', { exact: true }).first()).toBeVisible()

@@ -19,7 +19,7 @@
 - 原始视频、音频、帧、转录、提示词和模型原始响应不得进入 Git、容器镜像、长期日志、CI 产物或发布录屏附件。
 - 历史 GPL 项目只作行为参考，不复制其代码或组件；团队自有视频和哈肌咪素材须逐项登记权属。
 
-`GET /api/v1/health` 只证明进程存活；`GET /api/v1/ready` 才是接入流量的门禁。现有仓库尚未包含容器、Caddy、COS 同步、访问分级和 `/ready` 实现，在 Issue #8 完成并通过本手册验收前，不得宣称生产部署已完成。
+`GET /api/v1/health` 只证明进程存活；`GET /api/v1/ready` 才是接入流量的门禁。仓库已包含容器、Caddy、媒体同步、访问分级和 `/ready` 的可测试实现；在目标服务器完成本手册的真实部署、重启、回滚和云端 smoke 前，仍不得宣称生产部署已完成。
 
 ## 2. 部署事实记录
 
@@ -126,7 +126,7 @@ Caddy 必须：
 
 ### 5.2 同步步骤
 
-Issue #8 必须在应用镜像中提供并由 CI 验证 `hakimi_analysis.sync_media` 命令；服务器不依赖 Node、Python 或 uv 的宿主机安装，也不得用人工拷贝替代哈希校验：
+应用镜像提供 `hakimi_analysis.sync_media` 命令，并由 CI 验证；服务器不依赖 Node、Python 或 uv 的宿主机安装，也不得用人工拷贝替代哈希校验：
 
 ```bash
 export HACHIMI_IMAGE="ghcr.io/happyjumpup/hachimi:<完整-git-sha>"
@@ -194,8 +194,8 @@ docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml pul
 | 检查 | 通过条件 |
 | --- | --- |
 | `/api/v1/health` | 200，固定非敏感状态；不调用云提供方 |
-| `/api/v1/ready` | 200；生产 Provider、两项 API key、来源清单、全部媒体哈希、临时目录和单实例配置均有效 |
-| 未就绪 | 503 + 脱敏错误码；不得把缺密钥伪装成健康 |
+| `/api/v1/ready` | 200；生产 Provider、两项 API key、来源清单、全部媒体哈希、SPA 入口、可信代理、临时目录和单实例配置均有效 |
+| 未就绪 | 503 + 脱敏错误码；可包含 `web_static_unavailable` 或 `proxy_configuration_invalid`，不得暴露路径、地址或密钥，也不得把缺密钥伪装成健康 |
 | SSE | 立即收到真实阶段/心跳，代理不聚合；连接超过常规 60 秒仍持续，终态或断开时运行被清理 |
 | 取消 | DELETE、切换视频或断开 SSE 后不再接纳迟到结果 |
 

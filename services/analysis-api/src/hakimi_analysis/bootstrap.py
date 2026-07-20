@@ -99,16 +99,24 @@ def build_catalog(settings: Settings) -> SourceCatalog:
         return EmptySourceCatalog()
     resolved_path = path.expanduser().resolve()
     duration = probe_duration_sync(resolved_path)
-    return SourceCatalog(
-        [
+    sources = [
+        VideoSource(
+            id="legacy-arm-workout",
+            title="哈基米手臂训练｜本地来源视频",
+            path=resolved_path,
+            duration_seconds=duration,
+        )
+    ]
+    if settings.app_env == "test":
+        sources.append(
             VideoSource(
-                id="legacy-arm-workout",
-                title="哈基米手臂训练｜本地来源视频",
+                id="legacy-arm-workout-alt",
+                title="哈基米手臂训练 B｜合成测试来源",
                 path=resolved_path,
                 duration_seconds=duration,
             )
-        ]
-    )
+        )
+    return SourceCatalog(sources)
 
 
 def build_pipeline(
@@ -177,6 +185,7 @@ def build_default_app() -> FastAPI:
         judge_access_code=judge_access_code,
         judge_concurrency=settings.judge_analysis_concurrency,
         public_concurrency=public_concurrency,
+        public_attempt_limit=100 if settings.app_env == "test" else 1,
     )
     readiness = ProductionReadiness(
         settings=settings,

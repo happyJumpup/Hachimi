@@ -1,7 +1,12 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
 
-import type { AnalysisClient, AnalysisEventStream, AnalysisEventStreamFactory } from '@/api/client'
+import {
+  AnalysisApiError,
+  type AnalysisClient,
+  type AnalysisEventStream,
+  type AnalysisEventStreamFactory,
+} from '@/api/client'
 import type { AnalysisRun, SourceSummary } from '@/domain/types'
 import { useAnalysisStore } from '@/stores/analysis'
 
@@ -143,5 +148,21 @@ describe('动作分析 store', () => {
     expect(client.cancelled).toEqual(['run-created-late'])
     expect(store.status).toBe('cancelled')
     expect(store.candidates).toEqual([])
+  })
+
+  it('reports capacity exhaustion separately from provider failure', async () => {
+    const client = new FakeClient()
+    const events = new FakeEventFactory()
+    const store = useAnalysisStore()
+    client.createRun = async () => {
+      throw new AnalysisApiError('真实动作分析暂时繁忙，请稍后重试', 429, 15)
+    }
+
+    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+
+    expect(store.status).toBe('failed')
+    expect(store.failureKind).toBe('capacity')
+    expect(store.retryAfterSeconds).toBe(15)
+    expect(store.error?.message).toBe('真实动作分析名额正在使用中')
   })
 })

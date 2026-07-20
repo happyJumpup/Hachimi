@@ -1,7 +1,7 @@
-export type PosterOutcome = 'completed' | 'ended_early'
+import type { TrainingRecord } from '@/domain/training'
 
 export interface CompletionPosterInput {
-  outcome: PosterOutcome
+  outcome: TrainingRecord['outcome']
   planName: string
   trainingDurationSeconds: number
   caloriesKcal: number
@@ -205,4 +205,13 @@ export async function deliverCompletionPoster(
 
   runtime.download(file, filename)
   return 'downloaded'
+}
+
+export function downloadCompletionPoster(
+  blob: Blob,
+  planName: string,
+  runtime: PosterDeliveryRuntime = createBrowserDeliveryRuntime(),
+): void {
+  const filename = posterFilename(planName)
+  runtime.download(new File([blob], filename, { type: 'image/png' }), filename)
 }

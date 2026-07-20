@@ -2,13 +2,16 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import AccessStatus from '@/components/AccessStatus.vue'
 import CandidateReviewPanel from '@/components/CandidateReviewPanel.vue'
 import { analysisClient, browserEventStreamFactory } from '@/api/client'
 import type { AnalysisCandidate, Segment } from '@/domain/types'
+import { useAccessStore } from '@/stores/access'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
 
 const router = useRouter()
+const access = useAccessStore()
 const analysis = useAnalysisStore()
 const draft = useDraftStore()
 const video = ref<HTMLVideoElement>()
@@ -67,6 +70,7 @@ const startAnalysis = async (): Promise<void> => {
     client: analysisClient,
     events: browserEventStreamFactory,
   })
+  if (analysis.failureKind === 'capacity') await access.load()
 }
 
 const cancelAnalysis = async (): Promise<void> => {
@@ -107,11 +111,16 @@ const addCandidates = async (
           <small>HACHIMI TRAINING LAB</small>
         </div>
       </div>
-      <RouterLink class="draft-link" to="/plan">
-        <span>方案草稿</span>
-        <b>{{ draft.items.length }}</b>
-      </RouterLink>
+      <nav class="top-actions" aria-label="训练导航">
+        <RouterLink class="mine-link" to="/mine">我的训练</RouterLink>
+        <RouterLink class="draft-link" to="/plan">
+          <span>方案草稿</span>
+          <b>{{ draft.items.length }}</b>
+        </RouterLink>
+      </nav>
     </header>
+
+    <AccessStatus />
 
     <section class="video-stage" :class="{ 'has-review': analysis.status === 'completed' && analysis.candidates.length }">
       <div class="source-rail">
@@ -159,7 +168,15 @@ const addCandidates = async (
           <button type="button" class="cancel-button" @click="cancelAnalysis">取消</button>
         </div>
 
-        <div v-if="analysis.status === 'failed'" class="result-toast error-toast">
+        <div v-if="analysis.status === 'failed' && analysis.failureKind === 'capacity'" class="result-toast busy-toast">
+          <div>
+            <strong>实时 AI 名额正在使用</strong>
+            <span>{{ analysis.retryAfterSeconds ? `约 ${analysis.retryAfterSeconds} 秒后重试` : '稍后刷新名额，或先体验训练闭环' }}</span>
+          </div>
+          <RouterLink to="/mine">快速体验</RouterLink>
+        </div>
+
+        <div v-else-if="analysis.status === 'failed'" class="result-toast error-toast">
           <div>
             <strong>这次没有分析成功</strong>
             <span>{{ analysis.error?.message ?? '请稍后重试' }}</span>
@@ -179,12 +196,13 @@ const addCandidates = async (
           v-if="!analysis.isRunning && !(analysis.status === 'completed' && analysis.candidates.length)"
           type="button"
           class="analyze-button"
+          :disabled="access.loaded && !access.canAnalyze"
           @click="startAnalysis"
         >
           <span class="button-crosshair" aria-hidden="true" />
           <span>
             <small>AT {{ formatTime(currentSeconds) }}</small>
-            添加动作
+            {{ access.loaded && !access.canAnalyze ? '实时 AI 名额暂不可用' : '添加动作' }}
           </span>
           <b>＋</b>
         </button>
@@ -229,6 +247,7 @@ const addCandidates = async (
 
 .topbar,
 .brand-lockup,
+.top-actions,
 .draft-link,
 .source-rail,
 .time-readout,
@@ -246,6 +265,8 @@ const addCandidates = async (
 }
 
 .brand-lockup { gap: 10px; }
+.top-actions { gap: 7px; }
+.mine-link { min-height: 40px; padding: 0 10px; color: var(--muted); font-size: 10px; font-weight: 700; text-decoration: none; }
 
 .brand-mark {
   display: grid;
@@ -377,6 +398,7 @@ const addCandidates = async (
   box-shadow: 0 18px 40px rgb(38 235 213 / 24%);
   text-align: left;
 }
+.analyze-button:disabled { cursor: not-allowed; filter: saturate(.35); opacity: .72; }
 
 .analyze-button span span,
 .analyze-button small { display: block; }
@@ -459,6 +481,8 @@ const addCandidates = async (
 .result-toast a { color: var(--cyan); background: transparent; border: 0; font-weight: 700; text-decoration: none; }
 .error-toast { border-color: rgb(255 111 97 / 35%); }
 .error-toast button { color: var(--coral); }
+.busy-toast { border-color: rgb(255 111 97 / 35%); }
+.busy-toast a { color: var(--coral); }
 
 .stage-empty {
   display: grid;

@@ -1,4 +1,6 @@
-export type ActionMode = 'reps' | 'duration'
+import type { components } from '@/api/schema'
+
+export type ActionMode = components['schemas']['ActionMode']
 export type ValueSource = 'video' | 'rule' | 'user'
 
 export interface Segment {
@@ -28,11 +30,13 @@ export interface AnalysisCandidate {
   needs_confirmation: boolean
 }
 
-export interface SourceSummary {
-  id: string
-  title: string
-  media_url: string
-  duration_seconds: number
+export type SourceSummary = components['schemas']['SourceSummary']
+
+export type AccessSession = Omit<
+  components['schemas']['AccessSessionView'],
+  'retry_after_seconds'
+> & {
+  retry_after_seconds: number | null
 }
 
 export interface AnalysisWarning {
