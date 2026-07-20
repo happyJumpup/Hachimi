@@ -149,9 +149,13 @@ interface TrainingRecord {
 }
 ```
 
+`currentItemIndex`、`currentSetIndex` 均从 0 开始，指向下一组要执行的动作和组。`progress` 按方案动作顺序初始化且一一对应。完成本组时先递增实际完成量并把索引推进到下一组或下一动作，再进入休息；因此 `resting` 和 `ready_to_continue` 中的索引始终指向休息后将要开始的目标。
+
 训练记录不保存档案原值；它保存终态时算出的卡路里值及计算方式，因此用户以后修改档案不会改写历史。`trainingDurationSeconds` 固定为 `activeSeconds + creditedRestSeconds`，不采用开始至结束的墙钟差，避免离开页面或隔夜恢复夸大训练时长。
 
 终态换算统一使用四舍五入到整秒。次数型的 `completedReps` 为目标次数乘已完成组数；时长型的 `completedDurationSeconds` 为目标时长乘已完成组数。未完成一整组的活动时间仍进入 `activeSeconds` 和卡路里，但不伪装为已完成次数或时长。`completedActionCount` 只统计 `status='completed'` 的动作。
+
+`ActionResult.status` 由实际量确定：完成全部目标组为 `completed`；未完成全部目标组但至少完成一组为 `partial`；一组都未完成为 `skipped`。该派生规则同时适用于跳过剩余组和提前结束，不能由视图自行覆盖。
 
 ## 3. 开始训练与结构校验
 

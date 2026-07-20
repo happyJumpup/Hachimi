@@ -39,7 +39,7 @@ flowchart LR
 | 草稿、方案、场次、记录、档案、偏好 | 浏览器 IndexedDB | 同设备持久化，用户可清除 |
 | 完成海报 | 浏览器由训练记录即时生成 | 分享或下载，不作为数据库 Blob 保存 |
 
-编译后的 Vue SPA 与 FastAPI 放入同一个 `app` 镜像，由 FastAPI 提供静态文件和 history fallback；Caddy 只负责 TLS、压缩和反向代理。生产环境不开放 FastAPI 容器端口到公网。
+编译后的 Vue SPA 与 FastAPI 放入同一个 `app` 镜像，由 FastAPI 提供静态文件；只有未知的非 `/api` GET 路径使用 SPA history fallback，未知 API 仍返回 JSON 404。Caddy 只负责 TLS、压缩和反向代理。生产环境不开放 FastAPI 容器端口到公网。
 
 ## 3. 受控来源与 COS/CDN
 
@@ -103,7 +103,7 @@ interface AccessSessionView {
 }
 ```
 
-服务端签发 `hachimi_access` Cookie，内容只有随机会话 ID、层级和过期时间并由 `ACCESS_COOKIE_SECRET` 签名；Cookie 使用 `Secure`、`HttpOnly`、`SameSite=Lax`，有效期十二小时。`JUDGE_ACCESS_CODE` 只在后端以常量时间比较，失败统一返回 401，不暴露是否已配置或具体原因。所有改变状态的请求检查同源 `Origin`；Caddy 是唯一可信代理，应用不接受公网直连伪造的转发地址。
+服务端签发 `hachimi_access` Cookie，内容只有随机会话 ID、层级和过期时间并由 `ACCESS_COOKIE_SECRET` 签名；Cookie 使用 `Secure`、`HttpOnly`、`SameSite=Lax`，有效期十二小时。两个访问接口均返回 `Cache-Control: no-store`。`JUDGE_ACCESS_CODE` 只在后端以常量时间比较，失败统一返回 401，不暴露是否已配置或具体原因。所有改变状态的请求检查同源 `Origin`；Caddy 是唯一可信代理，应用不接受公网直连伪造的转发地址。
 
 ### 4.2 准入规则
 
@@ -125,7 +125,7 @@ interface AccessSessionView {
 - `GET /api/v1/analysis-runs/{run_id}`
 - `DELETE /api/v1/analysis-runs/{run_id}`
 
-创建请求在原有 `source_id`、时间边界校验之前先完成会话限流和容量准入。SSE 继续使用 `{sequence,type,run_id,timestamp,data}` 包络，15 秒发送一次心跳。Caddy 必须关闭响应缓冲和缓存，并把上游读取超时设为大于 180 秒；浏览器 `EventSource` 使用同源 Cookie。断线不恢复原请求，服务端取消运行，用户重试会得到新 `run_id`。
+创建请求先完成请求 Schema、`source_id` 和时间边界校验，再执行会话频率与容量准入，避免无效请求占用槽位。SSE 继续使用 `{sequence,type,run_id,timestamp,data}` 包络，15 秒发送一次心跳。Caddy 必须关闭响应缓冲和缓存，并把上游读取超时设为大于 180 秒；浏览器 `EventSource` 使用同源 Cookie。断线不恢复原请求，服务端取消运行，用户重试会得到新 `run_id`。
 
 单分支成功、空结果、系统失败、临时材料清理和迟到结果丢弃继续遵循 ADR-0006、0008、0009，不因部署层级改变。公开响应和日志不得加入转录、模型原始响应、提示词、置信度或密钥。
 
