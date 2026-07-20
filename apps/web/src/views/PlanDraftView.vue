@@ -419,7 +419,7 @@ const retryOperation = async (): Promise<void> => {
 }
 
 .plan-header { justify-content: space-between; margin-bottom: 34px; }
-.back-link { color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; }
+.back-link { display: inline-grid; min-height: 44px; place-items: center; color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; }
 .save-state { gap: 6px; margin-top: 12px; color: var(--muted); font-size: 10px; }
 .save-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
 .save-state small { color: inherit; font-size: inherit; }
@@ -441,14 +441,14 @@ const retryOperation = async (): Promise<void> => {
 .save-message { border-left-color: var(--cyan); color: var(--cyan); background: rgb(38 235 213 / 5%); }
 
 .plan-list { display: grid; gap: 14px; margin-top: 20px; }
-.plan-card { display: grid; grid-template-columns: 60px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1%)); }
+.plan-card { display: grid; grid-template-columns: 62px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1%)); }
 .plan-card.has-validation-error { border-color: rgb(255 111 97 / 55%); }
 .plan-card.has-validation-error:focus { outline: 2px solid var(--coral); outline-offset: 3px; }
 .order-column { display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 8px; padding: 16px 8px; border-right: 1px solid var(--line); background: rgb(38 235 213 / 3%); }
 .order-column > span { color: var(--cyan); font: 700 22px/1 var(--font-display); }
 .order-column > i { width: 1px; background: linear-gradient(var(--cyan), transparent); }
 .order-column div { display: grid; gap: 8px; }
-.order-column button { width: 44px; min-width: 44px; height: 44px; min-height: 44px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; }
+.order-column button { width: 46px; min-width: 46px; height: 46px; min-height: 46px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; }
 .order-column button:disabled { opacity: .2; }
 
 .card-content { min-width: 0; padding: 16px; }
@@ -465,7 +465,7 @@ const retryOperation = async (): Promise<void> => {
 .parameter-grid label > span { display: flex; justify-content: space-between; color: var(--muted); font-size: 10px; }
 .parameter-grid em,
 .segment-line em { color: var(--cyan); font-size: 9px; font-style: normal; }
-.parameter-grid input { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); font: 600 18px/1 var(--font-display); }
+.parameter-grid input { width: 100%; min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); font: 600 18px/1 var(--font-display); }
 .parameter-grid input:focus { border-color: var(--cyan); outline: none; box-shadow: 0 0 0 3px rgb(38 235 213 / 8%); }
 
 .segment-line { gap: 8px; margin-top: 12px; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 5%); font-size: 10px; }
@@ -486,10 +486,10 @@ const retryOperation = async (): Promise<void> => {
 .manual-form { display: grid; gap: 13px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); }
 .manual-form h2 { margin: 5px 0 0; }
 .manual-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
-.manual-form input { padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); }
+.manual-form input { min-height: 44px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); }
 .manual-form .mode-toggle { margin: 0; justify-self: start; }
 .manual-actions { justify-content: flex-end; gap: 8px; }
-.manual-actions button { padding: 9px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }
+.manual-actions button { min-height: 44px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }
 .manual-actions .confirm { color: var(--bg); border-color: var(--cyan); background: var(--cyan); font-weight: 800; }
 
 .empty-plan { margin-top: 20px; padding: 48px 20px; border: 1px dashed var(--line); border-radius: 18px; text-align: center; }

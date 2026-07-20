@@ -237,7 +237,7 @@ export const useDraftStore = defineStore('draft', () => {
 
   function updateName(itemId: string, name: string): void {
     const item = plan.value.items.find((entry) => entry.id === itemId)
-    if (!item || !name.trim()) {
+    if (!item) {
       return
     }
     item.name = name.trim()

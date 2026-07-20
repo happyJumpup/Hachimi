@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import AccessStatus from '@/components/AccessStatus.vue'
 import CandidateReviewPanel from '@/components/CandidateReviewPanel.vue'
 import { analysisClient, browserEventStreamFactory } from '@/api/client'
-import type { AnalysisCandidate, Segment } from '@/domain/types'
+import type { AnalysisCandidate, DraftPlan, Segment } from '@/domain/types'
 import { useAccessStore } from '@/stores/access'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
@@ -19,6 +19,8 @@ const selectedSourceId = ref('')
 const currentSeconds = ref(0)
 const durationSeconds = ref(0)
 const previewEnd = ref<number | null>(null)
+const addingCandidates = ref(false)
+const addCandidatesError = ref('')
 let resumeAfterCancel = false
 
 const selectedSource = computed(() =>
@@ -44,6 +46,7 @@ watch(selectedSourceId, async (next, previous) => {
     await analysis.cancel(analysisClient)
   }
   analysis.clearResult()
+  addCandidatesError.value = ''
   currentSeconds.value = 0
   previewEnd.value = null
   video.value?.load()
@@ -96,17 +99,33 @@ const addCandidates = async (
   candidates: AnalysisCandidate[],
   editedSegmentIds: string[],
 ): Promise<void> => {
+  if (addingCandidates.value) return
+  addingCandidates.value = true
+  addCandidatesError.value = ''
+  const previousDraft = JSON.parse(JSON.stringify(draft.plan)) as DraftPlan
   const sourceSnapshots = Object.fromEntries(
     analysis.sources.map((source) => [source.id, source]),
   )
-  draft.addCandidates(candidates, editedSegmentIds, sourceSnapshots)
-  await draft.flushPersist()
-  analysis.clearResult()
-  await router.push('/plan')
+  try {
+    draft.addCandidates(candidates, editedSegmentIds, sourceSnapshots)
+    await draft.flushPersist()
+    analysis.clearResult()
+    await router.push('/plan')
+  } catch {
+    try {
+      await draft.reload()
+    } catch {
+      draft.adoptPersistedPlan(previousDraft)
+    }
+    addCandidatesError.value = '没有加入成功，请重试'
+  } finally {
+    addingCandidates.value = false
+  }
 }
 
 const returnToVideo = async (): Promise<void> => {
   previewEnd.value = null
+  addCandidatesError.value = ''
   analysis.clearResult()
   if (resumeAfterCancel) await video.value?.play().catch(() => undefined)
   resumeAfterCancel = false
@@ -232,6 +251,8 @@ const returnToVideo = async (): Promise<void> => {
           v-if="analysis.status === 'completed' && analysis.candidates.length"
           :candidates="analysis.candidates"
           :warnings="analysis.warnings"
+          :submitting="addingCandidates"
+          :submission-error="addCandidatesError"
           @preview="preview"
           @add="addCandidates"
           @close="returnToVideo"
@@ -288,7 +309,7 @@ const returnToVideo = async (): Promise<void> => {
 
 .brand-lockup { gap: 10px; }
 .top-actions { gap: 7px; }
-.mine-link { min-height: 40px; padding: 0 10px; color: var(--muted); font-size: 10px; font-weight: 700; text-decoration: none; }
+.mine-link { display: inline-grid; min-height: 44px; padding: 0 10px; place-items: center; color: var(--muted); font-size: 10px; font-weight: 700; text-decoration: none; }
 
 .brand-mark {
   display: grid;

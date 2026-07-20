@@ -354,7 +354,16 @@ def create_app(
 
     @app.get(
         "/api/v1/analysis-runs/{run_id}/events",
+        response_class=StreamingResponse,
         responses={
+            200: {
+                "description": "分析阶段与终态事件流。",
+                "content": {
+                    "text/event-stream": {
+                        "schema": {"type": "string"},
+                    }
+                },
+            },
             404: {
                 "model": ApiErrorResponse,
                 "description": "分析请求不存在、已过期或不属于当前会话。",

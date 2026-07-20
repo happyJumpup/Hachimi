@@ -23,6 +23,7 @@ const training = useTrainingStore()
 const video = ref<HTMLVideoElement | null>(null)
 const nowMilliseconds = ref(Date.now())
 const commandPending = ref(false)
+const mediaLoadFailed = ref(false)
 let ticker: ReturnType<typeof setInterval> | null = null
 let pausePending = false
 
@@ -34,6 +35,13 @@ const source = computed(() => {
   return sourceId ? analysis.sources.find((entry) => entry.id === sourceId) ?? null : null
 })
 const segment = computed(() => item.value?.segment.value ?? null)
+const hasPlayableVideo = computed(() => Boolean(
+  item.value?.sourceRef && source.value && segment.value && !mediaLoadFailed.value,
+))
+const mediaBadge = computed(() => {
+  if (!item.value?.sourceRef) return '自建动作'
+  return hasPlayableVideo.value ? '演示片段循环' : '参考视频不可用'
+})
 const originalUrl = computed(() => toSafeOriginUrl(item.value?.sourceRef?.originUrl))
 const targetSets = computed(() => item.value?.sets.value ?? 0)
 const actionPosition = computed(() => {
@@ -116,6 +124,11 @@ const keepVideoInSegment = (): void => {
 watch(
   () => [session.value?.status, item.value?.id, training.commandLocked],
   () => { void syncVideo() },
+)
+
+watch(
+  () => item.value?.id,
+  () => { mediaLoadFailed.value = false },
 )
 
 const run = async (operation: () => Promise<unknown>): Promise<void> => {
@@ -265,17 +278,23 @@ onBeforeUnmount(() => {
 
       <section class="media-stage" :class="{ 'no-video': !item.sourceRef }">
         <video
-          v-if="item.sourceRef && source && segment"
+          v-if="hasPlayableVideo"
           ref="video"
-          :src="source.media_url"
+          :src="source?.media_url"
           playsinline
           controls
           preload="metadata"
           @loadedmetadata="syncVideo"
           @timeupdate="keepVideoInSegment"
+          @error="mediaLoadFailed = true"
         />
-        <div v-else-if="item.sourceRef" class="media-placeholder">
+        <div v-else-if="item.sourceRef && analysis.sourcesLoading" class="media-placeholder">
           <span>正在读取参考视频…</span>
+        </div>
+        <div v-else-if="item.sourceRef" class="media-placeholder" role="status">
+          <span class="no-video-mark">VIDEO UNAVAILABLE</span>
+          <strong>参考视频暂时不可用</strong>
+          <small>可以继续训练，不影响进度记录</small>
         </div>
         <div v-else class="media-placeholder">
           <span class="no-video-mark">NO VIDEO</span>
@@ -287,7 +306,7 @@ onBeforeUnmount(() => {
           :state="petState"
           :visible="library.preferences.petVisible"
         />
-        <div class="stage-badge">{{ item.sourceRef ? '演示片段循环' : '自建动作' }}</div>
+        <div class="stage-badge">{{ mediaBadge }}</div>
       </section>
 
       <section class="training-console">

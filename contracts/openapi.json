@@ -74,14 +74,7 @@
             "$ref": "#/components/schemas/CandidateParameters"
           },
           "segment": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Segment"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Segment"
           },
           "source_id": {
             "title": "Source Id",
@@ -842,11 +835,13 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "分析阶段与终态事件流。"
           },
           "404": {
             "content": {

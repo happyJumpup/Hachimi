@@ -97,4 +97,34 @@ describe('CandidateReviewPanel', () => {
     expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('动作名称不能为空')
   })
+
+  it('does not add a video candidate without a preview segment', () => {
+    const wrapper = mount(CandidateReviewPanel, {
+      props: {
+        candidates: [{
+          ...candidates[1],
+          segment: null,
+          parameters: { ...candidates[1].parameters },
+        } as unknown as AnalysisCandidate],
+        warnings: [],
+      },
+    })
+
+    expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('这个候选缺少可预览片段，请重新分析')
+  })
+
+  it('does not add a candidate after its start time is cleared', async () => {
+    const wrapper = mount(CandidateReviewPanel, {
+      props: {
+        candidates: [{ ...candidates[1], parameters: { ...candidates[1].parameters } }],
+        warnings: [],
+      },
+    })
+
+    await wrapper.get('.segment-editor input').setValue('')
+
+    expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('请填写有效时间，且结束时间晚于开始时间')
+  })
 })

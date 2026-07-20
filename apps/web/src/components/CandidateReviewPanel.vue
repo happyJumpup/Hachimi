@@ -3,7 +3,8 @@ import { computed, ref, watch } from 'vue'
 
 import type { ActionMode, AnalysisCandidate, AnalysisWarning, Segment } from '@/domain/types'
 
-interface EditableCandidate extends AnalysisCandidate {
+interface EditableCandidate extends Omit<AnalysisCandidate, 'segment'> {
+  segment: Segment | null
   selected: boolean
   originalSegment: Segment | null
 }
@@ -11,6 +12,8 @@ interface EditableCandidate extends AnalysisCandidate {
 const props = defineProps<{
   candidates: AnalysisCandidate[]
   warnings: AnalysisWarning[]
+  submitting?: boolean
+  submissionError?: string
 }>()
 
 const emit = defineEmits<{
@@ -21,24 +24,38 @@ const emit = defineEmits<{
 
 const editable = ref<EditableCandidate[]>([])
 
-const cloneCandidate = (candidate: AnalysisCandidate): AnalysisCandidate => ({
-  id: candidate.id,
-  name: candidate.name,
-  source_id: candidate.source_id,
-  segment: candidate.segment ? { ...candidate.segment } : null,
-  parameters: { ...candidate.parameters },
-  evidence: candidate.evidence.map((evidence) => ({ ...evidence })),
-  needs_confirmation: candidate.needs_confirmation,
-})
+const toEditableCandidate = (candidate: AnalysisCandidate): EditableCandidate => {
+  const segment = (candidate as AnalysisCandidate & { segment: Segment | null }).segment
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    source_id: candidate.source_id,
+    segment: segment ? { ...segment } : null,
+    parameters: { ...candidate.parameters },
+    evidence: candidate.evidence.map((evidence) => ({ ...evidence })),
+    needs_confirmation: candidate.needs_confirmation,
+    selected: true,
+    originalSegment: segment ? { ...segment } : null,
+  }
+}
+
+const toAnalysisCandidate = (candidate: EditableCandidate): AnalysisCandidate => {
+  if (!candidate.segment) throw new Error('selected video candidate requires a segment')
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    source_id: candidate.source_id,
+    segment: { ...candidate.segment },
+    parameters: { ...candidate.parameters },
+    evidence: candidate.evidence.map((evidence) => ({ ...evidence })),
+    needs_confirmation: candidate.needs_confirmation,
+  }
+}
 
 watch(
   () => props.candidates,
   (candidates) => {
-    editable.value = candidates.map((candidate) => ({
-      ...cloneCandidate(candidate),
-      selected: true,
-      originalSegment: candidate.segment ? { ...candidate.segment } : null,
-    }))
+    editable.value = candidates.map(toEditableCandidate)
   },
   { immediate: true },
 )
@@ -46,14 +63,24 @@ watch(
 const selected = computed(() => editable.value.filter((candidate) => candidate.selected))
 const needsMode = computed(() => selected.value.some((candidate) => candidate.parameters.mode === null))
 const invalidName = computed(() => selected.value.some((candidate) => !candidate.name.trim()))
+const missingSegment = computed(() => selected.value.some((candidate) => candidate.segment === null))
 const invalidSegment = computed(() =>
   selected.value.some(
-    (candidate) =>
-      candidate.segment !== null && candidate.segment.end_seconds <= candidate.segment.start_seconds,
+    (candidate) => candidate.segment !== null && (
+      !Number.isFinite(candidate.segment.start_seconds)
+      || !Number.isFinite(candidate.segment.end_seconds)
+      || candidate.segment.start_seconds < 0
+      || candidate.segment.end_seconds <= candidate.segment.start_seconds
+    ),
   ),
 )
 const canAdd = computed(
-  () => selected.value.length > 0 && !needsMode.value && !invalidName.value && !invalidSegment.value,
+  () => selected.value.length > 0
+    && !needsMode.value
+    && !invalidName.value
+    && !missingSegment.value
+    && !invalidSegment.value
+    && !props.submitting,
 )
 
 const formatTime = (seconds: number): string => {
@@ -77,7 +104,7 @@ const isSegmentEdited = (candidate: EditableCandidate): boolean => {
 
 const submit = (): void => {
   if (!canAdd.value) return
-  const chosen = selected.value.map((candidate) => cloneCandidate(candidate))
+  const chosen = selected.value.map(toAnalysisCandidate)
   emit(
     'add',
     chosen,
@@ -188,12 +215,14 @@ const submit = (): void => {
     </div>
 
     <footer class="panel-footer">
-      <p v-if="needsMode">先为选中的动作选择训练方式</p>
+      <p v-if="props.submissionError" role="alert">{{ props.submissionError }}</p>
+      <p v-else-if="needsMode">先为选中的动作选择训练方式</p>
       <p v-else-if="invalidName">动作名称不能为空</p>
-      <p v-else-if="invalidSegment">结束时间要晚于开始时间</p>
+      <p v-else-if="missingSegment">这个候选缺少可预览片段，请重新分析</p>
+      <p v-else-if="invalidSegment">请填写有效时间，且结束时间晚于开始时间</p>
       <p v-else>参数缺失时会使用可修改的规则默认值</p>
       <button type="button" class="primary-action" :disabled="!canAdd" @click="submit">
-        加入草稿 · {{ selected.length }}
+        {{ props.submitting ? '正在加入草稿…' : `加入草稿 · ${selected.length}` }}
       </button>
     </footer>
   </section>

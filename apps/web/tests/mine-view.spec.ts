@@ -5,7 +5,13 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 
 import type { LibraryRepository } from '@/db/library-repository'
 import type { DraftPlan, DraftRepository } from '@/domain/types'
-import type { Preferences, TrainingProfile, TrainingRecord, TrainingSession } from '@/domain/training'
+import type {
+  Preferences,
+  SavedPlan,
+  TrainingProfile,
+  TrainingRecord,
+  TrainingSession,
+} from '@/domain/training'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
 import {
   LocalDataCoordinationUnavailableError,
@@ -59,10 +65,12 @@ const endedRecord = (): TrainingRecord => ({
 })
 
 class MemoryLibraryRepository implements LibraryRepository {
+  plans: SavedPlan[] = []
   records: TrainingRecord[] = []
+  openCalls: string[] = []
   clearCalls = 0
 
-  async listPlans() { return [] }
+  async listPlans() { return structuredClone(this.plans) }
   async listRecords() { return structuredClone(this.records) }
   async loadProfile() { return null }
   async loadPreferences() { return null }
@@ -73,7 +81,18 @@ class MemoryLibraryRepository implements LibraryRepository {
     return { ...preferences, id: 'current' as const, updatedAt: new Date(0).toISOString() }
   }
   async saveCurrentDraftAs(): Promise<never> { throw new Error('not used') }
-  async openPlan(): Promise<never> { throw new Error('not used') }
+  async openPlan(planId: string): Promise<DraftPlan> {
+    const plan = this.plans.find((candidate) => candidate.id === planId)
+    if (!plan) throw new Error('plan not found')
+    this.openCalls.push(planId)
+    return {
+      id: 'current',
+      name: plan.name,
+      linkedPlanId: plan.id,
+      items: structuredClone(plan.items),
+      updatedAt: new Date(0).toISOString(),
+    }
+  }
   async replaceCurrentDraft(): Promise<never> { throw new Error('not used') }
   async clearAllLocalData() { this.clearCalls += 1 }
 }
@@ -178,6 +197,93 @@ describe('我的训练', () => {
 
     expect(router.currentRoute.value.fullPath).toBe('/result/session-1')
     expect(useLibraryStore().records[0]?.outcome).toBe('ended_early')
+  })
+
+  it('puts an unfinished training before quick experience', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new MemoryLibraryRepository()
+    await useLibraryStore().load(repository)
+    await useTrainingStore().load(new EndEarlyEngine(repository))
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    expect(wrapper.text().indexOf('未完成训练')).toBeLessThan(
+      wrapper.text().indexOf('快速体验方案'),
+    )
+  })
+
+  it('does not replace a non-empty draft with a saved plan without confirmation', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const draft = useDraftStore()
+    await draft.load({
+      load: async () => undefined,
+      save: async () => undefined,
+    })
+    draft.addManualAction({ name: '当前草稿动作', mode: 'reps' })
+    const repository = new MemoryLibraryRepository()
+    repository.plans = [{
+      id: 'plan-a',
+      name: '已存方案',
+      items: createQuickExperienceDraftItems(),
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    }]
+    await useLibraryStore().load(repository)
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { router, wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    await wrapper.findAll('.row-list button')[0]!.trigger('click')
+    await flushPromises()
+
+    expect(confirm).toHaveBeenCalledWith('打开这个方案会替换当前草稿，确定继续吗？')
+    expect(repository.openCalls).toEqual([])
+    expect(draft.items[0]?.name).toBe('当前草稿动作')
+    expect(router.currentRoute.value.path).toBe('/mine')
+
+    confirm.mockReturnValue(true)
+    await wrapper.findAll('.row-list button')[0]!.trigger('click')
+    await flushPromises()
+
+    expect(repository.openCalls).toEqual(['plan-a'])
+    expect(draft.plan.linkedPlanId).toBe('plan-a')
+    expect(router.currentRoute.value.path).toBe('/plan')
+  })
+
+  it('waits for an in-flight draft save before replacing the current draft', async () => {
+    vi.useFakeTimers()
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const draftRepository = new DeferredDraftRepository()
+    const draft = useDraftStore()
+    await draft.load(draftRepository)
+    draft.addManualAction({ name: '即将被替换的动作', mode: 'reps' })
+    await vi.advanceTimersByTimeAsync(301)
+    await draftRepository.started
+    const repository = new MemoryLibraryRepository()
+    repository.plans = [{
+      id: 'plan-a',
+      name: '已存方案',
+      items: createQuickExperienceDraftItems(),
+      createdAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    }]
+    await useLibraryStore().load(repository)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    await wrapper.findAll('.row-list button')[0]!.trigger('click')
+    await Promise.resolve()
+
+    expect(repository.openCalls).toEqual([])
+    draftRepository.releaseSave()
+    await flushPromises()
+
+    expect(repository.openCalls).toEqual(['plan-a'])
+    expect(draft.plan.linkedPlanId).toBe('plan-a')
   })
 
   it('waits for draft persistence to quiesce before clearing all local data', async () => {

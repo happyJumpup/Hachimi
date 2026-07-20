@@ -164,6 +164,29 @@ describe('训练页合同', () => {
     wrapper.unmount()
   })
 
+  it('keeps training usable when the reference video cannot play', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('paused')
+    current.plan.items[0]!.sourceRef = {
+      sourceId: source.id,
+      title: source.title,
+    }
+    current.plan.items[0]!.segment = {
+      value: { start_seconds: 41, end_seconds: 51 },
+      source: 'video',
+    }
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    await wrapper.get('video').trigger('error')
+
+    expect(wrapper.get('.media-placeholder[role="status"]').text()).toContain('参考视频暂时不可用')
+    expect(wrapper.get('button.primary-action').text()).toBe('继续训练')
+    wrapper.unmount()
+  })
+
   it('visibly pauses and stops ticking after another tab wins a revision conflict', async () => {
     vi.useFakeTimers()
     const pinia = createPinia()

@@ -175,7 +175,7 @@ export interface components {
             /** Needs Confirmation */
             needs_confirmation: boolean;
             parameters: components["schemas"]["CandidateParameters"];
-            segment: components["schemas"]["Segment"] | null;
+            segment: components["schemas"]["Segment"];
             /** Source Id */
             source_id: string;
         };
@@ -580,13 +580,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description 分析阶段与终态事件流。 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": string;
                 };
             };
             /** @description 分析请求不存在、已过期或不属于当前会话。 */

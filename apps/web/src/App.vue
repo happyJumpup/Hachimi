@@ -56,7 +56,7 @@ onBeforeUnmount(() => {
         </Transition>
       </RouterView>
       <RouterLink
-        v-if="training.hasCurrent && route.name !== 'training'"
+        v-if="training.hasCurrent && route.name !== 'training' && route.name !== 'plan'"
         class="global-training-entry"
         to="/training"
       >

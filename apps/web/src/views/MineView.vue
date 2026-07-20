@@ -32,23 +32,35 @@ const formatDate = (value: string): string => new Intl.DateTimeFormat('zh-CN', {
 
 const useQuickPlan = async (): Promise<void> => {
   if (pending.value) return
+  if (
+    draft.items.length > 0
+    && !window.confirm('使用快速体验方案会替换当前草稿，确定继续吗？')
+  ) return
   pending.value = true
   try {
+    await draft.quiescePersistence()
     const next = await library.useQuickExperience()
     draft.adoptPersistedPlan(next)
     await router.push('/plan')
   } finally {
+    draft.resumePersistence()
     pending.value = false
   }
 }
 
 const openPlan = async (planId: string): Promise<void> => {
   if (pending.value) return
+  if (
+    draft.items.length > 0
+    && !window.confirm('打开这个方案会替换当前草稿，确定继续吗？')
+  ) return
   pending.value = true
   try {
+    await draft.quiescePersistence()
     draft.adoptPersistedPlan(await library.openPlan(planId))
     await router.push('/plan')
   } finally {
+    draft.resumePersistence()
     pending.value = false
   }
 }
@@ -115,16 +127,6 @@ onMounted(() => library.refreshHistory())
 
     <p v-if="notice" class="notice" role="status">{{ notice }}</p>
 
-    <section class="quick-card">
-      <div>
-        <span>{{ QUICK_EXPERIENCE_LABEL }}</span>
-        <h2>8 分钟手臂唤醒</h2>
-        <p>无需等待分析，先走通训练、Pet 和结果流程。</p>
-      </div>
-      <button type="button" :disabled="pending" @click="useQuickPlan">使用快速体验方案</button>
-      <small>这是产品示例，不是 AI 分析结果。</small>
-    </section>
-
     <section class="dashboard-grid">
       <div v-if="training.hasCurrent" class="dashboard-card active-session">
         <span>未完成训练</span>
@@ -147,6 +149,16 @@ onMounted(() => library.refreshHistory())
         <strong>{{ draft.plan.name }}</strong>
         <small>{{ currentDraftLabel }} · 继续编辑 →</small>
       </RouterLink>
+    </section>
+
+    <section class="quick-card">
+      <div>
+        <span>{{ QUICK_EXPERIENCE_LABEL }}</span>
+        <h2>8 分钟手臂唤醒</h2>
+        <p>无需等待分析，先走通训练、Pet 和结果流程。</p>
+      </div>
+      <button type="button" :disabled="pending" @click="useQuickPlan">使用快速体验方案</button>
+      <small>这是产品示例，不是 AI 分析结果。</small>
     </section>
 
     <section class="mine-section">

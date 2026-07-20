@@ -108,7 +108,7 @@ class AnalysisCandidate(StrictModel):
     id: str
     name: str = Field(min_length=1)
     source_id: str
-    segment: Segment | None
+    segment: Segment
     parameters: CandidateParameters
     evidence: list[EvidenceSpan]
     needs_confirmation: bool

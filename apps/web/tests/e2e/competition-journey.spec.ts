@@ -72,3 +72,23 @@ test('quick plan completes through save-as, rest recovery, Pet, record, and post
   await expect(page.getByText('评委演示方案', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('已完成', { exact: true }).first()).toBeVisible()
 })
+
+test('Pet asset failure does not block early ending and no completion poster is offered', async ({ page }) => {
+  await page.route('**/*.webp', (route) => route.abort())
+  page.on('dialog', (dialog) => dialog.accept())
+
+  await page.goto('/mine')
+  await page.getByRole('button', { name: '使用快速体验方案' }).click()
+  await page.getByRole('button', { name: '开始训练' }).click()
+
+  await expect(page).toHaveURL(/\/training$/)
+  await expect(page.getByText(/训练不受影响/)).toBeVisible()
+  await expect(page.getByRole('button', { name: '开始本组' })).toBeEnabled()
+  await page.getByRole('button', { name: '提前结束' }).click()
+
+  await expect(page.getByRole('heading', { name: '已提前结束' })).toBeVisible()
+  await page.getByRole('link', { name: '查看训练结果' }).click()
+  await expect(page.getByText('提前结束只保留实际记录，不生成完成海报。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '分享海报' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '下载海报' })).toHaveCount(0)
+})

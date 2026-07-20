@@ -128,6 +128,19 @@ describe('方案草稿 store', () => {
     expect(reloaded.items[0].name).toBe('平板支撑（副本）')
   })
 
+  it('persists an empty edited action name so plan validation can block training', async () => {
+    const repository = new MemoryDraftRepository()
+    const store = useDraftStore()
+    await store.load(repository)
+    store.addManualAction({ name: '平板支撑', mode: 'duration' })
+
+    store.updateName(store.items[0]!.id, '   ')
+    await vi.advanceTimersByTimeAsync(301)
+
+    expect(store.items[0]!.name).toBe('')
+    expect(repository.value?.items[0]?.name).toBe('')
+  })
+
   it('does not persist a non-http original-video URL', async () => {
     const store = useDraftStore()
     await store.load(new MemoryDraftRepository())

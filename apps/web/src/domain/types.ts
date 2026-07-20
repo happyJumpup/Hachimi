@@ -24,7 +24,7 @@ export interface AnalysisCandidate {
   id: string
   name: string
   source_id: string
-  segment: Segment | null
+  segment: Segment
   parameters: CandidateParameters
   evidence: EvidenceSpan[]
   needs_confirmation: boolean

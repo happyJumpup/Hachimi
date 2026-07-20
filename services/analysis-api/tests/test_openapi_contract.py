@@ -1,5 +1,24 @@
+import pytest
+from pydantic import ValidationError
+
 from hakimi_analysis.app import create_app
 from hakimi_analysis.bootstrap import UnconfiguredPipeline
+from hakimi_analysis.models import AnalysisCandidate
+
+
+def test_analysis_candidate_requires_an_absolute_segment() -> None:
+    with pytest.raises(ValidationError):
+        AnalysisCandidate.model_validate(
+            {
+                "id": "candidate-1",
+                "name": "拖拽弯举",
+                "source_id": "source-1",
+                "segment": None,
+                "parameters": {},
+                "evidence": [],
+                "needs_confirmation": True,
+            }
+        )
 
 
 def test_openapi_documents_actual_readiness_and_analysis_errors() -> None:
@@ -36,4 +55,7 @@ def test_openapi_documents_actual_readiness_and_analysis_errors() -> None:
         }
     assert event_responses["404"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/ApiErrorResponse"
+    }
+    assert event_responses["200"]["content"] == {
+        "text/event-stream": {"schema": {"type": "string"}}
     }
