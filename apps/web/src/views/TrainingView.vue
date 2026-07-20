@@ -34,6 +34,10 @@ const source = computed(() => {
 })
 const segment = computed(() => item.value?.segment.value ?? null)
 const targetSets = computed(() => item.value?.sets.value ?? 0)
+const actionPosition = computed(() => {
+  if (!session.value) return ''
+  return `动作 ${session.value.currentItemIndex + 1} / ${session.value.plan.items.length}`
+})
 const setNumber = computed(() => Math.min(
   (session.value?.currentSetIndex ?? 0) + 1,
   targetSets.value,
@@ -80,7 +84,7 @@ const syncVideo = async (): Promise<void> => {
   if (element.currentTime < range.start_seconds || element.currentTime >= range.end_seconds) {
     element.currentTime = range.start_seconds
   }
-  if (session.value?.status === 'active') {
+  if (session.value?.status === 'active' && !training.commandLocked) {
     await element.play().catch(() => undefined)
   } else {
     element.pause()
@@ -98,7 +102,7 @@ const keepVideoInSegment = (): void => {
 }
 
 watch(
-  () => [session.value?.status, item.value?.id],
+  () => [session.value?.status, item.value?.id, training.commandLocked],
   () => { void syncVideo() },
 )
 
@@ -121,6 +125,7 @@ const startOrContinue = (): Promise<void> => run(async () => {
 const pause = (): Promise<void> => run(() => training.pause('user'))
 const completeSet = (): Promise<void> => run(() => training.completeSet())
 const continueEarly = (): Promise<void> => run(() => training.continueRest())
+const reloadAfterConflict = (): Promise<void> => run(() => training.restore())
 
 const endEarly = async (): Promise<void> => {
   if (!window.confirm('提前结束后只记录实际完成量，确定结束吗？')) return
@@ -170,7 +175,11 @@ onMounted(async () => {
     const expiredRest = current?.status === 'resting'
       && current.restEndsAt !== null
       && Date.now() >= Date.parse(current.restEndsAt)
-    if (!commandPending.value && (current?.status === 'active' || expiredRest)) {
+    if (
+      !commandPending.value
+      && !training.commandLocked
+      && (current?.status === 'active' || expiredRest)
+    ) {
       void run(() => training.tick())
     }
   }, 1_000)
@@ -223,6 +232,7 @@ onBeforeUnmount(() => {
     <template v-else-if="item">
       <section class="session-title">
         <div>
+          <p class="action-position">{{ actionPosition }}</p>
           <p class="eyebrow">{{ session.plan.name }}</p>
           <h1>{{ item.name }}</h1>
         </div>
@@ -274,16 +284,16 @@ onBeforeUnmount(() => {
           v-if="session.status === 'paused' || session.status === 'ready_to_continue'"
           type="button"
           class="primary-action"
-          :disabled="commandPending"
+          :disabled="commandPending || training.commandLocked"
           @click="startOrContinue"
         >
-          {{ session.status === 'ready_to_continue' ? '继续下一组' : '开始本组' }}
+          {{ session.status === 'ready_to_continue' ? '准备继续' : '开始本组' }}
         </button>
         <button
           v-else-if="session.status === 'resting'"
           type="button"
           class="primary-action rest-action"
-          :disabled="commandPending"
+          :disabled="commandPending || training.commandLocked"
           @click="continueEarly"
         >
           提前继续
@@ -292,7 +302,7 @@ onBeforeUnmount(() => {
           v-else-if="item.mode === 'reps'"
           type="button"
           class="primary-action"
-          :disabled="commandPending"
+          :disabled="commandPending || training.commandLocked"
           @click="completeSet"
         >
           完成本组
@@ -301,7 +311,7 @@ onBeforeUnmount(() => {
           v-else
           type="button"
           class="primary-action pause-action"
-          :disabled="commandPending"
+          :disabled="commandPending || training.commandLocked"
           @click="pause"
         >
           暂停倒计时
@@ -311,7 +321,7 @@ onBeforeUnmount(() => {
           <button
             v-if="session.status === 'active' && item.mode === 'reps'"
             type="button"
-            :disabled="commandPending"
+            :disabled="commandPending || training.commandLocked"
             @click="pause"
           >
             暂停
@@ -319,12 +329,12 @@ onBeforeUnmount(() => {
           <button
             v-if="session.status === 'active'"
             type="button"
-            :disabled="commandPending"
+            :disabled="commandPending || training.commandLocked"
             @click="skipRemaining"
           >
             跳过剩余组
           </button>
-          <button type="button" class="danger" :disabled="commandPending" @click="endEarly">
+          <button type="button" class="danger" :disabled="commandPending || training.commandLocked" @click="endEarly">
             提前结束
           </button>
         </div>
@@ -332,6 +342,14 @@ onBeforeUnmount(() => {
 
       <p v-if="training.errorMessage" class="training-error" role="alert">
         {{ training.errorMessage }}
+        <button
+          v-if="training.commandLocked"
+          type="button"
+          :disabled="commandPending"
+          @click="reloadAfterConflict"
+        >
+          重新加载最新进度
+        </button>
       </p>
     </template>
   </main>
@@ -354,6 +372,7 @@ onBeforeUnmount(() => {
 .training-header button { min-height: 44px; padding: 0 8px; border: 0; color: var(--muted); background: transparent; font-size: 9px; }
 .training-header span { color: var(--cyan); font-size: 10px; letter-spacing: .08em; }
 .eyebrow { margin: 0; color: var(--cyan); font: 600 10px/1 var(--font-display); letter-spacing: .14em; text-transform: uppercase; }
+.action-position { margin: 0 0 7px; color: var(--ink); font-size: 11px; font-weight: 800; }
 .session-title { justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .session-title h1 { margin: 6px 0 0; font: 700 38px/.95 var(--font-display), var(--font-cn); }
 .set-counter { flex: 0 0 auto; color: var(--muted); text-align: right; }
@@ -381,6 +400,7 @@ onBeforeUnmount(() => {
 .secondary-actions button { min-height: 44px; padding: 0 8px; border: 0; color: var(--muted); background: transparent; font-size: 10px; }
 .secondary-actions .danger { color: var(--coral); }
 .training-error { margin: 12px 0 0; padding: 10px; border-radius: 10px; color: var(--coral); background: rgb(255 111 97 / 8%); font-size: 11px; text-align: center; }
+.training-error button { display: block; min-height: 44px; margin: 6px auto 0; padding: 0 12px; border: 1px solid rgb(255 111 97 / 35%); border-radius: 9px; color: var(--coral); background: transparent; font-weight: 700; }
 .terminal-card,
 .training-empty { margin-top: 12vh; padding: 28px; border: 1px solid var(--line-strong); border-radius: 22px; background: var(--surface); text-align: center; }
 .terminal-card h1,

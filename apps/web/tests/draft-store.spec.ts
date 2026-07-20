@@ -18,6 +18,28 @@ class MemoryDraftRepository implements DraftRepository {
   }
 }
 
+class RecoverableDraftRepository extends MemoryDraftRepository {
+  failSave = true
+
+  override async save(plan: DraftPlan): Promise<void> {
+    if (this.failSave) throw new Error('indexeddb unavailable')
+    await super.save(plan)
+  }
+}
+
+class DeferredDraftRepository extends MemoryDraftRepository {
+  saveStarted!: () => void
+  releaseSave!: () => void
+  readonly started = new Promise<void>((resolve) => { this.saveStarted = resolve })
+  private readonly released = new Promise<void>((resolve) => { this.releaseSave = resolve })
+
+  override async save(plan: DraftPlan): Promise<void> {
+    this.saveStarted()
+    await this.released
+    await super.save(plan)
+  }
+}
+
 function candidate(sourceId: string): AnalysisCandidate {
   return {
     id: `${sourceId}-candidate`,
@@ -112,5 +134,57 @@ describe('方案草稿 store', () => {
     expect(store.plan.name).toBe('已存方案')
     expect(store.plan.linkedPlanId).toBe('plan-a')
     expect(repository.saveCount).toBe(0)
+  })
+
+  it('reports an automatic-save failure and lets the user retry it', async () => {
+    const repository = new RecoverableDraftRepository()
+    const store = useDraftStore()
+    await store.load(repository)
+
+    store.addManualAction({ name: '平板支撑', mode: 'duration' })
+    expect(store.persistState).toBe('pending')
+
+    await vi.advanceTimersByTimeAsync(301)
+    expect(store.persistState).toBe('failed')
+    expect(store.persistMessage).toBe('未保存，点击重试')
+
+    repository.failSave = false
+    await store.retryPersist()
+
+    expect(store.persistState).toBe('saved')
+    expect(store.persistMessage).toBe('已自动保存到本机')
+    expect(repository.value?.items[0]?.name).toBe('平板支撑')
+  })
+
+  it('cancels a pending debounce before local data is cleared', async () => {
+    const repository = new MemoryDraftRepository()
+    const store = useDraftStore()
+    await store.load(repository)
+    store.addManualAction({ name: '平板支撑', mode: 'duration' })
+
+    await store.quiescePersistence()
+    await vi.advanceTimersByTimeAsync(301)
+
+    expect(repository.saveCount).toBe(0)
+  })
+
+  it('waits for an in-flight draft write before local data is cleared', async () => {
+    const repository = new DeferredDraftRepository()
+    const store = useDraftStore()
+    await store.load(repository)
+    store.addManualAction({ name: '平板支撑', mode: 'duration' })
+    await vi.advanceTimersByTimeAsync(301)
+    await repository.started
+    let quiesced = false
+
+    const waiting = store.quiescePersistence().then(() => { quiesced = true })
+    await Promise.resolve()
+    expect(quiesced).toBe(false)
+
+    repository.releaseSave()
+    await waiting
+    expect(quiesced).toBe(true)
+    expect(repository.saveCount).toBe(1)
+    expect(store.persistState).toBe('saved')
   })
 })

@@ -56,6 +56,8 @@ const startTraining = async (): Promise<void> => {
     if (result.ok || result.code === 'active_session_exists') {
       await router.push('/training')
     }
+  } catch {
+    // The draft store exposes the recoverable save error beside the primary actions.
   } finally {
     starting.value = false
   }
@@ -75,6 +77,8 @@ const saveAs = async (): Promise<void> => {
     draft.adoptPersistedPlan(await library.saveCurrentDraftAs(saveAsName.value))
     showSaveAs.value = false
     saveMessage.value = '已另存为新方案'
+  } catch {
+    // Keep the form and the visible draft save error available for retry.
   } finally {
     savingPlan.value = false
   }
@@ -260,8 +264,28 @@ const saveAs = async (): Promise<void> => {
           </button>
         </div>
       </form>
-      <span class="save-state"><i /> {{ draft.plan.linkedPlanId ? '修改会同步到当前已存方案' : '草稿已自动保存到本机' }}</span>
     </section>
+
+    <span
+      class="save-state"
+      :class="{ failed: draft.persistState === 'failed' }"
+      :role="draft.persistState === 'failed' ? 'alert' : 'status'"
+      aria-live="polite"
+    >
+      <i />
+      <button
+        v-if="draft.persistState === 'failed'"
+        type="button"
+        aria-label="重试保存草稿"
+        @click="draft.retryPersist"
+      >
+        {{ draft.persistMessage }}
+      </button>
+      <template v-else>
+        {{ draft.persistMessage }}
+        <small v-if="draft.plan.linkedPlanId">· 修改会同步到当前已存方案</small>
+      </template>
+    </span>
 
     <section v-if="training.errorCode === 'invalid_plan'" class="plan-error" role="alert">
       <strong>方案还不能开始训练</strong>
@@ -294,8 +318,12 @@ const saveAs = async (): Promise<void> => {
 
 .plan-header { justify-content: space-between; margin-bottom: 34px; }
 .back-link { color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; }
-.save-state { gap: 6px; color: var(--muted); font-size: 10px; }
+.save-state { gap: 6px; margin-top: 12px; color: var(--muted); font-size: 10px; }
 .save-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
+.save-state small { color: inherit; font-size: inherit; }
+.save-state.failed { color: var(--coral); }
+.save-state.failed i { background: var(--coral); box-shadow: none; }
+.save-state button { min-height: 44px; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; }
 
 .plan-hero { align-items: end; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
 .eyebrow { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .15em; }

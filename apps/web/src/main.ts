@@ -13,6 +13,7 @@ import { libraryRepository } from '@/db/library-repository'
 import { router } from '@/router'
 import { useDraftStore } from '@/stores/draft'
 import { useAccessStore } from '@/stores/access'
+import { useAppBootstrapStore } from '@/stores/app-bootstrap'
 import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
 import { trainingEngine } from '@/training/runtime'
@@ -23,10 +24,13 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(router)
 
-await Promise.all([
-  useAccessStore(pinia).load(accessClient),
-  useDraftStore(pinia).load(draftRepository),
-  useLibraryStore(pinia).load(libraryRepository),
-  useTrainingStore(pinia).load(trainingEngine),
-])
 app.mount('#app')
+
+void useAppBootstrapStore(pinia).initialize(async () => {
+  await Promise.all([
+    useAccessStore(pinia).load(accessClient),
+    useDraftStore(pinia).load(draftRepository),
+    useLibraryStore(pinia).load(libraryRepository),
+    useTrainingStore(pinia).load(trainingEngine),
+  ])
+})

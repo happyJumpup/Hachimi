@@ -24,6 +24,7 @@ export const useTrainingStore = defineStore('training', () => {
   const errorMessage = ref<string | null>(null)
   const validationIssues = ref<PlanValidationIssue[]>([])
   const loaded = ref(false)
+  const conflictLocked = ref(false)
   let engine: TrainingEngine | null = null
   let commandQueue: Promise<void> = Promise.resolve()
 
@@ -40,21 +41,51 @@ export const useTrainingStore = defineStore('training', () => {
   const currentProgress = computed(() =>
     session.value?.progress[session.value.currentItemIndex] ?? null,
   )
+  const commandLocked = computed(() =>
+    conflictLocked.value || errorCode.value === 'storage_unavailable',
+  )
 
   const applyResult = (result: TrainingEngineResult): TrainingEngineResult => {
+    if (result.session) lastRecord.value = null
     if (result.ok) {
       session.value = result.session
       if (result.record) lastRecord.value = result.record
       errorCode.value = null
       errorMessage.value = null
       validationIssues.value = []
+      conflictLocked.value = false
       return result
     }
 
-    if (result.session) session.value = result.session
+    if (result.session) {
+      session.value = result.code === 'session_conflict' && result.session.status === 'active'
+        ? {
+            ...result.session,
+            status: 'paused',
+            pauseReason: 'recovered',
+            activeStartedAt: null,
+          }
+        : result.session
+    }
+    if (
+      result.code === 'storage_unavailable'
+      && session.value?.status === 'active'
+    ) {
+      session.value = {
+        ...session.value,
+        status: 'paused',
+        pauseReason: 'recovered',
+        activeStartedAt: null,
+      }
+    }
     errorCode.value = result.code
-    errorMessage.value = result.message
+    errorMessage.value = result.code === 'session_conflict'
+      ? '训练状态已在其他页面更新，此页面已暂停'
+      : result.code === 'storage_unavailable'
+        ? '本机训练数据暂时无法写入，此页面已暂停'
+        : result.message
     validationIssues.value = result.issues ?? []
+    if (result.code === 'session_conflict') conflictLocked.value = true
     return result
   }
 
@@ -68,6 +99,10 @@ export const useTrainingStore = defineStore('training', () => {
   async function load(nextEngine: TrainingEngine): Promise<TrainingEngineResult> {
     engine = nextEngine
     const result = applyResult(await engine.restore())
+    if (!result.ok && result.code === 'storage_unavailable') {
+      loaded.value = false
+      throw new Error(result.message)
+    }
     loaded.value = true
     return result
   }
@@ -90,7 +125,8 @@ export const useTrainingStore = defineStore('training', () => {
         sourcePlanId: draft.linkedPlanId,
         items: cloneJson(draft.items),
       }
-      return applyResult(await engine.dispatch({ type: 'session.create', plan: snapshot }))
+      const result = await engine.dispatch({ type: 'session.create', plan: snapshot })
+      return applyResult(result)
     })
   }
 
@@ -100,6 +136,17 @@ export const useTrainingStore = defineStore('training', () => {
     ) => Parameters<TrainingEngine['dispatch']>[0],
   ): Promise<TrainingEngineResult> {
     return serialize(async () => {
+      if (commandLocked.value) {
+        const storageFailure = errorCode.value === 'storage_unavailable'
+        return applyResult({
+          ok: false,
+          code: storageFailure ? 'storage_unavailable' : 'session_conflict',
+          message: storageFailure
+            ? '本机训练数据暂时无法写入，此页面已暂停'
+            : '训练状态已在其他页面更新，此页面已暂停',
+          session: session.value,
+        })
+      }
       if (!engine || !session.value) {
         return applyResult({
           ok: false,
@@ -162,6 +209,7 @@ export const useTrainingStore = defineStore('training', () => {
     errorCode.value = null
     errorMessage.value = null
     validationIssues.value = []
+    conflictLocked.value = false
   }
 
   return {
@@ -171,9 +219,11 @@ export const useTrainingStore = defineStore('training', () => {
     errorMessage,
     validationIssues,
     loaded,
+    conflictLocked,
     hasCurrent,
     currentItem,
     currentProgress,
+    commandLocked,
     load,
     restore,
     createFromDraft,

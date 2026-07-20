@@ -12,6 +12,7 @@ import type {
 } from '@/domain/types'
 
 type NumericField = 'sets' | 'reps' | 'durationSeconds' | 'restSeconds' | 'weightKg'
+type PersistState = 'idle' | 'pending' | 'saving' | 'saved' | 'failed'
 
 const emptyPlan = (): DraftPlan => ({
   id: 'current',
@@ -72,39 +73,89 @@ const fromCandidate = (
 export const useDraftStore = defineStore('draft', () => {
   const plan = ref<DraftPlan>(emptyPlan())
   const loaded = ref(false)
+  const persistState = ref<PersistState>('idle')
   let repository: DraftRepository | undefined
   let persistTimer: ReturnType<typeof setTimeout> | undefined
+  let persistInFlight: Promise<void> | null = null
+  let persistenceSuspended = false
 
   const items = computed(() => plan.value.items)
+  const persistMessage = computed(() => {
+    if (persistState.value === 'failed') return '未保存，点击重试'
+    if (persistState.value === 'pending' || persistState.value === 'saving') {
+      return '正在保存到本机…'
+    }
+    if (persistState.value === 'saved') return '已自动保存到本机'
+    return '还没有需要保存的修改'
+  })
 
   async function load(nextRepository: DraftRepository): Promise<void> {
     repository = nextRepository
     plan.value = (await repository.load()) ?? emptyPlan()
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
     loaded.value = true
   }
 
   function schedulePersist(): void {
-    if (!repository) {
+    if (!repository || persistenceSuspended) {
       return
     }
     if (persistTimer) {
       clearTimeout(persistTimer)
     }
+    persistState.value = 'pending'
     persistTimer = setTimeout(() => {
-      void flushPersist()
+      void flushPersist().catch(() => undefined)
     }, 300)
   }
 
   async function flushPersist(): Promise<void> {
-    if (!repository) {
+    if (!repository || persistenceSuspended) {
       return
     }
     if (persistTimer) {
       clearTimeout(persistTimer)
       persistTimer = undefined
     }
+    if (persistInFlight) {
+      await persistInFlight.catch(() => undefined)
+      if (persistenceSuspended) return
+    }
+    persistState.value = 'saving'
     plan.value.updatedAt = new Date().toISOString()
-    await repository.save(cloneJson(plan.value))
+    const operation = repository.save(cloneJson(plan.value))
+    persistInFlight = operation
+    try {
+      await operation
+      persistState.value = 'saved'
+    } catch (error) {
+      persistState.value = 'failed'
+      throw error
+    } finally {
+      if (persistInFlight === operation) persistInFlight = null
+    }
+  }
+
+  async function retryPersist(): Promise<void> {
+    try {
+      await flushPersist()
+    } catch {
+      // The visible failed state remains available for another user retry.
+    }
+  }
+
+  async function quiescePersistence(): Promise<void> {
+    persistenceSuspended = true
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    await persistInFlight?.catch(() => undefined)
+  }
+
+  function resumePersistence(): void {
+    persistenceSuspended = false
+    if (persistState.value === 'pending') schedulePersist()
   }
 
   function adoptPersistedPlan(nextPlan: DraftPlan): void {
@@ -121,6 +172,8 @@ export const useDraftStore = defineStore('draft', () => {
       persistTimer = undefined
     }
     plan.value = emptyPlan()
+    persistState.value = 'idle'
+    persistenceSuspended = false
   }
 
   function updatePlanName(name: string): void {
@@ -220,8 +273,13 @@ export const useDraftStore = defineStore('draft', () => {
     plan,
     items,
     loaded,
+    persistState,
+    persistMessage,
     load,
     flushPersist,
+    retryPersist,
+    quiescePersistence,
+    resumePersistence,
     adoptPersistedPlan,
     resetLocalState,
     updatePlanName,

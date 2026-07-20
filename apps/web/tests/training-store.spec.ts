@@ -67,6 +67,85 @@ class DeferredTickEngine implements TrainingEngine {
   }
 }
 
+class RecordThenSessionEngine implements TrainingEngine {
+  constructor(private readonly activeAlreadyExists = false) {}
+
+  async restore(): Promise<TrainingEngineResult> {
+    return success(activeSession(1))
+  }
+
+  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
+    if (command.type === 'session.end_early') {
+      return {
+        ok: true,
+        session: null,
+        record: {
+          id: 'session-1',
+          outcome: 'ended_early',
+          plan: activeSession(1).plan,
+          actions: [],
+          activeSeconds: 0,
+          creditedRestSeconds: 0,
+          trainingDurationSeconds: 0,
+          completedActionCount: 0,
+          calorie: { value: 0, method: 'generic' },
+          petId: 'hachimi',
+          startedAt: '2026-07-21T00:00:00.000Z',
+          endedAt: '2026-07-21T00:01:00.000Z',
+        },
+        events: [{ type: 'session.ended_early', recordId: 'session-1' }],
+      }
+    }
+    if (command.type === 'session.create') {
+      return this.activeAlreadyExists
+        ? {
+            ok: false,
+            code: 'active_session_exists',
+            message: '已有一场未完成训练',
+            session: activeSession(2),
+          }
+        : success(activeSession(2))
+    }
+    throw new Error('unexpected command')
+  }
+}
+
+class ConflictEngine implements TrainingEngine {
+  commands: TrainingCommand[] = []
+
+  async restore(): Promise<TrainingEngineResult> {
+    return success(activeSession(1))
+  }
+
+  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
+    this.commands.push(command)
+    return {
+      ok: false,
+      code: 'session_conflict',
+      message: '训练状态已在其他页面更新，请继续最新进度',
+      session: activeSession(2),
+    }
+  }
+}
+
+class StorageFailureEngine implements TrainingEngine {
+  commands: TrainingCommand[] = []
+
+  async restore(): Promise<TrainingEngineResult> {
+    return success(activeSession(1))
+  }
+
+  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
+    this.commands.push(command)
+    return {
+      ok: false,
+      code: 'storage_unavailable',
+      message: '本机训练数据暂时无法读取',
+      session: null,
+    }
+  }
+}
+
 describe('training store command serialization', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -121,5 +200,68 @@ describe('training store command serialization', () => {
       type: 'session.create',
       plan: { source: 'saved', sourcePlanId: 'plan-1' },
     })
+  })
+
+  it('clears the previous terminal result when a new session is created', async () => {
+    const store = useTrainingStore()
+    await store.load(new RecordThenSessionEngine())
+    await store.endEarly()
+    expect(store.lastRecord?.outcome).toBe('ended_early')
+
+    await store.createFromDraft({
+      id: 'current',
+      name: '下一场训练',
+      linkedPlanId: null,
+      items: [],
+      updatedAt: '2026-07-21T00:02:00.000Z',
+    })
+
+    expect(store.lastRecord).toBeNull()
+  })
+
+  it('clears the previous result when another tab already created the current session', async () => {
+    const store = useTrainingStore()
+    await store.load(new RecordThenSessionEngine(true))
+    await store.endEarly()
+    expect(store.lastRecord?.outcome).toBe('ended_early')
+
+    await store.createFromDraft({
+      id: 'current',
+      name: '下一场训练',
+      linkedPlanId: null,
+      items: [],
+      updatedAt: '2026-07-21T00:02:00.000Z',
+    })
+
+    expect(store.session?.sessionId).toBe('session-1')
+    expect(store.lastRecord).toBeNull()
+  })
+
+  it('locks the losing tab after a session conflict instead of dispatching another tick', async () => {
+    const engine = new ConflictEngine()
+    const store = useTrainingStore()
+    await store.load(engine)
+
+    await store.completeSet()
+    expect(store.conflictLocked).toBe(true)
+    expect(store.session?.status).toBe('paused')
+
+    await store.tick()
+    expect(engine.commands).toHaveLength(1)
+    expect(store.errorMessage).toContain('其他页面')
+  })
+
+  it('locally pauses and stops ticking when an active-session write fails', async () => {
+    const engine = new StorageFailureEngine()
+    const store = useTrainingStore()
+    await store.load(engine)
+
+    await store.tick()
+    expect(store.commandLocked).toBe(true)
+    expect(store.session?.status).toBe('paused')
+    expect(store.errorMessage).toContain('此页面已暂停')
+
+    await store.tick()
+    expect(engine.commands).toHaveLength(1)
   })
 })

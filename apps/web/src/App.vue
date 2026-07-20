@@ -2,9 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
+import { useAppBootstrapStore } from '@/stores/app-bootstrap'
 import { useTrainingStore } from '@/stores/training'
 
 const route = useRoute()
+const bootstrap = useAppBootstrapStore()
 const training = useTrainingStore()
 const nowMilliseconds = ref(Date.now())
 let ticker: ReturnType<typeof setInterval> | null = null
@@ -34,19 +36,34 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="app-shell">
-    <RouterView v-slot="{ Component }">
-      <Transition name="page" mode="out-in">
-        <component :is="Component" />
-      </Transition>
-    </RouterView>
-    <RouterLink
-      v-if="training.hasCurrent && route.name !== 'training'"
-      class="global-training-entry"
-      to="/training"
-    >
-      <span>{{ continueLabel }}</span>
-      <b>→</b>
-    </RouterLink>
+    <main v-if="bootstrap.status !== 'ready'" class="bootstrap-shell">
+      <template v-if="bootstrap.status === 'loading'">
+        <p class="bootstrap-eyebrow">LOCAL TRAINING DATA</p>
+        <h1>正在读取本机训练数据</h1>
+        <p>草稿、训练进度和记录只保存在当前设备。</p>
+      </template>
+      <section v-else role="alert" aria-live="assertive">
+        <p class="bootstrap-eyebrow">READ FAILED</p>
+        <h1>本机训练数据暂时无法读取</h1>
+        <p>数据没有被清除，可以重新尝试读取。</p>
+        <button type="button" @click="bootstrap.retry">重试读取</button>
+      </section>
+    </main>
+    <template v-else>
+      <RouterView v-slot="{ Component }">
+        <Transition name="page" mode="out-in">
+          <component :is="Component" />
+        </Transition>
+      </RouterView>
+      <RouterLink
+        v-if="training.hasCurrent && route.name !== 'training'"
+        class="global-training-entry"
+        to="/training"
+      >
+        <span>{{ continueLabel }}</span>
+        <b>→</b>
+      </RouterLink>
+    </template>
   </div>
 </template>
 
@@ -54,6 +71,21 @@ onBeforeUnmount(() => {
 .app-shell {
   min-height: 100dvh;
 }
+
+.bootstrap-shell {
+  display: grid;
+  min-height: 100dvh;
+  place-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
+.bootstrap-shell section { display: grid; gap: 10px; }
+.bootstrap-eyebrow { margin: 0; color: var(--cyan); font: 600 10px/1 var(--font-display); letter-spacing: .14em; }
+.bootstrap-shell h1 { max-width: 340px; margin: 0; font: 700 42px/.95 var(--font-display), var(--font-cn); }
+.bootstrap-shell p:not(.bootstrap-eyebrow) { max-width: 320px; margin: 0 auto; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.bootstrap-shell button { min-height: 46px; margin-top: 8px; border: 0; border-radius: 12px; color: var(--bg); background: var(--cyan); font-weight: 800; }
 
 .global-training-entry {
   position: fixed;

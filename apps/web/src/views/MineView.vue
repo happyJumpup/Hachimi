@@ -62,12 +62,38 @@ const clearProfile = async (): Promise<void> => {
   notice.value = '训练档案已清除'
 }
 
+const endCurrentTraining = async (): Promise<void> => {
+  if (pending.value || !training.hasCurrent) return
+  if (!window.confirm('提前结束后只记录实际完成量，确定结束吗？')) return
+  pending.value = true
+  try {
+    const result = await training.endEarly()
+    if (!result.ok || !result.record) {
+      notice.value = training.errorMessage ?? '这次没有结束成功，请重试'
+      return
+    }
+    await library.refreshHistory()
+    await router.push(`/result/${result.record.id}`)
+  } finally {
+    pending.value = false
+  }
+}
+
 const clearEverything = async (): Promise<void> => {
   if (!window.confirm('将清除本机上的草稿、方案、未完成训练、记录和训练档案。确定继续吗？')) return
-  await library.clearAllLocalData()
-  draft.resetLocalState()
-  training.resetLocalState()
-  notice.value = '本机训练数据已清除'
+  pending.value = true
+  await draft.quiescePersistence()
+  try {
+    await library.clearAllLocalData()
+    draft.resetLocalState()
+    training.resetLocalState()
+    notice.value = '本机训练数据已清除'
+  } catch {
+    draft.resumePersistence()
+    notice.value = '本机训练数据没有清除成功，请重试'
+  } finally {
+    pending.value = false
+  }
 }
 
 onMounted(() => library.refreshHistory())
@@ -99,15 +125,26 @@ onMounted(() => library.refreshHistory())
     </section>
 
     <section class="dashboard-grid">
+      <div v-if="training.hasCurrent" class="dashboard-card active-session">
+        <span>未完成训练</span>
+        <strong>{{ training.session?.plan.name }}</strong>
+        <small>上次进度已保存在本机</small>
+        <div class="session-actions">
+          <RouterLink to="/training">继续训练</RouterLink>
+          <button
+            type="button"
+            aria-label="结束未完成训练"
+            :disabled="pending"
+            @click="endCurrentTraining"
+          >
+            结束训练
+          </button>
+        </div>
+      </div>
       <RouterLink class="dashboard-card" to="/plan">
         <span>当前草稿</span>
         <strong>{{ draft.plan.name }}</strong>
         <small>{{ currentDraftLabel }} · 继续编辑 →</small>
-      </RouterLink>
-      <RouterLink v-if="training.hasCurrent" class="dashboard-card active-session" to="/training">
-        <span>未完成训练</span>
-        <strong>{{ training.session?.plan.name }}</strong>
-        <small>继续当前进度 →</small>
       </RouterLink>
     </section>
 
@@ -192,6 +229,12 @@ onMounted(() => library.refreshHistory())
 .dashboard-card small { color: var(--muted); font-size: 9px; }
 .dashboard-card strong { font-size: 16px; }
 .active-session { border-color: rgb(38 235 213 / 35%); }
+.session-actions { display: flex; gap: 8px; margin-top: 8px; }
+.session-actions a,
+.session-actions button { display: grid; min-height: 44px; place-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 10px; font-weight: 700; text-decoration: none; }
+.session-actions a { color: var(--bg); border-color: var(--cyan); background: var(--cyan); }
+.session-actions button { color: var(--coral); background: transparent; }
+.session-actions button:disabled { opacity: .5; }
 .mine-section { margin-top: 24px; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: rgb(255 255 255 / 2%); }
 .section-heading { justify-content: space-between; }
 .section-heading h2,
