@@ -108,3 +108,25 @@ def test_manifest_rejects_media_paths_outside_the_controlled_root(tmp_path: Path
             public_media_base_url="https://media.example.com/hachimi/",
             duration_probe=lambda path: 75 if path.name == "arm-02.mp4" else 96.4,
         )
+
+
+def test_manifest_rejects_origin_url_userinfo_without_echoing_credentials(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_manifest(tmp_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["sources"][0]["origin_url"] = (
+        "https://demo-user:demo-password@www.douyin.com/video/123"
+    )
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SourceManifestError) as failure:
+        SourceCatalog.from_manifest(
+            manifest_path=manifest_path,
+            media_root=tmp_path / "media",
+            public_media_base_url="https://media.example.com/hachimi/",
+            duration_probe=lambda path: 75 if path.name == "arm-02.mp4" else 96.4,
+        )
+
+    assert "demo-user" not in str(failure.value)
+    assert "demo-password" not in str(failure.value)

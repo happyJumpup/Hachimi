@@ -123,7 +123,12 @@ class SourceCatalog:
                 raise SourceManifestError("source media duration does not match")
             if item.origin_url is not None:
                 parsed_origin = urlparse(item.origin_url)
-                if parsed_origin.scheme not in {"http", "https"} or not parsed_origin.netloc:
+                if (
+                    parsed_origin.scheme not in {"http", "https"}
+                    or not parsed_origin.netloc
+                    or parsed_origin.username is not None
+                    or parsed_origin.password is not None
+                ):
                     raise SourceManifestError("source origin url is invalid")
             encoded_path = quote(relative_path.as_posix(), safe="/")
             public_url = f"{public_media_base_url.rstrip('/')}/{encoded_path}"
