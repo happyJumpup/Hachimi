@@ -62,6 +62,32 @@ describe('视频动作分析页', () => {
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
+  it('invalidates a pending create request when the page leaves before a run id exists', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const analysis = useAnalysisStore()
+    analysis.status = 'queued'
+    analysis.activeRunId = null
+    vi.spyOn(analysis, 'loadSources').mockResolvedValue()
+    const cancel = vi.spyOn(analysis, 'cancel').mockResolvedValue()
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: VideoAnalysisView },
+        { path: '/plan', component: { template: '<p>plan</p>' } },
+        { path: '/mine', component: { template: '<p>mine</p>' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(VideoAnalysisView, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+
+    wrapper.unmount()
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
   it('returns from candidate review to the video so another time point can be chosen', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

@@ -50,7 +50,9 @@ watch(selectedSourceId, async (next, previous) => {
 })
 
 onBeforeUnmount(() => {
-  if (analysis.activeRunId) void analysis.cancel(analysisClient)
+  // Always advance the store generation. If createRun is still in flight,
+  // start() will cancel the returned run before it can open an SSE stream.
+  void analysis.cancel(analysisClient)
 })
 
 const syncTime = (): void => {
