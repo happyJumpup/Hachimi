@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import SecretStr, ValidationError
 
@@ -18,6 +20,28 @@ def test_analysis_capacity_has_safe_production_defaults() -> None:
     settings = Settings(_env_file=None)
     assert settings.judge_analysis_concurrency == 2
     assert settings.public_analysis_concurrency == 0
+
+
+def test_web_static_root_is_an_optional_backend_path(tmp_path: Path) -> None:
+    without_static = Settings(_env_file=None)
+    with_static = Settings(_env_file=None, web_static_root=tmp_path / "dist")
+
+    assert without_static.web_static_root is None
+    assert with_static.web_static_root == tmp_path / "dist"
+
+
+def test_trusted_proxy_cidrs_are_split_without_wildcard_defaults() -> None:
+    default = Settings(_env_file=None)
+    configured = Settings(
+        _env_file=None,
+        trusted_proxy_cidrs="172.30.248.2/32, 2001:db8::1/128",
+    )
+
+    assert default.trusted_proxy_cidr_list == []
+    assert configured.trusted_proxy_cidr_list == ["172.30.248.2/32", "2001:db8::1/128"]
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, trusted_proxy_cidrs="0.0.0.0/0")
 
 
 def test_secret_values_are_redacted_from_settings_repr() -> None:

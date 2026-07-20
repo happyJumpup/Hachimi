@@ -1,7 +1,8 @@
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -27,10 +28,12 @@ class Settings(BaseSettings):
     source_manifest_path: Path | None = None
     source_media_root: Path | None = None
     public_media_base_url: str | None = None
+    web_static_root: Path | None = None
     judge_access_code: SecretStr | None = None
     access_cookie_secret: SecretStr | None = None
     judge_analysis_concurrency: int = Field(default=2, ge=0)
     public_analysis_concurrency: int = Field(default=0, ge=0)
+    trusted_proxy_cidrs: str = ""
     cors_origins: str = "http://localhost:5173"
     run_ttl_seconds: int = Field(default=600, ge=1)
     run_timeout_seconds: int = Field(default=180, ge=1)
@@ -41,6 +44,20 @@ class Settings(BaseSettings):
             raise ValueError("test analysis provider is allowed only when APP_ENV=test")
         return self
 
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def validate_trusted_proxy_cidrs(cls, value: str) -> str:
+        for entry in (item.strip() for item in value.split(",")):
+            if entry:
+                network = ip_network(entry, strict=False)
+                if network.prefixlen == 0:
+                    raise ValueError("trusted proxy CIDR must not trust every address")
+        return value
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def trusted_proxy_cidr_list(self) -> list[str]:
+        return [entry.strip() for entry in self.trusted_proxy_cidrs.split(",") if entry.strip()]

@@ -3,6 +3,8 @@ import json
 import secrets
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
+from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, Response, status
@@ -62,6 +64,8 @@ def create_app(
     access: AccessManager | None = None,
     app_env: str = "test",
     readiness: ReadinessProbe | None = None,
+    web_static_root: Path | None = None,
+    trusted_proxy_cidrs: list[str] | None = None,
 ) -> FastAPI:
     source_catalog = catalog or EmptySourceCatalog()
     resolved_pipeline: AnalysisPipeline
@@ -84,6 +88,9 @@ def create_app(
         "provider_configuration_invalid" if app_env == "production" else None
     )
     resolved_cors_origins = cors_origins or ["http://localhost:5173"]
+    trusted_proxy_networks = tuple(
+        ip_network(value, strict=False) for value in trusted_proxy_cidrs or []
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -212,7 +219,7 @@ def create_app(
             lease = await access_manager.reserve(
                 session,
                 source_id=source.id,
-                client_ip=request.client.host if request.client is not None else "unknown",
+                client_ip=_client_ip(request, trusted_proxy_networks),
             )
         except AdmissionDenied as error:
             raise HTTPException(
@@ -272,7 +279,35 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    resolved_web_root = _usable_web_root(web_static_root)
+    if resolved_web_root is not None:
+        index_path = resolved_web_root / "index.html"
+
+        @app.get("/{spa_path:path}", include_in_schema=False)
+        async def web_spa(spa_path: str) -> FileResponse:
+            if spa_path == "api" or spa_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="页面不存在")
+            candidate = (resolved_web_root / spa_path).resolve()
+            try:
+                candidate.relative_to(resolved_web_root)
+            except ValueError as error:
+                raise HTTPException(status_code=404, detail="页面不存在") from error
+            if candidate.is_file():
+                return FileResponse(candidate)
+            if spa_path == "assets" or spa_path.startswith("assets/"):
+                raise HTTPException(status_code=404, detail="页面不存在")
+            return FileResponse(index_path)
+
     return app
+
+
+def _usable_web_root(web_static_root: Path | None) -> Path | None:
+    if web_static_root is None:
+        return None
+    resolved = web_static_root.expanduser().resolve()
+    if not resolved.is_dir() or not (resolved / "index.html").is_file():
+        return None
+    return resolved
 
 
 def _set_access_cookie(
@@ -308,3 +343,28 @@ def _require_same_origin(
     is_allowed_development_origin = app_env != "production" and origin in development_origins
     if not is_same_host and not is_allowed_development_origin:
         raise HTTPException(status_code=403, detail="请求来源无效")
+
+
+def _client_ip(
+    request: Request,
+    trusted_proxy_networks: tuple[IPv4Network | IPv6Network, ...],
+) -> str:
+    peer_value = request.client.host if request.client is not None else ""
+    try:
+        peer_ip = ip_address(peer_value)
+    except ValueError:
+        return "unknown"
+    if not any(peer_ip in network for network in trusted_proxy_networks):
+        return str(peer_ip)
+
+    forwarded_for = request.headers.get("x-forwarded-for")
+    real_ip = request.headers.get("x-real-ip")
+    forwarded_values = [value.strip() for value in (forwarded_for, real_ip) if value]
+    if not forwarded_values or any("," in value for value in forwarded_values):
+        raise HTTPException(status_code=400, detail="客户端地址无效")
+    if len(set(forwarded_values)) != 1:
+        raise HTTPException(status_code=400, detail="客户端地址无效")
+    try:
+        return str(ip_address(forwarded_values[0]))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="客户端地址无效") from error

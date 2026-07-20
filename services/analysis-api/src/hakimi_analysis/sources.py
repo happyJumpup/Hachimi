@@ -37,7 +37,7 @@ class SourceManifestError(ValueError):
 class _ManifestSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(min_length=1)
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
     title: str = Field(min_length=1)
     media_path: str = Field(min_length=1)
     duration_seconds: float = Field(gt=0)
@@ -50,6 +50,22 @@ class _SourceManifest(BaseModel):
 
     version: int
     sources: list[_ManifestSource] = Field(min_length=1)
+
+
+def load_source_manifest(manifest_path: Path) -> _SourceManifest:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest = _SourceManifest.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValidationError) as error:
+        raise SourceManifestError("source manifest is invalid") from error
+    if manifest.version != 1:
+        raise SourceManifestError("source manifest version is unsupported")
+    if len({source.id for source in manifest.sources}) != len(manifest.sources):
+        raise SourceManifestError("source ids must be unique")
+    media_paths = [_safe_media_path(source.media_path).as_posix() for source in manifest.sources]
+    if len({path.casefold() for path in media_paths}) != len(media_paths):
+        raise SourceManifestError("source media paths must be unique")
+    return manifest
 
 
 class SourceCatalog:
@@ -68,13 +84,7 @@ class SourceCatalog:
         public_media_base_url: str,
         duration_probe: Callable[[Path], float],
     ) -> "SourceCatalog":
-        try:
-            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest = _SourceManifest.model_validate(payload)
-        except (OSError, json.JSONDecodeError, ValidationError) as error:
-            raise SourceManifestError("source manifest is invalid") from error
-        if manifest.version != 1:
-            raise SourceManifestError("source manifest version is unsupported")
+        manifest = load_source_manifest(manifest_path)
 
         parsed_base = urlparse(public_media_base_url)
         if (

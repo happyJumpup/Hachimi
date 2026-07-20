@@ -194,4 +194,6 @@ def build_default_app() -> FastAPI:
         access=access,
         app_env=settings.app_env,
         readiness=readiness,
+        web_static_root=settings.web_static_root,
+        trusted_proxy_cidrs=settings.trusted_proxy_cidr_list,
     )

@@ -92,6 +92,15 @@ class ProductionReadiness:
             or len(self._settings.access_cookie_secret.get_secret_value().encode("utf-8")) < 32
         ):
             return "access_configuration_invalid"
+        web_static_root = self._settings.web_static_root
+        if (
+            web_static_root is None
+            or not web_static_root.is_dir()
+            or not (web_static_root / "index.html").is_file()
+        ):
+            return "web_static_unavailable"
+        if not self._settings.trusted_proxy_cidr_list:
+            return "proxy_configuration_invalid"
         if not self._temp_storage_available():
             return "temp_storage_unavailable"
         return None

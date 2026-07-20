@@ -144,7 +144,12 @@ async def test_access_session_does_not_claim_analysis_is_available_while_not_rea
     }
 
 
-def configured_readiness(tmp_path: Path) -> tuple[ProductionReadiness, Path]:
+def configured_readiness(
+    tmp_path: Path,
+    *,
+    include_web_root: bool = True,
+    trusted_proxy_cidrs: str = "172.30.248.2/32",
+) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
     media_root.mkdir()
     media_path = media_root / "arm-01.mp4"
@@ -177,6 +182,10 @@ def configured_readiness(tmp_path: Path) -> tuple[ProductionReadiness, Path]:
         skill_dir = skills_root / skill_name
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("version: 1.0.0\n", encoding="utf-8")
+    web_static_root = tmp_path / "web-dist"
+    if include_web_root:
+        web_static_root.mkdir()
+        (web_static_root / "index.html").write_text("<main>ready</main>", encoding="utf-8")
     settings = Settings(
         _env_file=None,
         app_env="production",
@@ -188,6 +197,8 @@ def configured_readiness(tmp_path: Path) -> tuple[ProductionReadiness, Path]:
         public_media_base_url="https://media.example.com/hachimi/",
         judge_access_code="judge-code",
         access_cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
+        web_static_root=web_static_root,
+        trusted_proxy_cidrs=trusted_proxy_cidrs,
     )
     catalog = SourceCatalog.from_manifest(
         manifest_path=manifest_path,
@@ -205,6 +216,37 @@ def configured_readiness(tmp_path: Path) -> tuple[ProductionReadiness, Path]:
         ),
         media_path,
     )
+
+
+@pytest.mark.asyncio
+async def test_production_ready_requires_built_web_entrypoint(tmp_path: Path) -> None:
+    readiness, _ = configured_readiness(tmp_path, include_web_root=False)
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "code": "web_static_unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_production_ready_requires_trusted_proxy_configuration(tmp_path: Path) -> None:
+    readiness, _ = configured_readiness(tmp_path, trusted_proxy_cidrs="")
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "code": "proxy_configuration_invalid",
+    }
 
 
 @pytest.mark.asyncio

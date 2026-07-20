@@ -19,6 +19,7 @@
     "test:e2e": "pnpm e2e:prepare && pnpm --filter @hachimi/web test:e2e",
     "e2e:prepare": "uv run --project services/analysis-api python services/analysis-api/scripts/create_synthetic_video.py",
     "smoke:cloud": "uv run --project services/analysis-api python services/analysis-api/scripts/smoke_cloud_analysis.py",
+    "media:sync": "uv run --project services/analysis-api python -m hakimi_analysis.sync_media",
     "build": "pnpm --filter @hachimi/web build",
     "api:export": "uv run --project services/analysis-api python services/analysis-api/scripts/export_openapi.py",
     "api:generate": "pnpm api:export && pnpm --filter @hachimi/web api:generate",
