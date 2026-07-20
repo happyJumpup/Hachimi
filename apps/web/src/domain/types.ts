@@ -93,6 +93,8 @@ export interface DraftItem {
 
 export interface DraftPlan {
   id: 'current'
+  name: string
+  linkedPlanId: string | null
   items: DraftItem[]
   updatedAt: string
 }

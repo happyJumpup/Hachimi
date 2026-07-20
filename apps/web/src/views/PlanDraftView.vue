@@ -1,13 +1,18 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import type { ActionMode, DraftItem } from '@/domain/types'
 import { useDraftStore } from '@/stores/draft'
+import { useTrainingStore } from '@/stores/training'
 
+const router = useRouter()
 const draft = useDraftStore()
+const training = useTrainingStore()
 const manualName = ref('')
 const manualMode = ref<ActionMode>('reps')
 const showManual = ref(false)
+const starting = ref(false)
 
 const totalSets = computed(() =>
   draft.items.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
@@ -30,6 +35,20 @@ const addManual = (): void => {
   draft.addManualAction({ name: manualName.value, mode: manualMode.value })
   manualName.value = ''
   showManual.value = false
+}
+
+const startTraining = async (): Promise<void> => {
+  if (!draft.items.length || starting.value) return
+  starting.value = true
+  try {
+    await draft.flushPersist()
+    const result = await training.createFromDraft(draft.plan)
+    if (result.ok || result.code === 'active_session_exists') {
+      await router.push('/training')
+    }
+  } finally {
+    starting.value = false
+  }
 }
 </script>
 
@@ -171,6 +190,29 @@ const addManual = (): void => {
         </div>
       </form>
     </section>
+
+    <section v-if="draft.items.length" class="start-training-panel">
+      <div>
+        <strong>{{ training.hasCurrent ? '已有未完成训练' : '方案结构会在开始前检查' }}</strong>
+        <small>{{ training.hasCurrent ? '继续当前进度，不会覆盖原场次' : '不评价动作顺序或训练效果' }}</small>
+      </div>
+      <button
+        v-if="!training.hasCurrent"
+        type="button"
+        :disabled="starting"
+        @click="startTraining"
+      >
+        {{ starting ? '正在准备…' : '开始训练' }}
+      </button>
+      <RouterLink v-else to="/training">继续训练</RouterLink>
+    </section>
+
+    <section v-if="training.errorCode === 'invalid_plan'" class="plan-error" role="alert">
+      <strong>方案还不能开始训练</strong>
+      <p v-for="issue in training.validationIssues" :key="`${issue.itemId}-${issue.field}`">
+        {{ issue.message }}
+      </p>
+    </section>
   </main>
 </template>
 
@@ -256,6 +298,50 @@ const addManual = (): void => {
 .empty-plan > span { color: var(--coral); font: 700 24px/1 var(--font-display); }
 .empty-plan h2 { margin: 8px 0; }
 .empty-plan p { max-width: 320px; margin: auto; color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+.start-training-panel {
+  position: sticky;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 20px;
+  padding: 14px;
+  border: 1px solid rgb(38 235 213 / 28%);
+  border-radius: 16px;
+  background: rgb(16 20 23 / 94%);
+  box-shadow: 0 16px 40px rgb(0 0 0 / 38%);
+  backdrop-filter: blur(18px);
+}
+.start-training-panel strong,
+.start-training-panel small { display: block; }
+.start-training-panel strong { font-size: 12px; }
+.start-training-panel small { margin-top: 3px; color: var(--muted); font-size: 9px; }
+.start-training-panel button,
+.start-training-panel a {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 12px;
+  color: var(--bg);
+  background: var(--cyan);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.start-training-panel a { display: grid; place-items: center; }
+.start-training-panel button:disabled { opacity: .55; }
+.plan-error {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgb(255 111 97 / 30%);
+  border-radius: 14px;
+  color: var(--coral);
+  background: rgb(255 111 97 / 6%);
+}
+.plan-error p { margin: 5px 0 0; font-size: 11px; }
 
 @media (min-width: 720px) {
   .plan-page { padding-inline: 28px; }

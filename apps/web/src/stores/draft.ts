@@ -15,6 +15,8 @@ type NumericField = 'sets' | 'reps' | 'durationSeconds' | 'restSeconds' | 'weigh
 
 const emptyPlan = (): DraftPlan => ({
   id: 'current',
+  name: '未命名方案',
+  linkedPlanId: null,
   items: [],
   updatedAt: new Date(0).toISOString(),
 })

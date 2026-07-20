@@ -1,19 +1,5 @@
-import Dexie, { type Table } from 'dexie'
-
-import type { DraftPlan, DraftRepository } from '@/domain/types'
-
-class HachimiDatabase extends Dexie {
-  drafts!: Table<DraftPlan, string>
-
-  constructor() {
-    super('hachimi-fitness')
-    this.version(1).stores({
-      drafts: '&id, updatedAt',
-    })
-  }
-}
-
-const database = new HachimiDatabase()
+import type { DraftRepository } from '@/domain/types'
+import { database } from '@/db/hachimi-database'
 
 export const draftRepository: DraftRepository = {
   async load() {

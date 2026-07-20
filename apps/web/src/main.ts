@@ -10,6 +10,8 @@ import App from '@/App.vue'
 import { draftRepository } from '@/db/draft-repository'
 import { router } from '@/router'
 import { useDraftStore } from '@/stores/draft'
+import { useTrainingStore } from '@/stores/training'
+import { trainingEngine } from '@/training/runtime'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -17,5 +19,8 @@ const pinia = createPinia()
 app.use(pinia)
 app.use(router)
 
-await useDraftStore(pinia).load(draftRepository)
+await Promise.all([
+  useDraftStore(pinia).load(draftRepository),
+  useTrainingStore(pinia).load(trainingEngine),
+])
 app.mount('#app')
