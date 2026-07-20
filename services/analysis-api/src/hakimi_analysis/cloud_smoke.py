@@ -2,8 +2,10 @@ import asyncio
 import json
 import re
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Annotated, Any, Protocol
+from urllib.parse import unquote
 
 import httpx
 from pydantic import (
@@ -207,8 +209,20 @@ class EventRecorder:
 class ProviderAudit:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
-        self.ark_uploads = 0
-        self.ark_deletes = 0
+        self.ark_uploaded_file_ids: list[str] = []
+        self.ark_deleted_file_ids: list[str] = []
+
+    @property
+    def ark_uploads(self) -> int:
+        return len(self.ark_uploaded_file_ids)
+
+    @property
+    def ark_deletes(self) -> int:
+        return len(self.ark_deleted_file_ids)
+
+    @property
+    def ark_cleanup_matches(self) -> bool:
+        return Counter(self.ark_uploaded_file_ids) == Counter(self.ark_deleted_file_ids)
 
     async def observe(self, response: httpx.Response) -> None:
         await response.aread()
@@ -218,9 +232,15 @@ class ProviderAudit:
             return
         path = response.request.url.path.rstrip("/")
         if response.request.method == "POST" and path.endswith("/files"):
-            self.ark_uploads += 1
+            try:
+                payload = response.json()
+                file_id = payload.get("id") if isinstance(payload, dict) else None
+            except ValueError:
+                file_id = None
+            if file_id is not None:
+                self.ark_uploaded_file_ids.append(str(file_id))
         elif response.request.method == "DELETE" and "/files/" in path:
-            self.ark_deletes += 1
+            self.ark_deleted_file_ids.append(unquote(path.rsplit("/", 1)[-1]))
 
     def request_ids(self) -> list[dict[str, str]]:
         result: list[dict[str, str]] = []
@@ -279,7 +299,7 @@ def _matching_candidate(
         normalized = _normalized_name(candidate.name)
         if (
             not any(
-                accepted in normalized or normalized in accepted
+                accepted in normalized
                 for accepted in accepted_names
                 if accepted and normalized
             )
@@ -371,7 +391,7 @@ async def _run_checkpoint(
         after_entries = _temporary_entries(temp_root)
         if after_entries != before_entries:
             caught = SmokeFailure("local_temp_cleanup_failed")
-        elif audit.ark_uploads != audit.ark_deletes or (
+        elif not audit.ark_cleanup_matches or (
             caught is None and audit.ark_uploads < 1
         ):
             caught = SmokeFailure(

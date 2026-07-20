@@ -155,6 +155,7 @@ class SuccessfulCloudPipeline:
         temp_root: Path | None = None,
         leave_temp_file: bool = False,
         fail_before_upload: bool = False,
+        delete_file_id_override: str | None = None,
     ) -> None:
         self._http_client = http_client
         self._calls = calls
@@ -165,6 +166,7 @@ class SuccessfulCloudPipeline:
         self._temp_root = temp_root
         self._leave_temp_file = leave_temp_file
         self._fail_before_upload = fail_before_upload
+        self._delete_file_id_override = delete_file_id_override
 
     async def analyze(
         self,
@@ -188,8 +190,9 @@ class SuccessfulCloudPipeline:
             raise PipelineFailure("provider_error", "private provider detail", retryable=True)
         upload = await self._http_client.post("https://ark.example/api/v3/files")
         if self._delete_upload:
+            file_id = self._delete_file_id_override or str(upload.json()["id"])
             await self._http_client.delete(
-                f"https://ark.example/api/v3/files/{upload.json()['id']}"
+                f"https://ark.example/api/v3/files/{file_id}"
             )
         await emit(
             RunStage.ANALYZING_EVIDENCE,
@@ -362,6 +365,8 @@ async def run_single_source_fixture(
     ("pipeline_options", "expected_code"),
     [
         ({"candidate_name": "Unrelated Action"}, "expected_action_or_time_intersection_missing"),
+        ({"candidate_name": "Curl"}, "expected_action_or_time_intersection_missing"),
+        ({"candidate_name": "弯举"}, "expected_action_or_time_intersection_missing"),
         (
             {"candidate_segment": (1, 10)},
             "expected_action_or_time_intersection_missing",
@@ -389,6 +394,7 @@ async def test_cloud_smoke_rejects_wrong_semantics_time_or_unfused_evidence(
     ("pipeline_options", "expected_code"),
     [
         ({"delete_upload": False}, "ark_temp_cleanup_unverified"),
+        ({"delete_file_id_override": "wrong-file"}, "ark_temp_cleanup_unverified"),
         ({"leave_temp_file": True}, "local_temp_cleanup_failed"),
     ],
 )
