@@ -14,8 +14,8 @@
 - 原视频只在当前设备浏览器长期保存。服务端上传副本和分析材料只属于单次运行，并在所有终态清理。
 - 分析只由用户显式创建。页面切换、刷新或 SSE 断线不取消；显式取消、更换来源、运行安全边界或进程丢失才结束运行。
 - 产品目标为完整覆盖不超过 10 分钟的视频，但部署能力以 `GET /api/v1/capabilities` 为准。今晚安全默认仍是经过验证的 60 秒。
-- 过程反馈来自真实处理位置和暂时发现数量。部分结果必须明确覆盖缺口并允许逐段重试，不能把系统错误伪装成没有动作。
-- 当前生产 Provider 保持不变。已完成的 native audio/video benchmark 没有产生质量冠军或验证长视频生产路线；未来切换需补齐证据并单独形成技术路线决策。生产环境不使用测试 Provider 或预置候选回退。
+- 过程反馈来自真实处理位置和暂时发现的动作线索数。部分结果必须明确覆盖缺口并允许逐段重试，不能把系统错误伪装成没有动作。
+- 当前 production Provider 保持不变，仍按单次全范围执行，只能可靠返回完整覆盖或整体失败，尚不能可靠定位 `partial` 时间缺口。已完成的 native audio/video benchmark 没有产生质量冠军或验证长视频生产路线；`partial`／缺口重试现阶段只完成公共合同与测试 Provider 验证，仍是后续必须补齐的生产验收目标。生产环境不使用测试 Provider 或预置候选回退。
 
 ## 2. 运行拓扑与数据所有权
 
@@ -95,7 +95,7 @@ interface CapabilitiesView {
 
 无区间时处理完整来源；有区间时要求 `0 <= start < end <= source duration`。区间分析仍由浏览器重新上传原文件，服务端不复用上一次副本。创建成功返回 `202` 与 `AnalysisRunView`；候选及证据时间始终是原视频绝对秒数。
 
-公开错误为：本地上传关闭 `404`、不支持 MIME `415`、超过字节上限 `413`、ID／媒体／时长／区间无效 `422`，以及现有访问 `403`、容量 `429`、就绪 `503`。代理请求体上限必须与 `local_upload_max_bytes` 一致或更大，但不能无界放开。
+公开错误为：可信代理客户端地址无效 `400`、现有访问／同源校验失败 `403`、本地上传关闭 `404`、超过字节上限 `413`、不支持 MIME `415`、ID／媒体／时长／区间无效 `422`、容量 `429`、就绪 `503`。代理请求体上限必须与 `local_upload_max_bytes` 一致或更大，但不能无界放开。
 
 ### 4.3 现有接口
 
@@ -137,14 +137,14 @@ interface AnalysisRunView {
 
 - `AnalysisCandidate` 增加必填 `segment_role: 'follow_along' | 'teaching_demo' | 'unknown'`。只有一侧提供明确角色时保留该角色；两侧都明确且一致时保留共同角色，冲突或都未知时输出 `unknown`。`unknown` 和单一证据分支候选必须 `needs_confirmation=true`；教学演示片段长度不得映射到 `parameters.duration_seconds`。
 - `source_duration_seconds` 是有限正数且表示原视频完整时长；`processed_seconds` 是本次请求范围已经实际处理的有限非负时长，必须在 `[0, requested range length]` 内单调前进。
-- `discovered_candidate_count` 是非负整数，表示当前只读中间发现数量，不保证与最终去重后的候选数相同。
+- `discovered_candidate_count` 是非负整数；非终态表示已完成证据分支返回的只读动作线索数，允许在融合时收敛，可靠终态才表示融合候选数。
 - 排队、运行、失败和取消时 `coverage_status=null`。可靠终态的请求范围完整时为 `complete`；仍有系统未知区间时为 `partial`，并提供非重叠、按时间排序的 `coverage_gaps`。
 - 当前产品中的部分结果缺口必须可单独重试；`reason` 是独立、版本化的公开安全枚举，非白名单值不能进入 GET／SSE。用户界面只展示自然中文，不显示 Provider 正文。
 - 区间重试是新的 Analysis Run。其 `coverage_status=complete` 表示该请求区间完整；客户端把结果合并回来源级覆盖状态，而不是修改旧运行记录。
 
 SSE 包络继续使用 `{sequence,type,run_id,timestamp,data}`，每个事件的 `data` 携带最新进度／覆盖快照。浏览器断线后先 GET 快照，再重连事件流；客户端只应用当前来源与 `run_id` 的事件，并对重放 `sequence` 保持幂等。服务器不能把连接关闭当作取消信号。运行代次仍隔离迟到事件，旧来源结果不得覆盖当前来源。
 
-服务端流程保持“确定性媒体处理 + 动作分析 Agent 协调 Skills”。现有生产 Provider、配置和进程安全超时继续生效；既有 benchmark 没有选出质量冠军，本合同不切换 Provider，也不沿用旧单样本延迟作为长视频承诺。
+服务端流程保持“确定性媒体处理 + 动作分析 Agent 协调 Skills”。现有 production Provider、配置和进程安全超时继续生效；它当前不可靠产出可定位的 `partial` 缺口，测试 Provider 通过只证明公共合同和合并路径。既有 benchmark 没有选出质量冠军，本合同不切换 Provider，也不沿用旧单样本延迟作为长视频承诺；真实缺口定位与重试仍须单独完成生产验收。
 
 ## 6. 覆盖合并与来源时间线
 
