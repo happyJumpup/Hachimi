@@ -78,11 +78,15 @@ class LocalUploadBodyLimitMiddleware:
         max_body_bytes: int,
         app_env: str,
         development_origins: list[str],
+        access_manager: AccessManager,
+        readiness_probe: ReadinessProbe,
     ) -> None:
         self._app = app
         self._max_body_bytes = max_body_bytes
         self._app_env = app_env
         self._development_origins = development_origins
+        self._access_manager = access_manager
+        self._readiness_probe = readiness_probe
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
@@ -92,9 +96,10 @@ class LocalUploadBodyLimitMiddleware:
         ):
             await self._app(scope, receive, send)
             return
+        request = Request(scope)
         try:
             _require_same_origin(
-                Request(scope),
+                request,
                 app_env=self._app_env,
                 development_origins=self._development_origins,
             )
@@ -106,6 +111,32 @@ class LocalUploadBodyLimitMiddleware:
             )
             await response(scope, receive, send)
             return
+        if self._app_env == "production":
+            failure_code = await asyncio.to_thread(self._readiness_probe.check)
+            if failure_code is not None:
+                response = JSONResponse(
+                    status_code=503,
+                    content={"detail": "动作分析服务尚未就绪"},
+                    headers={"Cache-Control": "no-store"},
+                )
+                await response(scope, receive, send)
+                return
+        session = self._access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
+        active = await self._access_manager.active_run(session.id)
+        if active is None:
+            access_view = self._access_manager.view(session)
+            if not access_view.can_analyze:
+                retry_after = access_view.retry_after_seconds or 15
+                response = JSONResponse(
+                    status_code=429,
+                    content={"detail": "真实动作分析暂时繁忙，请稍后重试"},
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Retry-After": str(retry_after),
+                    },
+                )
+                await response(scope, receive, send)
+                return
         content_length = Headers(scope=scope).get("content-length")
         if content_length is not None:
             try:
@@ -244,6 +275,8 @@ def create_app(
             max_body_bytes=local_upload_max_bytes + LOCAL_MULTIPART_OVERHEAD_BYTES,
             app_env=app_env,
             development_origins=resolved_cors_origins,
+            access_manager=access_manager,
+            readiness_probe=readiness_probe,
         )
     app.add_middleware(
         CORSMiddleware,

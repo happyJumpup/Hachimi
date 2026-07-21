@@ -29,11 +29,15 @@ LOCAL_SOURCE_ID = "local:62f31c4b-bd1c-4b6a-8ad8-c6121b56135a"
 SECOND_LOCAL_SOURCE_ID = "local:a55df85a-e80d-4c85-807f-cd4a9c26f7e5"
 
 
-def make_test_access(*, public_attempt_limit: int = 1) -> AccessManager:
+def make_test_access(
+    *,
+    public_attempt_limit: int = 1,
+    public_concurrency: int = 1,
+) -> AccessManager:
     return AccessManager(
         cookie_secret="test-cookie-secret-with-at-least-32-bytes",
         judge_access_code="test-judge-code",
-        public_concurrency=1,
+        public_concurrency=public_concurrency,
         public_attempt_limit=public_attempt_limit,
     )
 
@@ -334,6 +338,46 @@ async def test_cross_origin_local_upload_is_rejected_before_reading_body(tmp_pat
     assert response.status_code == 403
     assert response.json() == {"detail": "请求来源无效"}
     assert body.consumed is False
+    assert not upload_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_unavailable_session_capacity_is_rejected_before_reading_body(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    body = FailsIfConsumedStream()
+    probe_called = False
+
+    def duration_probe(_: Path) -> float:
+        nonlocal probe_called
+        probe_called = True
+        return 10.0
+
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(public_concurrency=0),
+        local_upload_temp_root=upload_root,
+        local_duration_probe=duration_probe,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/analysis-runs/local",
+            content=body,
+            headers={
+                "Content-Type": "multipart/form-data; boundary=not-consumed",
+                "Content-Length": "1",
+            },
+        )
+
+    assert response.status_code == 429
+    assert response.json() == {"detail": "真实动作分析暂时繁忙，请稍后重试"}
+    assert response.headers["retry-after"] == "15"
+    assert response.headers["cache-control"] == "no-store"
+    assert body.consumed is False
+    assert probe_called is False
     assert not upload_root.exists()
 
 
