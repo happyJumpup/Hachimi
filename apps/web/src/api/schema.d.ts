@@ -39,6 +39,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analysis-runs/local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Local Run */
+        post: operations["create_local_run_api_v1_analysis_runs_local_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analysis-runs/{run_id}": {
         parameters: {
             query?: never;
@@ -66,6 +83,23 @@ export interface paths {
         };
         /** Run Events */
         get: operations["run_events_api_v1_analysis_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capabilities */
+        get: operations["capabilities_api_v1_capabilities_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -176,6 +210,7 @@ export interface components {
             needs_confirmation: boolean;
             parameters: components["schemas"]["CandidateParameters"];
             segment: components["schemas"]["Segment"];
+            segment_role: components["schemas"]["SegmentRole"];
             /** Source Id */
             source_id: string;
         };
@@ -191,16 +226,32 @@ export interface components {
         AnalysisRunView: {
             /** Candidates */
             candidates?: components["schemas"]["AnalysisCandidate"][];
+            /** Coverage Gaps */
+            coverage_gaps?: components["schemas"]["CoverageGap"][];
+            coverage_status?: components["schemas"]["CoverageStatus"] | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at?: string;
+            /**
+             * Discovered Candidate Count
+             * @description While running, the conservative maximum evidence count from completed branches; at terminal completion, the exact fused candidate count.
+             * @default 0
+             */
+            discovered_candidate_count: number;
             /** Empty Reason */
             empty_reason?: "no_evidence" | null;
             error?: components["schemas"]["AnalysisError"] | null;
             /** Id */
             id: string;
+            /**
+             * Processed Seconds
+             * @default 0
+             */
+            processed_seconds: number;
+            /** Source Duration Seconds */
+            source_duration_seconds: number;
             /** Source Id */
             source_id: string;
             stage: components["schemas"]["RunStage"];
@@ -230,6 +281,17 @@ export interface components {
             /** Detail */
             detail: string;
         };
+        /** Body_create_local_run_api_v1_analysis_runs_local_post */
+        Body_create_local_run_api_v1_analysis_runs_local_post: {
+            /** Local Source Id */
+            local_source_id: string;
+            /** Media */
+            media: string;
+            /** Range End Seconds */
+            range_end_seconds?: number | null;
+            /** Range Start Seconds */
+            range_start_seconds?: number | null;
+        };
         /** CandidateParameters */
         CandidateParameters: {
             /** Duration Seconds */
@@ -242,6 +304,38 @@ export interface components {
             /** Sets */
             sets?: number | null;
         };
+        /** CapabilitiesView */
+        CapabilitiesView: {
+            /** Local Analysis Max Seconds */
+            local_analysis_max_seconds: number;
+            /** Local Upload Enabled */
+            local_upload_enabled: boolean;
+            /** Local Upload Max Bytes */
+            local_upload_max_bytes: number;
+        };
+        /** CoverageGap */
+        CoverageGap: {
+            /** End Seconds */
+            end_seconds: number;
+            reason: components["schemas"]["CoverageGapReason"];
+            /**
+             * Retryable
+             * @constant
+             */
+            retryable: true;
+            /** Start Seconds */
+            start_seconds: number;
+        };
+        /**
+         * CoverageGapReason
+         * @enum {string}
+         */
+        CoverageGapReason: "provider_error" | "timeout" | "media_error" | "unknown";
+        /**
+         * CoverageStatus
+         * @enum {string}
+         */
+        CoverageStatus: "complete" | "partial";
         /** CreateAnalysisRunRequest */
         CreateAnalysisRunRequest: {
             /** Source Id */
@@ -311,6 +405,11 @@ export interface components {
             /** Start Seconds */
             start_seconds: number;
         };
+        /**
+         * SegmentRole
+         * @enum {string}
+         */
+        SegmentRole: "follow_along" | "teaching_demo" | "unknown";
         /** SourceSummary */
         SourceSummary: {
             /** Duration Seconds */
@@ -484,6 +583,104 @@ export interface operations {
             };
         };
     };
+    create_local_run_api_v1_analysis_runs_local_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_local_run_api_v1_analysis_runs_local_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisRunView"];
+                };
+            };
+            /** @description 可信代理提供的客户端地址无效。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 本地视频导入未启用。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 上传媒体超过大小限制。 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 上传媒体类型不受支持。 */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 媒体或分析范围无效。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 分析容量或调用频率已达到限制。 */
+            429: {
+                headers: {
+                    /** @description 再次尝试前需要等待的秒数。 */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 生产分析服务尚未就绪。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
     get_run_api_v1_analysis_runs__run_id__get: {
         parameters: {
             query?: never;
@@ -609,6 +806,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capabilities_api_v1_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesView"];
                 };
             };
         };
