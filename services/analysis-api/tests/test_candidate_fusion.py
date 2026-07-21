@@ -39,6 +39,38 @@ def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
     assert candidate.needs_confirmation is False
 
 
+def test_same_action_within_one_sampling_step_is_fused() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="Drag Curl",
+                sets=None,
+                reps=10,
+                duration_seconds=None,
+                rest_seconds=None,
+                start_seconds=42,
+                end_seconds=46,
+                evidence_text="drag curl",
+            )
+        ],
+        visual_segments=[
+            VisualSegment(
+                action_name="Drag Curl",
+                start_seconds=48,
+                end_seconds=54,
+                visual_cue="dumbbells move behind the torso",
+            )
+        ],
+    )
+
+    assert len(candidates) == 1
+    assert [item.type for item in candidates[0].evidence] == ["speech", "visual"]
+    assert candidates[0].segment is not None
+    assert candidates[0].segment.start_seconds == 42
+    assert candidates[0].segment.end_seconds == 54
+
+
 def test_single_branch_evidence_is_returned_as_needing_confirmation() -> None:
     candidates = fuse_candidates(
         source_id="source-a",

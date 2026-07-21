@@ -31,6 +31,9 @@
 - Analysis Runs are transient, cancellable, and never continue as background
   jobs. Do not introduce runtime mock fallbacks.
 - Do not copy source code or components from the GPL-3.0 historical demo.
+- Analysis starts only after an explicit user action and covers the complete
+  controlled source up to 60 seconds. Legacy trigger metadata must not narrow
+  scope, and page load, playback, or seeking must not auto-create a run.
 
 ## Security and data handling
 

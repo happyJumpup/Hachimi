@@ -19,9 +19,9 @@ type UiStatus = 'idle' | AnalysisRun['status']
 
 const stageCopy: Record<AnalysisRun['stage'], string> = {
   queued: '正在建立分析请求',
-  preparing_media: '正在准备当前片段',
+  preparing_media: '正在准备整条视频',
   analyzing_evidence: '正在听讲解、看动作',
-  expanding_window: '正在扩大附近范围',
+  expanding_window: '正在兼容旧版分析请求',
   fusing_candidates: '正在整理动作候选',
   completed: '候选已准备好',
   failed: '这次没有分析成功',
@@ -61,7 +61,6 @@ export const useAnalysisStore = defineStore('analysis', () => {
 
   async function start(input: {
     sourceId: string
-    triggerSeconds: number
     client: AnalysisClient
     events: AnalysisEventStreamFactory
   }): Promise<void> {
@@ -79,7 +78,7 @@ export const useAnalysisStore = defineStore('analysis', () => {
     stage.value = 'queued'
 
     try {
-      const created = await input.client.createRun(input.sourceId, input.triggerSeconds)
+      const created = await input.client.createRun(input.sourceId)
       if (generation !== currentGeneration) {
         await input.client.cancelRun(created.id).catch(() => undefined)
         return

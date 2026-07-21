@@ -2,7 +2,7 @@ import type { AccessSession, AnalysisRun, SourceSummary } from '@/domain/types'
 
 export interface AnalysisClient {
   listSources(): Promise<SourceSummary[]>
-  createRun(sourceId: string, triggerSeconds: number): Promise<AnalysisRun>
+  createRun(sourceId: string): Promise<AnalysisRun>
   getRun(runId: string): Promise<AnalysisRun>
   cancelRun(runId: string): Promise<AnalysisRun>
 }
@@ -63,10 +63,10 @@ const request = async <T>(path: string, init?: RequestInit): Promise<T> => {
 
 export const analysisClient: AnalysisClient = {
   listSources: () => request<SourceSummary[]>('/api/v1/sources'),
-  createRun: (sourceId, triggerSeconds) =>
+  createRun: (sourceId) =>
     request<AnalysisRun>('/api/v1/analysis-runs', {
       method: 'POST',
-      body: JSON.stringify({ source_id: sourceId, trigger_seconds: triggerSeconds }),
+      body: JSON.stringify({ source_id: sourceId }),
     }),
   getRun: (runId) => request<AnalysisRun>(`/api/v1/analysis-runs/${runId}`),
   cancelRun: (runId) =>

@@ -43,7 +43,7 @@ describe('CandidateReviewPanel', () => {
       props: { candidates, warnings: [] },
     })
 
-    await wrapper.get('button[aria-label="返回视频并重新选择时间点"]').trigger('click')
+    await wrapper.get('button[aria-label="返回视频"]').trigger('click')
 
     expect(wrapper.emitted('close')).toEqual([[]])
     expect(wrapper.emitted('add')).toBeUndefined()

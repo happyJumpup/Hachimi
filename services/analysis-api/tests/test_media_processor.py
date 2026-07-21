@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +93,130 @@ async def test_prepared_media_is_bounded_and_removed_after_use(tmp_path: Path) -
 
     assert prepared_directory is not None
     assert not prepared_directory.exists()
+
+
+@pytest.mark.asyncio
+async def test_full_source_reuses_video_and_only_cleans_transient_audio(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    await create_synthetic_video(source)
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+
+    prepared_directory: Path | None = None
+    async with processor.prepare_source(source, duration_seconds=2) as prepared:
+        prepared_directory = prepared.directory
+        assert prepared.video_path == source
+        assert prepared.audio_path.is_file()
+        assert prepared.contact_sheet_path is not None
+        assert prepared.contact_sheet_ready is not None
+        await prepared.contact_sheet_ready
+        assert prepared.contact_sheet_path.is_file()
+        assert prepared.contact_sheet_timestamps[0] == 0
+        assert prepared.contact_sheet_timestamps[-1] < 2
+        assert prepared.window == AnalysisWindow(
+            start_seconds=0,
+            end_seconds=2,
+            expanded=False,
+        )
+
+    assert source.is_file()
+    assert prepared_directory is not None
+    assert not prepared_directory.exists()
+
+
+@pytest.mark.asyncio
+async def test_full_source_sampling_covers_the_supported_sixty_seconds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    captured: dict[str, float | int] = {}
+
+    async def fake_audio(
+        _source_path: Path,
+        output_path: Path,
+        _window: AnalysisWindow,
+    ) -> None:
+        output_path.write_bytes(b"audio")
+
+    async def fake_contact_sheet(
+        _source_path: Path,
+        output_path: Path,
+        *,
+        frame_interval_seconds: float,
+        frame_count: int,
+    ) -> None:
+        captured.update(interval=frame_interval_seconds, count=frame_count)
+        output_path.write_bytes(b"image")
+
+    monkeypatch.setattr(processor, "_extract_audio", fake_audio)
+    monkeypatch.setattr(processor, "_extract_contact_sheet", fake_contact_sheet)
+
+    async with processor.prepare_source(source, duration_seconds=60) as prepared:
+        assert prepared.contact_sheet_ready is not None
+        await prepared.contact_sheet_ready
+        timestamps = prepared.contact_sheet_timestamps
+
+    assert len(timestamps) == 18
+    assert captured == {"interval": 60 / 18, "count": 18}
+    assert max(second - first for first, second in pairwise(timestamps)) <= 3.5
+    assert 60 - timestamps[-1] <= 3.5
+
+
+@pytest.mark.asyncio
+async def test_full_source_yields_audio_while_contact_sheet_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    release_contact_sheet = asyncio.Event()
+
+    async def fake_audio(
+        _source_path: Path,
+        output_path: Path,
+        _window: AnalysisWindow,
+    ) -> None:
+        output_path.write_bytes(b"audio")
+
+    async def fake_contact_sheet(
+        _source_path: Path,
+        output_path: Path,
+        *,
+        frame_interval_seconds: float,
+        frame_count: int,
+    ) -> None:
+        del frame_interval_seconds, frame_count
+        await release_contact_sheet.wait()
+        output_path.write_bytes(b"image")
+
+    monkeypatch.setattr(processor, "_extract_audio", fake_audio)
+    monkeypatch.setattr(processor, "_extract_contact_sheet", fake_contact_sheet)
+
+    async with processor.prepare_source(source, duration_seconds=30) as prepared:
+        assert prepared.audio_path.is_file()
+        assert prepared.contact_sheet_path is not None
+        assert prepared.contact_sheet_ready is not None
+        assert not prepared.contact_sheet_ready.done()
+        assert not prepared.contact_sheet_path.exists()
+        release_contact_sheet.set()
+        await prepared.contact_sheet_ready
+        assert prepared.contact_sheet_path.is_file()
+
+
+@pytest.mark.asyncio
+async def test_full_source_analysis_rejects_video_beyond_supported_duration(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+
+    with pytest.raises(MediaProcessingError):
+        async with processor.prepare_source(source, duration_seconds=60.1):
+            pass
 
 
 @pytest.mark.asyncio

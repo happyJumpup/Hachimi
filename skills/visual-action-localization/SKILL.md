@@ -1,15 +1,16 @@
 ---
 name: visual-action-localization
-version: 1.0.0
-description: Localize exercise demonstrations in a bounded video window.
+version: 1.2.0
+description: Localize all exercise demonstrations in a controlled full-source video.
 ---
 
 # Visual action localization
 
 ## Input
 
-A video file representing a bounded source-video window plus JSON metadata with
-the window's absolute start/end and the user's trigger time.
+A row-major contact sheet sampled uniformly across the controlled full source,
+plus JSON metadata containing each frame's absolute timestamp and the full
+source range.
 
 ## Output
 
@@ -31,8 +32,12 @@ Return JSON only:
 ## Rules
 
 - Output absolute source-video times within the supplied window.
-- Identify observable exercise changes and demonstration boundaries only.
+- Inspect the complete contact-sheet timeline and identify every observable
+  exercise demonstration, keeping segments in timeline order.
+- Merge consecutive sampled frames showing the same exercise into one segment;
+  never emit one segment per frame.
+- Use adjacent sampled-frame timestamps to estimate boundaries. Do not claim
+  sub-frame precision.
 - Keep an unknown action name as `null`; do not guess from appearance alone.
-- Do not infer body data, load, injury risk, exercise quality, effectiveness, or
-  intent outside the supplied window.
+- Do not infer body data, load, injury risk, exercise quality, or effectiveness.
 - Visual cues describe visible evidence, not hidden reasoning.

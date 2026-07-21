@@ -53,14 +53,12 @@ class AnalysisRunManager:
     async def create(
         self,
         source: VideoSource,
-        trigger_seconds: float,
+        trigger_seconds: float | None,
         *,
         owner_session_id: str | None = None,
         on_terminal: Callable[[], Awaitable[None]] | None = None,
     ) -> AnalysisRunView:
         self._prune()
-        if trigger_seconds > source.duration_seconds:
-            raise ValueError("trigger_seconds must be inside the source video")
         run_id = str(uuid4())
         record = RunRecord(
             view=AnalysisRunView(
@@ -150,7 +148,7 @@ class AnalysisRunManager:
             async with asyncio.timeout(self._timeout_seconds):
                 output = await self._pipeline.analyze(
                     source,
-                    record.view.trigger_seconds,
+                    None,
                     emit,
                 )
             record.view.status = RunStatus.COMPLETED

@@ -1,5 +1,8 @@
 # 0009：使用豆包流式语音识别模型 2.0
 
+> 部分被 [ADR-0012](0012-explicit-full-source-analysis-with-latency-budget.md) 取代：当前主管线处理整段音频，以 4 秒 PCM 包加速发送，不再使用局部窗口或 200 ms 实时节奏；继续使用本 ADR 锁定的流式语音识别模型 2.0 权益与 WebSocket 最终结果语义。
+
+
 ## 决策
 
 首个动作分析纵切片使用豆包流式语音识别模型 2.0 的 WebSocket

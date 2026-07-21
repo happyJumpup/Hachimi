@@ -19,7 +19,7 @@ from pydantic import (
 
 from hakimi_analysis.bootstrap import build_catalog, build_pipeline
 from hakimi_analysis.models import AnalysisCandidate, EvidenceType, RunStage
-from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure
+from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure, PipelineOutput
 from hakimi_analysis.providers.base import ProviderError
 from hakimi_analysis.settings import PROJECT_ROOT, Settings
 from hakimi_analysis.sources import SourceCatalog, VideoSource
@@ -59,6 +59,11 @@ _SAFE_OBSERVATION_KEYS = {
     "temporal_overlap_count",
     "semantic_temporal_match_count",
     "dual_evidence_count",
+    "curl_family_count",
+    "dumbbell_curl_count",
+    "drag_curl_count",
+    "seconds_per_video_minute",
+    "target_max_seconds_per_video_minute",
 }
 
 
@@ -193,9 +198,23 @@ class EventRecorder:
             if event_type == "branch.completed"
         }
 
+    def branch_elapsed_seconds(self) -> dict[str, float]:
+        started: dict[str, float] = {}
+        elapsed: dict[str, float] = {}
+        for _stage, event_type, data, at in self.events:
+            branch = data.get("branch")
+            if not isinstance(branch, str):
+                continue
+            if event_type == "branch.started":
+                started[branch] = at
+            elif event_type == "branch.completed" and branch in started:
+                elapsed[branch] = round(at - started[branch], 3)
+        return elapsed
+
     def versions(self, settings: Settings) -> dict[str, str]:
         versions = {
             "ark_model": _safe_diagnostic(settings.ark_model_id) or "redacted",
+            "ark_visual_model": _safe_diagnostic(settings.ark_visual_model_id) or "redacted",
             "asr_resource": _safe_diagnostic(settings.volc_asr_resource_id) or "redacted",
         }
         for stage, event_type, data, _at in self.events:
@@ -316,10 +335,16 @@ def _candidate_name_matches(
 ) -> bool:
     accepted_names = {_normalized_name(name) for name in checkpoint.accepted_action_names}
     normalized = _normalized_name(candidate.name)
-    return any(
-        accepted in normalized
-        for accepted in accepted_names
-        if accepted and normalized
+    if any(accepted in normalized for accepted in accepted_names if accepted and normalized):
+        return True
+    drag_curl_aliases = {
+        "dragcurl",
+        "\u62d6\u62fd\u5f2f\u4e3e",
+        "\u62d6\u62fd\u5f0f\u5f2f\u4e3e",
+    }
+    return bool(accepted_names & drag_curl_aliases) and (
+        ("drag" in normalized or "\u62d6\u62fd" in normalized)
+        and ("curl" in normalized or "\u5f2f\u4e3e" in normalized)
     )
 
 
@@ -347,9 +372,7 @@ def _candidate_diagnostics(
         candidate for candidate in candidates if _candidate_time_overlaps(candidate, checkpoint)
     ]
     combined_matches = [
-        candidate
-        for candidate in name_matches
-        if _candidate_time_overlaps(candidate, checkpoint)
+        candidate for candidate in name_matches if _candidate_time_overlaps(candidate, checkpoint)
     ]
     dual_evidence = [
         candidate
@@ -357,25 +380,45 @@ def _candidate_diagnostics(
         if {evidence.type for evidence in candidate.evidence}
         >= {EvidenceType.SPEECH, EvidenceType.VISUAL}
     ]
+    normalized_names = [_normalized_name(candidate.name) for candidate in candidates]
+    curl_names = [name for name in normalized_names if "curl" in name or "\u5f2f\u4e3e" in name]
+    dumbbell_curl_names = [
+        name for name in curl_names if "dumbbell" in name or "\u54d1\u94c3" in name
+    ]
+    drag_curl_names = [name for name in curl_names if "drag" in name or "\u62d6\u62fd" in name]
     return {
         "candidate_count": len(candidates),
         "semantic_match_count": len(name_matches),
         "temporal_overlap_count": len(time_matches),
         "semantic_temporal_match_count": len(combined_matches),
         "dual_evidence_count": len(dual_evidence),
+        "curl_family_count": len(curl_names),
+        "dumbbell_curl_count": len(dumbbell_curl_names),
+        "drag_curl_count": len(drag_curl_names),
     }
 
 
 def _validate_checkpoint_result(
-    candidates: list[AnalysisCandidate],
+    output: PipelineOutput,
     checkpoint: SmokeCheckpoint,
     recorder: EventRecorder,
 ) -> None:
-    if recorder.completed_branches() != {"speech", "visual"}:
-        raise SmokeFailure("both_cloud_branches_did_not_complete")
+    candidates = output.candidates
+    completed_branches = recorder.completed_branches()
+    if not completed_branches:
+        raise SmokeFailure("no_cloud_branch_completed")
+    warning_codes = {warning.code for warning in output.warnings}
+    required_warnings = {
+        "speech": "speech_unavailable",
+        "visual": "visual_unavailable",
+    }
+    for branch, warning_code in required_warnings.items():
+        if branch not in completed_branches and warning_code not in warning_codes:
+            raise SmokeFailure(f"{branch}_branch_missing_without_warning")
+        if branch in completed_branches and warning_code in warning_codes:
+            raise SmokeFailure(f"{branch}_branch_completed_with_unavailable_warning")
     if not any(
-        stage == RunStage.FUSING_CANDIDATES
-        for stage, _event_type, _data, _at in recorder.events
+        stage == RunStage.FUSING_CANDIDATES for stage, _event_type, _data, _at in recorder.events
     ):
         raise SmokeFailure("fusion_stage_did_not_complete")
     diagnostics = _candidate_diagnostics(candidates, checkpoint)
@@ -385,11 +428,12 @@ def _validate_checkpoint_result(
             "expected_action_or_time_intersection_missing",
             observations=diagnostics,
         )
-    if {evidence.type for evidence in matching.evidence} < {
-        EvidenceType.SPEECH,
-        EvidenceType.VISUAL,
-    }:
-        raise SmokeFailure("fused_dual_evidence_missing", observations=diagnostics)
+    evidence_branches = {evidence.type.value for evidence in matching.evidence}
+    if not evidence_branches or not evidence_branches <= completed_branches:
+        raise SmokeFailure("candidate_evidence_does_not_match_completed_branches")
+    if completed_branches != {"speech", "visual"} and not matching.needs_confirmation:
+        raise SmokeFailure("partial_candidate_does_not_require_confirmation")
+
     if _contains_weight_field([candidate.model_dump(mode="json") for candidate in candidates]):
         raise SmokeFailure("weight_leaked_into_candidate")
 
@@ -405,12 +449,11 @@ def _contains_weight_field(value: object) -> bool:
     return False
 
 
-async def _run_checkpoint(
+async def _run_source(
     *,
     settings: Settings,
     source: VideoSource,
-    checkpoint: SmokeCheckpoint,
-    checkpoint_index: int,
+    checkpoints: list[SmokeCheckpoint],
     pipeline_builder: PipelineBuilder,
     transport: httpx.AsyncBaseTransport | None,
     temp_root: Path,
@@ -432,7 +475,7 @@ async def _run_checkpoint(
                 async with asyncio.timeout(settings.run_timeout_seconds):
                     result = await pipeline.analyze(
                         source,
-                        checkpoint.trigger_seconds,
+                        None,
                         recorder.emit,
                     )
             except (PipelineFailure, ProviderError) as error:
@@ -446,9 +489,7 @@ async def _run_checkpoint(
         after_entries = _temporary_entries(temp_root)
         if after_entries != before_entries:
             caught = SmokeFailure("local_temp_cleanup_failed")
-        elif not audit.ark_cleanup_matches or (
-            caught is None and audit.ark_uploads < 1
-        ):
+        elif not audit.ark_cleanup_matches:
             caught = SmokeFailure(
                 "ark_temp_cleanup_unverified",
                 observations={
@@ -459,24 +500,47 @@ async def _run_checkpoint(
 
     if caught is not None:
         caught.source_id = source.id
-        caught.checkpoint_index = checkpoint_index
         caught.provider_calls = audit.calls
         raise caught
     if result is None:
         raise AssertionError("cloud smoke pipeline returned no result")
-    try:
-        _validate_checkpoint_result(result.candidates, checkpoint, recorder)
-    except SmokeFailure as error:
-        error.source_id = source.id
-        error.checkpoint_index = checkpoint_index
-        error.provider_calls = audit.calls
-        raise
+    for checkpoint_index, checkpoint in enumerate(checkpoints, start=1):
+        try:
+            _validate_checkpoint_result(result, checkpoint, recorder)
+        except SmokeFailure as error:
+            error.source_id = source.id
+            error.checkpoint_index = checkpoint_index
+            error.provider_calls = audit.calls
+            raise
     ended = time.perf_counter()
+    elapsed_seconds = ended - recorder.started
+    seconds_per_video_minute = elapsed_seconds / (source.duration_seconds / 60)
+    target_max = settings.analysis_latency_target_max_seconds_per_video_minute
+    if seconds_per_video_minute > target_max:
+        raise SmokeFailure(
+            "latency_target_exceeded",
+            source_id=source.id,
+            provider_calls=audit.calls,
+            observations={
+                "seconds_per_video_minute": round(seconds_per_video_minute, 2),
+                "target_max_seconds_per_video_minute": target_max,
+            },
+        )
+    completed_branches = recorder.completed_branches()
     return {
         "status": "PASS",
-        "checkpoint": checkpoint_index,
-        "elapsed_seconds": round(ended - recorder.started, 2),
+        "checkpoint_count": len(checkpoints),
+        "elapsed_seconds": round(elapsed_seconds, 2),
+        "seconds_per_video_minute": round(seconds_per_video_minute, 2),
+        "performance_target_met": True,
+        "target_max_seconds_per_video_minute": target_max,
+        "branch_outcomes": {
+            branch: "completed" if branch in completed_branches else "unavailable"
+            for branch in ("speech", "visual")
+        },
+        "warning_codes": sorted(warning.code for warning in result.warnings),
         "stage_elapsed_seconds": recorder.stage_elapsed_seconds(ended),
+        "branch_elapsed_seconds": recorder.branch_elapsed_seconds(),
         "versions": recorder.versions(settings),
         "provider_request_ids": audit.request_ids(),
     }
@@ -521,7 +585,6 @@ async def run_smoke(
     source_results: list[dict[str, object]] = []
     for source_annotations in manifest.sources:
         source = controlled_catalog.get(source_annotations.source_id)
-        checkpoint_results: list[dict[str, object]] = []
         for checkpoint_index, checkpoint in enumerate(
             source_annotations.checkpoints,
             start=1,
@@ -535,21 +598,18 @@ async def run_smoke(
                     source_id=source.id,
                     checkpoint_index=checkpoint_index,
                 )
-            checkpoint_results.append(
-                await _run_checkpoint(
-                    settings=configured,
-                    source=source,
-                    checkpoint=checkpoint,
-                    checkpoint_index=checkpoint_index,
-                    pipeline_builder=pipeline_builder,
-                    transport=transport,
-                    temp_root=root,
-                )
-            )
+        source_result = await _run_source(
+            settings=configured,
+            source=source,
+            checkpoints=source_annotations.checkpoints,
+            pipeline_builder=pipeline_builder,
+            transport=transport,
+            temp_root=root,
+        )
         source_results.append(
             {
                 "source_id": source.id,
-                "checkpoints": checkpoint_results,
+                **source_result,
             }
         )
     return {

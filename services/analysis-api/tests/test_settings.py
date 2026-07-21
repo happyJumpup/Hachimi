@@ -22,6 +22,18 @@ def test_analysis_capacity_has_safe_production_defaults() -> None:
     assert settings.public_analysis_concurrency == 0
 
 
+def test_analysis_evidence_budget_has_a_bounded_positive_default() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.analysis_evidence_timeout_seconds == 11.5
+    assert settings.analysis_latency_target_max_seconds_per_video_minute == 15.0
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, analysis_evidence_timeout_seconds=0)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, analysis_latency_target_max_seconds_per_video_minute=0)
+
+
 def test_web_static_root_is_an_optional_backend_path(tmp_path: Path) -> None:
     without_static = Settings(_env_file=None)
     with_static = Settings(_env_file=None, web_static_root=tmp_path / "dist")

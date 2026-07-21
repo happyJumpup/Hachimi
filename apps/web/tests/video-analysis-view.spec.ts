@@ -118,6 +118,58 @@ describe('视频动作分析页', () => {
     expect(wrapper.get('.stage-media-error a[href="/plan"]').text()).toBe('去方案草稿')
   })
 
+  it('allows source switching during analysis and cancels the old run', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const analysis = useAnalysisStore()
+    analysis.sources = [
+      {
+        id: 'video-a',
+        title: '来源视频 A',
+        media_url: '/api/v1/sources/video-a/media',
+        duration_seconds: 54,
+        origin_url: null,
+      },
+      {
+        id: 'video-b',
+        title: '来源视频 B',
+        media_url: '/api/v1/sources/video-b/media',
+        duration_seconds: 48,
+        origin_url: null,
+      },
+    ]
+    vi.spyOn(analysis, 'loadSources').mockResolvedValue()
+    const cancel = vi.spyOn(analysis, 'cancel').mockImplementation(async () => {
+      analysis.status = 'cancelled'
+      analysis.activeRunId = null
+    })
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: VideoAnalysisView },
+        { path: '/plan', component: { template: '<p>plan</p>' } },
+        { path: '/mine', component: { template: '<p>mine</p>' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(VideoAnalysisView, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+
+    const sourceSelect = wrapper.get('select#source')
+    analysis.status = 'running'
+    analysis.activeRunId = 'run-a'
+    expect(sourceSelect.attributes('disabled')).toBeUndefined()
+    await sourceSelect.setValue('video-b')
+    await flushPromises()
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(analysis.status).toBe('idle')
+    expect(wrapper.get<HTMLVideoElement>('video').attributes('src')).toBe(
+      '/api/v1/sources/video-b/media',
+    )
+  })
+
   it('uses the shorter browser media duration as the candidate segment limit', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -202,7 +254,7 @@ describe('视频动作分析页', () => {
     expect(cancel).toHaveBeenCalledTimes(1)
   })
 
-  it('returns from candidate review to the video so another time point can be chosen', async () => {
+  it('returns from candidate review to the video so the whole source can be retried', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const analysis = useAnalysisStore()
@@ -214,7 +266,7 @@ describe('视频动作分析页', () => {
       origin_url: null,
     }]
     vi.spyOn(analysis, 'loadSources').mockResolvedValue()
-    vi.spyOn(analysis, 'start').mockImplementation(async () => {
+    const start = vi.spyOn(analysis, 'start').mockImplementation(async () => {
       analysis.status = 'completed'
       analysis.candidates = [{
         id: 'candidate-a',
@@ -251,14 +303,15 @@ describe('视频动作分析页', () => {
 
     await wrapper.get('.analyze-button').trigger('click')
     await flushPromises()
+    expect(start).toHaveBeenCalledWith(expect.not.objectContaining({ triggerSeconds: expect.anything() }))
 
-    await wrapper.get('button[aria-label="返回视频并重新选择时间点"]').trigger('click')
+    await wrapper.get('button[aria-label="返回视频"]').trigger('click')
     await flushPromises()
 
     expect(analysis.status).toBe('idle')
     expect(analysis.candidates).toEqual([])
     expect(wrapper.find('.candidate-panel').exists()).toBe(false)
-    expect(wrapper.get('.analyze-button').text()).toContain('添加动作')
+    expect(wrapper.get('.analyze-button').text()).toContain('分析视频动作')
     expect(play).toHaveBeenCalledTimes(1)
   })
 

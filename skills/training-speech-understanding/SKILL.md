@@ -1,15 +1,15 @@
 ---
 name: training-speech-understanding
-version: 1.0.0
-description: Extract explicit training-action signals from timestamped speech.
+version: 1.3.0
+description: Extract all explicit training-action signals from full-source timestamped speech.
 ---
 
 # Training speech understanding
 
 ## Input
 
-A JSON object containing the trigger time, the absolute analysis window, and
-timestamped transcript utterances. Times are seconds on the source-video clock.
+A JSON object containing the full source-video range and timestamped transcript
+utterances. Times are seconds on the source-video clock.
 
 ## Output
 
@@ -36,7 +36,12 @@ Return JSON only:
 
 - Extract only actions and parameters explicitly stated in the transcript.
 - Preserve missing fields as `null`; never invent a prescription.
+- Treat spoken action labels as identifiers: preserve every distinguishing
+  modifier such as seated, cross-body, drag, or hammer-grip. Never shorten a
+  qualified label to a generic movement family such as curl or row.
+- Preserve an explicitly spoken English or Chinese exercise term in the label.
 - Never extract or infer creator weight, user weight, body measurements, injury
   risk, exercise quality, or calories.
-- Prefer the signal nearest the trigger time when speech spans several actions.
+- Extract every distinct training action explicitly stated across the full source.
+- Keep signals in source-video timeline order.
 - Evidence text must be a short transcript phrase, not hidden reasoning.

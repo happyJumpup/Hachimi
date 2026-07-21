@@ -21,6 +21,7 @@ from hakimi_analysis.providers.asr import VolcAsrClient
 from hakimi_analysis.readiness import ProductionReadiness
 from hakimi_analysis.settings import PROJECT_ROOT, Settings
 from hakimi_analysis.sources import (
+    MAX_ANALYZABLE_SOURCE_DURATION_SECONDS,
     EmptySourceCatalog,
     SourceCatalog,
     SourceManifestError,
@@ -32,7 +33,7 @@ class UnconfiguredPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
+        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
         raise PipelineFailure(
@@ -46,12 +47,12 @@ class DeterministicTestPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
+        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
-        start = max(0, trigger_seconds - 4)
-        end = min(source.duration_seconds, trigger_seconds + 6)
+        start = 0
+        end = min(source.duration_seconds, 10)
         await emit(RunStage.FUSING_CANDIDATES, "stage.changed", {})
         return PipelineOutput(
             candidates=[
@@ -104,6 +105,8 @@ def build_catalog(settings: Settings) -> SourceCatalog:
         return EmptySourceCatalog()
     resolved_path = path.expanduser().resolve()
     duration = probe_duration_sync(resolved_path)
+    if duration > MAX_ANALYZABLE_SOURCE_DURATION_SECONDS:
+        return EmptySourceCatalog()
     sources = [
         VideoSource(
             id="legacy-arm-workout",
@@ -140,10 +143,12 @@ def build_pipeline(
         api_key=settings.volc_asr_api_key.get_secret_value(),
         resource_id=settings.volc_asr_resource_id,
         url=settings.volc_asr_url,
+        pace_audio=False,
     )
     ark = ArkResponsesClient(
         api_key=settings.ark_api_key.get_secret_value(),
         model_id=settings.ark_model_id,
+        visual_model_id=settings.ark_visual_model_id,
         base_url=settings.ark_base_url,
         http_client=http_client,
     )
@@ -151,7 +156,13 @@ def build_pipeline(
         skills = SkillRepository.load(PROJECT_ROOT / "skills")
     except (OSError, ValueError):
         return UnconfiguredPipeline()
-    return OrchestratedAnalysisPipeline(media=media, asr=asr, ark=ark, skills=skills)
+    return OrchestratedAnalysisPipeline(
+        media=media,
+        asr=asr,
+        ark=ark,
+        skills=skills,
+        evidence_timeout_seconds=settings.analysis_evidence_timeout_seconds,
+    )
 
 
 def build_default_app() -> FastAPI:

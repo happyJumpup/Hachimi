@@ -161,7 +161,12 @@ class Transcript(StrictModel):
 
 class CreateAnalysisRunRequest(StrictModel):
     source_id: str = Field(min_length=1, max_length=128)
-    trigger_seconds: float = Field(ge=0)
+    trigger_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        json_schema_extra={"deprecated": True},
+        description="Deprecated compatibility metadata; full-source analysis ignores it.",
+    )
 
 
 class UpgradeAccessSessionRequest(StrictModel):
@@ -188,7 +193,7 @@ class AnalysisError(StrictModel):
 class AnalysisRunView(StrictModel):
     id: str
     source_id: str
-    trigger_seconds: float
+    trigger_seconds: float | None
     status: RunStatus
     stage: RunStage
     candidates: list[AnalysisCandidate] = Field(default_factory=list)

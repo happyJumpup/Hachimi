@@ -53,7 +53,7 @@ flowchart LR
       "id": "arm-workout-01",
       "title": "手臂训练 01",
       "media_path": "competition/arm-workout-01.mp4",
-      "duration_seconds": 96.4,
+      "duration_seconds": 54.4,
       "sha256": "64-character-lowercase-hex",
       "origin_url": "https://www.douyin.com/video/..."
     }
@@ -62,7 +62,7 @@ flowchart LR
 ```
 
 - `id` 必须唯一且稳定；`media_path` 必须是无 `..` 的相对 POSIX 路径。
-- 分析文件只允许解析为 `SOURCE_MEDIA_ROOT/media_path` 下的普通文件，启动时校验 SHA-256，并验证实际时长与清单相差不超过一秒。
+- 分析文件只允许解析为 `SOURCE_MEDIA_ROOT/media_path` 下的普通文件，启动时校验 SHA-256，并验证清单时长与实际时长都不超过 60 秒、两者相差不超过一秒。
 - 播放地址只允许由 `PUBLIC_MEDIA_BASE_URL` 与受控 `media_path` 拼接。客户端输入永远不能成为重定向目标。
 - `origin_url` 可为 `null`，只用于“查看原视频”找回出处；后端不会抓取或分析该 URL。
 - 任一清单、路径、哈希或时长校验失败时，该实例不得进入 ready；不能悄悄略过异常来源。
@@ -125,9 +125,13 @@ interface AccessSessionView {
 - `GET /api/v1/analysis-runs/{run_id}`
 - `DELETE /api/v1/analysis-runs/{run_id}`
 
-创建请求先完成请求 Schema、`source_id` 和时间边界校验，再执行会话频率与容量准入，避免无效请求占用槽位。SSE 继续使用 `{sequence,type,run_id,timestamp,data}` 包络，15 秒发送一次心跳。Caddy 必须关闭响应缓冲和缓存，并把上游读取超时设为大于 180 秒；浏览器 `EventSource` 使用同源 Cookie。断线不恢复原请求，服务端取消运行，用户重试会得到新 `run_id`。
+创建请求先完成请求 Schema 和 `source_id` 校验，再执行会话频率与容量准入，避免无效请求占用槽位。新 Web 只提交 `source_id`；可选 `trigger_seconds` 仅为旧客户端兼容字段，后端接受但不用于范围、排序或提示。
 
-单分支成功、空结果、系统失败、临时材料清理和迟到结果丢弃继续遵循 ADR-0006、0008、0009，不因部署层级改变。公开响应和日志不得加入转录、模型原始响应、提示词、置信度或密钥。
+用户点击“分析视频动作”后，主管线完整覆盖不超过 60 秒的受控来源：整段音频与均匀视觉联系表并行生成，音频就绪即启动 ASR，视觉分支继续等待联系表。ASR 以 4 秒 PCM 包加速发送，Ark 语音/视觉默认使用 Mini；两个证据分支共享 11.5 秒预算。单分支超预算可以带警告部分成功，真实 smoke 以不超过 15 秒/视频分钟为发布门禁，180 秒只保留为安全上限。
+
+SSE 继续使用 `{sequence,type,run_id,timestamp,data}` 包络，15 秒发送一次心跳。Caddy 必须关闭响应缓冲和缓存，并把上游读取超时设为大于 180 秒；浏览器 `EventSource` 使用同源 Cookie。断线不恢复原请求，服务端取消运行，用户重试会得到新 `run_id`。
+
+单分支成功、空结果、系统失败、临时材料清理和迟到结果丢弃继续遵循 ADR-0006、0008、0009、0012，不因部署层级改变。公开响应和日志不得加入转录、模型原始响应、提示词、置信度或密钥。
 
 ## 6. 就绪、失败与安全行为
 

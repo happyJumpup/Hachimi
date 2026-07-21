@@ -20,7 +20,8 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     analysis_provider: Literal["cloud", "test"] = "cloud"
     ark_api_key: SecretStr | None = None
-    ark_model_id: str = "doubao-seed-2-0-lite-260215"
+    ark_model_id: str = "doubao-seed-2-0-mini-260428"
+    ark_visual_model_id: str = "doubao-seed-2-0-mini-260428"
     ark_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     volc_asr_api_key: SecretStr | None = None
     volc_asr_resource_id: str = "volc.seedasr.sauc.duration"
@@ -42,6 +43,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     run_ttl_seconds: int = Field(default=600, ge=1)
     run_timeout_seconds: int = Field(default=180, ge=1)
+    analysis_evidence_timeout_seconds: float = Field(default=11.5, gt=0)
+    analysis_latency_target_max_seconds_per_video_minute: float = Field(default=15.0, gt=0)
 
     @model_validator(mode="after")
     def reject_runtime_test_provider(self) -> "Settings":

@@ -206,7 +206,7 @@ export interface components {
             stage: components["schemas"]["RunStage"];
             status: components["schemas"]["RunStatus"];
             /** Trigger Seconds */
-            trigger_seconds: number;
+            trigger_seconds: number | null;
             /**
              * Updated At
              * Format: date-time
@@ -246,8 +246,12 @@ export interface components {
         CreateAnalysisRunRequest: {
             /** Source Id */
             source_id: string;
-            /** Trigger Seconds */
-            trigger_seconds: number;
+            /**
+             * Trigger Seconds
+             * @deprecated
+             * @description Deprecated compatibility metadata; full-source analysis ignores it.
+             */
+            trigger_seconds?: number | null;
         };
         /**
          * ErrorCode

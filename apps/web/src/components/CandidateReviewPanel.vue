@@ -131,7 +131,7 @@ const submit = (): void => {
         <button
           type="button"
           class="return-button"
-          aria-label="返回视频并重新选择时间点"
+          aria-label="返回视频"
           @click="emit('close')"
         >
           返回视频

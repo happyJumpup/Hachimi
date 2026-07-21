@@ -7,11 +7,9 @@ from uuid import uuid4
 
 from hakimi_analysis.fusion import CandidateFusionSkill
 from hakimi_analysis.media import (
-    AnalysisWindow,
     LocalMediaProcessor,
     MediaProcessingError,
     PreparedMedia,
-    calculate_analysis_window,
 )
 from hakimi_analysis.models import (
     AnalysisWarning,
@@ -29,10 +27,10 @@ from hakimi_analysis.sources import VideoSource
 
 
 class MediaProcessor(Protocol):
-    def prepare(
+    def prepare_source(
         self,
         source_path: Path,
-        window: AnalysisWindow,
+        duration_seconds: float,
     ) -> AbstractAsyncContextManager[PreparedMedia]: ...
 
 
@@ -51,7 +49,6 @@ class ArkAnalyzer(Protocol):
         self,
         *,
         transcript: dict[str, Any],
-        trigger_seconds: float,
         window: Segment,
         instructions: str,
     ) -> SpeechUnderstandingResult: ...
@@ -61,7 +58,15 @@ class ArkAnalyzer(Protocol):
         *,
         video_path: Path,
         window: Segment,
-        trigger_seconds: float,
+        instructions: str,
+    ) -> VisualLocalizationResult: ...
+
+    async def locate_visual_contact_sheet(
+        self,
+        *,
+        image_path: Path,
+        frame_times_seconds: tuple[float, ...],
+        window: Segment,
         instructions: str,
     ) -> VisualLocalizationResult: ...
 
@@ -120,11 +125,13 @@ class OrchestratedAnalysisPipeline:
         asr: SpeechRecognizer,
         ark: ArkAnalyzer,
         skills: SkillRepository,
+        evidence_timeout_seconds: float = 11.5,
     ) -> None:
         self._media = media
         self._asr = asr
         self._ark = ark
         self._skills = skills
+        self._evidence_timeout_seconds = evidence_timeout_seconds
         self._fusion = CandidateFusionSkill(
             instructions=skills.fusion_instructions,
             version=skills.fusion_version,
@@ -133,104 +140,108 @@ class OrchestratedAnalysisPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
+        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        for expanded in (False, True):
-            window = calculate_analysis_window(
-                trigger_seconds=trigger_seconds,
-                duration_seconds=source.duration_seconds,
-                expanded=expanded,
-            )
-            await emit(
-                RunStage.EXPANDING_WINDOW if expanded else RunStage.PREPARING_MEDIA,
-                "stage.changed",
-                {"expanded": expanded},
-            )
-            try:
-                async with self._media.prepare(source.path, window) as prepared:
-                    results = await self._analyze_branches(
-                        prepared,
-                        trigger_seconds,
-                        emit,
-                    )
-            except MediaProcessingError as error:
-                raise PipelineFailure(
-                    "media_error",
-                    "视频片段准备失败，请重试",
-                    retryable=False,
-                ) from error
-
-            speech_signals = results.speech if isinstance(results.speech, list) else []
-            visual_segments = results.visual if isinstance(results.visual, list) else []
-            if speech_signals or visual_segments:
-                await emit(
-                    RunStage.FUSING_CANDIDATES,
-                    "stage.changed",
-                    {"skill_version": self._fusion.version},
-                )
-                warnings: list[AnalysisWarning] = []
-                if isinstance(results.speech, ProviderError):
-                    warnings.append(
-                        AnalysisWarning(
-                            code="speech_unavailable",
-                            message="语音依据暂不可用，请重点确认动作名称和参数",
-                        )
-                    )
-                if isinstance(results.visual, ProviderError):
-                    warnings.append(
-                        AnalysisWarning(
-                            code="visual_unavailable",
-                            message="画面依据暂不可用，请重点确认演示时间段",
-                        )
-                    )
-                return PipelineOutput(
-                    candidates=self._fusion.run(
-                        source_id=source.id,
-                        speech_signals=speech_signals,
-                        visual_segments=visual_segments,
-                    ),
-                    warnings=warnings,
-                )
-
-            if results.both_successful:
-                if not expanded:
-                    continue
-                return PipelineOutput(candidates=[], empty_reason="no_evidence")
-
-            branch_error = (
-                results.speech
-                if isinstance(results.speech, ProviderError)
-                else results.visual
-            )
-            if not isinstance(branch_error, ProviderError):
-                raise AssertionError("failed analysis has no provider error")
+        del trigger_seconds
+        await emit(
+            RunStage.PREPARING_MEDIA,
+            "stage.changed",
+            {"analysis_scope": "full_source"},
+        )
+        try:
+            async with self._media.prepare_source(
+                source.path,
+                source.duration_seconds,
+            ) as prepared:
+                results = await self._analyze_branches(prepared, emit)
+        except MediaProcessingError as error:
             raise PipelineFailure(
-                branch_error.code,
-                str(branch_error),
-                retryable=branch_error.retryable,
-            ) from branch_error
+                "media_error",
+                "视频准备失败，请重试",
+                retryable=False,
+            ) from error
 
-        raise AssertionError("analysis attempts exhausted")
+        speech_signals = results.speech if isinstance(results.speech, list) else []
+        visual_segments = results.visual if isinstance(results.visual, list) else []
+        if speech_signals or visual_segments:
+            await emit(
+                RunStage.FUSING_CANDIDATES,
+                "stage.changed",
+                {"skill_version": self._fusion.version},
+            )
+            warnings: list[AnalysisWarning] = []
+            if isinstance(results.speech, ProviderError):
+                warnings.append(
+                    AnalysisWarning(
+                        code="speech_unavailable",
+                        message="语音依据暂不可用，请重点确认动作名称和参数",
+                    )
+                )
+            if isinstance(results.visual, ProviderError):
+                warnings.append(
+                    AnalysisWarning(
+                        code="visual_unavailable",
+                        message="画面依据暂不可用，请重点确认演示时间段",
+                    )
+                )
+            return PipelineOutput(
+                candidates=self._fusion.run(
+                    source_id=source.id,
+                    speech_signals=speech_signals,
+                    visual_segments=visual_segments,
+                ),
+                warnings=warnings,
+            )
+
+        if results.both_successful:
+            return PipelineOutput(candidates=[], empty_reason="no_evidence")
+
+        branch_error = (
+            results.speech if isinstance(results.speech, ProviderError) else results.visual
+        )
+        if not isinstance(branch_error, ProviderError):
+            raise AssertionError("failed analysis has no provider error")
+        raise PipelineFailure(
+            branch_error.code,
+            str(branch_error),
+            retryable=branch_error.retryable,
+        ) from branch_error
 
     async def _analyze_branches(
         self,
         prepared: PreparedMedia,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> BranchResults:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
-        speech_task = asyncio.create_task(
-            self._speech_branch(prepared, trigger_seconds, emit)
-        )
-        visual_task = asyncio.create_task(
-            self._visual_branch(prepared, trigger_seconds, emit)
-        )
-        speech_result, visual_result = await asyncio.gather(
-            speech_task,
-            visual_task,
-            return_exceptions=True,
-        )
+        speech_task = asyncio.create_task(self._speech_branch(prepared, emit))
+        visual_task = asyncio.create_task(self._visual_branch(prepared, emit))
+        tasks = {speech_task, visual_task}
+        try:
+            _done, pending = await asyncio.wait(
+                tasks,
+                timeout=self._evidence_timeout_seconds,
+            )
+            for task in pending:
+                task.cancel()
+            speech_result, visual_result = await asyncio.gather(
+                speech_task,
+                visual_task,
+                return_exceptions=True,
+            )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        if speech_task in pending:
+            speech_result = ProviderError(
+                "timeout", "speech evidence budget exceeded", retryable=True
+            )
+        if visual_task in pending:
+            visual_result = ProviderError(
+                "timeout", "visual evidence budget exceeded", retryable=True
+            )
         return BranchResults(
             speech=self._normalize_speech_result(speech_result),
             visual=self._normalize_visual_result(visual_result),
@@ -239,7 +250,6 @@ class OrchestratedAnalysisPipeline:
     async def _speech_branch(
         self,
         prepared: PreparedMedia,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> list[SpeechSignal]:
         await emit(
@@ -264,11 +274,17 @@ class OrchestratedAnalysisPipeline:
             end_seconds=prepared.window.end_seconds,
         )
         result = await self._ark.understand_speech(
-            transcript=transcript.model_dump(
-                mode="json",
-                exclude={"provider_request_id"},
-            ),
-            trigger_seconds=trigger_seconds,
+            transcript={
+                "text": transcript.text,
+                "utterances": [
+                    {
+                        "text": utterance.text,
+                        "start_seconds": utterance.start_seconds,
+                        "end_seconds": utterance.end_seconds,
+                    }
+                    for utterance in transcript.utterances
+                ],
+            },
             window=window,
             instructions=self._skills.speech_instructions,
         )
@@ -282,7 +298,6 @@ class OrchestratedAnalysisPipeline:
     async def _visual_branch(
         self,
         prepared: PreparedMedia,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> list[VisualSegment]:
         await emit(
@@ -290,13 +305,21 @@ class OrchestratedAnalysisPipeline:
             "branch.started",
             {"branch": "visual", "skill_version": self._skills.visual_version},
         )
-        result = await self._ark.locate_visual(
-            video_path=prepared.video_path,
+        if prepared.contact_sheet_ready is not None:
+            await prepared.contact_sheet_ready
+        if prepared.contact_sheet_path is None:
+            raise ProviderError(
+                "media_error",
+                "visual contact sheet is unavailable",
+                retryable=False,
+            )
+        result = await self._ark.locate_visual_contact_sheet(
+            image_path=prepared.contact_sheet_path,
+            frame_times_seconds=prepared.contact_sheet_timestamps,
             window=Segment(
                 start_seconds=prepared.window.start_seconds,
                 end_seconds=prepared.window.end_seconds,
             ),
-            trigger_seconds=trigger_seconds,
             instructions=self._skills.visual_instructions,
         )
         await emit(

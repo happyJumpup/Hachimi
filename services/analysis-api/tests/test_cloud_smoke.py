@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,7 @@ from hakimi_analysis.cloud_smoke import (
 )
 from hakimi_analysis.models import (
     AnalysisCandidate,
+    AnalysisWarning,
     CandidateParameters,
     EvidenceSpan,
     EvidenceType,
@@ -35,6 +37,9 @@ class SuccessfulPipelineOptions(TypedDict, total=False):
     leave_temp_file: bool
     fail_before_upload: bool
     delete_file_id_override: str | None
+    missing_branch: str | None
+    declare_missing_warning: bool
+    delay_seconds: float
 
 
 def write_smoke_manifest(tmp_path: Path, payload: dict[str, object]) -> Path:
@@ -168,7 +173,10 @@ class SuccessfulCloudPipeline:
         temp_root: Path | None = None,
         leave_temp_file: bool = False,
         fail_before_upload: bool = False,
+        missing_branch: str | None = None,
+        declare_missing_warning: bool = True,
         delete_file_id_override: str | None = None,
+        delay_seconds: float = 0,
     ) -> None:
         self._http_client = http_client
         self._calls = calls
@@ -180,19 +188,24 @@ class SuccessfulCloudPipeline:
         self._leave_temp_file = leave_temp_file
         self._fail_before_upload = fail_before_upload
         self._delete_file_id_override = delete_file_id_override
+        self._missing_branch = missing_branch
+        self._declare_missing_warning = declare_missing_warning
+
+        self._delay_seconds = delay_seconds
 
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
+        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
         self._calls.append(source.id)
         await emit(RunStage.PREPARING_MEDIA, "stage.changed", {})
+        await asyncio.sleep(self._delay_seconds)
         await emit(
             RunStage.ANALYZING_EVIDENCE,
             "branch.started",
-            {"branch": "speech", "skill_version": "1.2.0"},
+            {"branch": "speech", "skill_version": "1.3.0"},
         )
         await emit(
             RunStage.ANALYZING_EVIDENCE,
@@ -204,28 +217,44 @@ class SuccessfulCloudPipeline:
         upload = await self._http_client.post("https://ark.example/api/v3/files")
         if self._delete_upload:
             file_id = self._delete_file_id_override or str(upload.json()["id"])
-            await self._http_client.delete(
-                f"https://ark.example/api/v3/files/{file_id}"
+            await self._http_client.delete(f"https://ark.example/api/v3/files/{file_id}")
+        if self._missing_branch != "speech":
+            await emit(
+                RunStage.ANALYZING_EVIDENCE,
+                "branch.completed",
+                {"branch": "speech", "evidence_count": 1},
             )
-        await emit(
-            RunStage.ANALYZING_EVIDENCE,
-            "branch.completed",
-            {"branch": "speech", "evidence_count": 1},
-        )
-        await emit(
-            RunStage.ANALYZING_EVIDENCE,
-            "branch.completed",
-            {"branch": "visual", "evidence_count": 1},
-        )
+        if self._missing_branch != "visual":
+            await emit(
+                RunStage.ANALYZING_EVIDENCE,
+                "branch.completed",
+                {"branch": "visual", "evidence_count": 1},
+            )
         await emit(
             RunStage.FUSING_CANDIDATES,
             "stage.changed",
             {"skill_version": "1.4.0"},
         )
-        start, end = self._candidate_segment or (trigger_seconds - 4, trigger_seconds + 6)
+        legacy_trigger = (
+            trigger_seconds
+            if trigger_seconds is not None
+            else (45 if source.id.endswith("01") else 30)
+        )
+        start, end = self._candidate_segment or (legacy_trigger - 4, legacy_trigger + 6)
         if self._leave_temp_file and self._temp_root is not None:
             self._temp_root.mkdir(parents=True, exist_ok=True)
             (self._temp_root / "leftover").mkdir()
+        warnings: list[AnalysisWarning] = []
+        if self._declare_missing_warning:
+            if self._missing_branch == "speech":
+                warnings.append(
+                    AnalysisWarning(code="speech_unavailable", message="speech unavailable")
+                )
+            elif self._missing_branch == "visual":
+                warnings.append(
+                    AnalysisWarning(code="visual_unavailable", message="visual unavailable")
+                )
+
         return PipelineOutput(
             candidates=[
                 AnalysisCandidate(
@@ -242,9 +271,10 @@ class SuccessfulCloudPipeline:
                         )
                         for evidence_type in self._evidence_types
                     ],
-                    needs_confirmation=False,
+                    needs_confirmation=self._missing_branch is not None,
                 )
-            ]
+            ],
+            warnings=warnings,
         )
 
 
@@ -253,6 +283,13 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
     tmp_path: Path,
 ) -> None:
     annotations = valid_manifest()
+    annotations["sources"][0]["checkpoints"].append(
+        {
+            "trigger_seconds": 46,
+            "accepted_action_names": ["Drag Curl", "拖拽弯举"],
+            "expected_segment": {"start_seconds": 41, "end_seconds": 51},
+        }
+    )
     annotations["sources"].append(
         {
             "source_id": "core-workout-02",
@@ -268,7 +305,7 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
     annotation_path = write_smoke_manifest(tmp_path, annotations)
     catalog = SourceCatalog(
         [
-            VideoSource("arm-workout-01", "Arm", tmp_path / "arm.mp4", 90),
+            VideoSource("arm-workout-01", "Arm", tmp_path / "arm.mp4", 54),
             VideoSource("core-workout-02", "Core", tmp_path / "core.mp4", 60),
         ],
         manifest_backed=True,
@@ -320,7 +357,10 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
         "arm-workout-01",
         "core-workout-02",
     ]
+    assert all("seconds_per_video_minute" in source for source in result["sources"])
     serialized = json.dumps(result, ensure_ascii=False)
+    assert all(source["performance_target_met"] for source in result["sources"])
+    assert all(source["warning_codes"] == [] for source in result["sources"])
     assert "拖拽弯举" not in serialized
     assert "平板支撑" not in serialized
     assert "test-only" not in serialized
@@ -330,11 +370,13 @@ async def test_cloud_smoke_runs_every_annotated_controlled_source_without_conten
 
 async def run_single_source_fixture(
     tmp_path: Path,
+    *,
+    target_max_seconds_per_video_minute: float = 15.0,
     **pipeline_options: Unpack[SuccessfulPipelineOptions],
 ) -> dict[str, object]:
     annotation_path = write_smoke_manifest(tmp_path, valid_manifest())
     catalog = SourceCatalog(
-        [VideoSource("arm-workout-01", "Arm", tmp_path / "arm.mp4", 90)],
+        [VideoSource("arm-workout-01", "Arm", tmp_path / "arm.mp4", 54)],
         manifest_backed=True,
     )
     pipeline_calls: list[str] = []
@@ -365,6 +407,7 @@ async def run_single_source_fixture(
         volc_asr_api_key=SecretStr("test-only-asr"),
         smoke_annotations_path=annotation_path,
         run_timeout_seconds=2,
+        analysis_latency_target_max_seconds_per_video_minute=target_max_seconds_per_video_minute,
     )
     return await run_smoke(
         settings,
@@ -373,6 +416,82 @@ async def run_single_source_fixture(
         transport=httpx.MockTransport(handler),
         temp_root=tmp_path / "analysis-runs",
     )
+
+
+@pytest.mark.asyncio
+async def test_cloud_smoke_accepts_tokenized_drag_curl_alias(tmp_path: Path) -> None:
+    result = await run_single_source_fixture(
+        tmp_path,
+        candidate_name="Drag Dumbbell Curl",
+    )
+    assert result["status"] == "PASS"
+
+
+@pytest.mark.asyncio
+async def test_cloud_smoke_accepts_declared_single_branch_success(tmp_path: Path) -> None:
+    result = await run_single_source_fixture(
+        tmp_path,
+        missing_branch="speech",
+        evidence_types=(EvidenceType.VISUAL,),
+    )
+    sources = result["sources"]
+    assert isinstance(sources, list)
+    source_result = sources[0]
+    assert isinstance(source_result, dict)
+    assert source_result["branch_outcomes"] == {
+        "speech": "unavailable",
+        "visual": "completed",
+    }
+    assert source_result["warning_codes"] == ["speech_unavailable"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pipeline_options", "expected_code"),
+    [
+        (
+            {
+                "missing_branch": "speech",
+                "declare_missing_warning": False,
+                "evidence_types": (EvidenceType.VISUAL,),
+            },
+            "speech_branch_missing_without_warning",
+        ),
+        (
+            {
+                "missing_branch": "speech",
+                "evidence_types": (EvidenceType.SPEECH,),
+            },
+            "candidate_evidence_does_not_match_completed_branches",
+        ),
+    ],
+)
+async def test_cloud_smoke_rejects_inconsistent_partial_success(
+    tmp_path: Path,
+    pipeline_options: SuccessfulPipelineOptions,
+    expected_code: str,
+) -> None:
+    with pytest.raises(SmokeFailure) as failure:
+        await run_single_source_fixture(tmp_path, **pipeline_options)
+
+    assert failure.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_cloud_smoke_rejects_latency_above_target(tmp_path: Path) -> None:
+    with pytest.raises(SmokeFailure) as failure:
+        await run_single_source_fixture(
+            tmp_path,
+            target_max_seconds_per_video_minute=0.001,
+            delay_seconds=0.03,
+        )
+
+    assert failure.value.code == "latency_target_exceeded"
+    payload = failure_payload(failure.value)
+    safe_observations = payload["safe_observations"]
+    assert isinstance(safe_observations, dict)
+    assert safe_observations["target_max_seconds_per_video_minute"] == 0.001
+    assert safe_observations["seconds_per_video_minute"] > 0.001
 
 
 @pytest.mark.asyncio
@@ -386,13 +505,9 @@ async def run_single_source_fixture(
             {"candidate_segment": (1, 10)},
             "expected_action_or_time_intersection_missing",
         ),
-        (
-            {"evidence_types": (EvidenceType.SPEECH,)},
-            "fused_dual_evidence_missing",
-        ),
     ],
 )
-async def test_cloud_smoke_rejects_wrong_semantics_time_or_unfused_evidence(
+async def test_cloud_smoke_rejects_wrong_semantics_or_time(
     tmp_path: Path,
     pipeline_options: SuccessfulPipelineOptions,
     expected_code: str,
@@ -420,6 +535,9 @@ async def test_cloud_smoke_reports_only_safe_aggregate_mismatch_counts(
         "temporal_overlap_count": 1,
         "semantic_temporal_match_count": 0,
         "dual_evidence_count": 0,
+        "curl_family_count": 0,
+        "dumbbell_curl_count": 0,
+        "drag_curl_count": 0,
     }
     assert temporal_failure.value.observations == {
         "candidate_count": 1,
@@ -427,6 +545,9 @@ async def test_cloud_smoke_reports_only_safe_aggregate_mismatch_counts(
         "temporal_overlap_count": 0,
         "semantic_temporal_match_count": 0,
         "dual_evidence_count": 0,
+        "curl_family_count": 1,
+        "dumbbell_curl_count": 0,
+        "drag_curl_count": 1,
     }
 
 
@@ -473,7 +594,7 @@ async def test_cloud_smoke_requires_annotations_for_every_controlled_source(
     )
     catalog = SourceCatalog(
         [
-            VideoSource("arm-workout-01", "Arm", tmp_path / "arm.mp4", 90),
+            VideoSource("arm-workout-01", "Arm", tmp_path / "arm.mp4", 54),
             VideoSource("missing-annotation-02", "Core", tmp_path / "core.mp4", 60),
         ],
         manifest_backed=True,

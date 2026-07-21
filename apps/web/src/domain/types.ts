@@ -53,7 +53,7 @@ export interface AnalysisError {
 export interface AnalysisRun {
   id: string
   source_id: string
-  trigger_seconds: number
+  trigger_seconds: number | null
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   stage:
     | 'queued'

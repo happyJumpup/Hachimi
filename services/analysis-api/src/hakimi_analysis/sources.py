@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hakimi_analysis.models import SourceSummary
 
+MAX_ANALYZABLE_SOURCE_DURATION_SECONDS = 60.0
+
 
 @dataclass(frozen=True, slots=True)
 class VideoSource:
@@ -40,7 +42,7 @@ class _ManifestSource(BaseModel):
     id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")
     title: str = Field(min_length=1)
     media_path: str = Field(min_length=1)
-    duration_seconds: float = Field(gt=0)
+    duration_seconds: float = Field(gt=0, le=MAX_ANALYZABLE_SOURCE_DURATION_SECONDS)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     origin_url: str | None = None
 
@@ -72,6 +74,12 @@ class SourceCatalog:
     def __init__(self, sources: list[VideoSource], *, manifest_backed: bool = False) -> None:
         if len({source.id for source in sources}) != len(sources):
             raise SourceManifestError("source ids must be unique")
+        if any(
+            source.duration_seconds <= 0
+            or source.duration_seconds > MAX_ANALYZABLE_SOURCE_DURATION_SECONDS
+            for source in sources
+        ):
+            raise SourceManifestError("source duration exceeds the analysis boundary")
         self._sources = {source.id: source for source in sources}
         self._manifest_backed = manifest_backed
 
@@ -119,6 +127,8 @@ class SourceCatalog:
                 actual_duration = duration_probe(source_path)
             except Exception as error:
                 raise SourceManifestError("source media duration cannot be read") from error
+            if actual_duration > MAX_ANALYZABLE_SOURCE_DURATION_SECONDS:
+                raise SourceManifestError("source media exceeds the analysis boundary")
             if abs(actual_duration - item.duration_seconds) > 1:
                 raise SourceManifestError("source media duration does not match")
             if item.origin_url is not None:
@@ -167,7 +177,10 @@ class SourceCatalog:
             try:
                 if _sha256(source.path) != source.expected_sha256:
                     return False
-                if abs(duration_probe(source.path) - source.duration_seconds) > 1:
+                actual_duration = duration_probe(source.path)
+                if actual_duration > MAX_ANALYZABLE_SOURCE_DURATION_SECONDS:
+                    return False
+                if abs(actual_duration - source.duration_seconds) > 1:
                     return False
             except Exception:
                 return False

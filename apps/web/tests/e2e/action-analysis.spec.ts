@@ -20,7 +20,7 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await page.locator('video').evaluate((video: HTMLVideoElement) => {
     video.currentTime = 2
   })
-  await page.getByRole('button', { name: /添加动作/ }).click()
+  await page.getByRole('button', { name: /分析视频动作/ }).click()
 
   await expect(page.getByRole('heading', { name: '找到 1 个动作' })).toBeVisible()
   await expect(
@@ -42,7 +42,7 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await page.locator('video').evaluate((video: HTMLVideoElement) => {
     video.currentTime = 2
   })
-  await page.getByRole('button', { name: /添加动作/ }).click()
+  await page.getByRole('button', { name: /分析视频动作/ }).click()
   await expect(page.getByRole('heading', { name: '找到 1 个动作' })).toBeVisible()
   const modeButton = page.locator('.candidate-panel').getByRole('button', { name: '按次数' })
   const modeButtonBox = await modeButton.boundingBox()

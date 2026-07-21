@@ -122,7 +122,7 @@ describe('动作分析 store', () => {
     const events = new FakeEventFactory()
     const store = useAnalysisStore()
 
-    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    await store.start({ sourceId: 'video-a', client, events })
     events.emit('stage.changed', { stage: 'analyzing_evidence' })
     expect(store.stage).toBe('analyzing_evidence')
 
@@ -139,7 +139,7 @@ describe('动作分析 store', () => {
     const events = new FakeEventFactory()
     const store = useAnalysisStore()
 
-    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    await store.start({ sourceId: 'video-a', client, events })
     await store.cancel(client)
     events.emit('run.completed')
     await flushPromises()
@@ -159,7 +159,7 @@ describe('动作分析 store', () => {
         resolveCreated = resolve
       })
 
-    const starting = store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    const starting = store.start({ sourceId: 'video-a', client, events })
     await flushPromises()
     await store.cancel(client)
     resolveCreated({
@@ -183,7 +183,7 @@ describe('动作分析 store', () => {
       throw new AnalysisApiError('真实动作分析暂时繁忙，请稍后重试', 429, 15)
     }
 
-    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    await store.start({ sourceId: 'video-a', client, events })
 
     expect(store.status).toBe('failed')
     expect(store.failureKind).toBe('capacity')
@@ -199,7 +199,7 @@ describe('动作分析 store', () => {
       throw new Error('Failed to fetch C:\\private\\media\\video.mp4')
     }
 
-    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    await store.start({ sourceId: 'video-a', client, events })
 
     expect(store.status).toBe('failed')
     expect(store.failureKind).toBe('system')
@@ -215,7 +215,7 @@ describe('动作分析 store', () => {
       throw new Error('temporary result read failure')
     }
 
-    await store.start({ sourceId: 'video-a', triggerSeconds: 45, client, events })
+    await store.start({ sourceId: 'video-a', client, events })
     events.emit('run.completed')
     await flushPromises()
 

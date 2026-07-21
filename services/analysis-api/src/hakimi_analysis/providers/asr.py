@@ -33,7 +33,7 @@ class VolcAsrClient:
         api_key: str,
         resource_id: str,
         url: str,
-        chunk_duration_ms: int = 200,
+        chunk_duration_ms: int = 4000,
         pace_audio: bool = True,
         retry_delays: tuple[float, ...] = (1.0, 2.0),
     ) -> None:
@@ -261,15 +261,10 @@ def _parse_server_frame(
 
 def _raise_provider_error(provider_code: int, request_id: str | None) -> None:
     code_text = str(provider_code)
-    retryable = (
-        provider_code == _PACKET_WAIT_TIMEOUT_ERROR
-        or code_text.startswith(_INTERNAL_ERROR_PREFIX)
+    retryable = provider_code == _PACKET_WAIT_TIMEOUT_ERROR or code_text.startswith(
+        _INTERNAL_ERROR_PREFIX
     )
-    code = (
-        "configuration_error"
-        if provider_code == _RESOURCE_GRANT_ERROR
-        else "provider_error"
-    )
+    code = "configuration_error" if provider_code == _RESOURCE_GRANT_ERROR else "provider_error"
     raise ProviderError(
         code,
         "语音识别服务暂时不可用",

@@ -34,6 +34,14 @@ const segmentEndLimit = computed(() => {
     ? Math.min(configuredDuration, durationSeconds.value)
     : configuredDuration
 })
+const expectedAnalysisTime = computed(() => {
+  const duration = selectedSource.value?.duration_seconds ?? durationSeconds.value
+  if (!Number.isFinite(duration) || duration <= 0) return '按视频时长估算'
+  const minutes = duration / 60
+  const fastest = Math.max(1, Math.ceil(minutes * 5))
+  const slowest = Math.max(fastest, Math.ceil(minutes * 15))
+  return `预计 ${fastest}–${slowest} 秒`
+})
 
 const formatTime = (seconds: number): string => {
   const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
@@ -85,7 +93,6 @@ const startAnalysis = async (): Promise<void> => {
   previewEnd.value = null
   await analysis.start({
     sourceId: selectedSourceId.value,
-    triggerSeconds: video.value.currentTime,
     client: analysisClient,
     events: browserEventStreamFactory,
   })
@@ -173,7 +180,7 @@ const returnToVideo = async (): Promise<void> => {
       <div class="source-rail">
         <span class="live-dot" />
         <label for="source">来源视频</label>
-        <select id="source" v-model="selectedSourceId" :disabled="analysis.isRunning">
+        <select id="source" v-model="selectedSourceId">
           <option v-for="source in analysis.sources" :key="source.id" :value="source.id">
             {{ source.title }}
           </option>
@@ -229,7 +236,7 @@ const returnToVideo = async (): Promise<void> => {
           <div class="analysis-status">
             <span class="pulse-ring" />
             <p>{{ analysis.stageLabel }}</p>
-            <small>只分析当前时间附近</small>
+            <small>正在分析整条视频中的动作</small>
           </div>
           <button type="button" class="cancel-button" @click="cancelAnalysis">取消</button>
         </div>
@@ -252,8 +259,8 @@ const returnToVideo = async (): Promise<void> => {
 
         <div v-if="analysis.status === 'completed' && !analysis.candidates.length" class="result-toast">
           <div>
-            <strong>附近没有找到明确动作</strong>
-            <span>换个时间点，或直接在草稿中手工创建</span>
+            <strong>视频里没有找到明确动作</strong>
+            <span>可以重试，或直接在草稿中手工创建</span>
           </div>
           <RouterLink to="/plan">去草稿</RouterLink>
         </div>
@@ -267,8 +274,8 @@ const returnToVideo = async (): Promise<void> => {
         >
           <span class="button-crosshair" aria-hidden="true" />
           <span>
-            <small>AT {{ formatTime(currentSeconds) }}</small>
-            {{ access.loaded && !access.canAnalyze ? '实时 AI 名额暂不可用' : '添加动作' }}
+            <small>{{ expectedAnalysisTime }}</small>
+            {{ access.loaded && !access.canAnalyze ? '实时 AI 名额暂不可用' : '分析视频动作' }}
           </span>
           <b>＋</b>
         </button>
@@ -289,7 +296,7 @@ const returnToVideo = async (): Promise<void> => {
 
     <footer class="page-caption">
       <span>01</span>
-      <p>播放到想练的动作附近，再点击“添加动作”</p>
+      <p>点击后分析整条视频，再选择想练的动作</p>
       <i />
       <small>AGENT PROPOSES · YOU DECIDE</small>
     </footer>

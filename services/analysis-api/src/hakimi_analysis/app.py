@@ -56,9 +56,7 @@ async def stream_run_events(
             view = None
         if view is not None and view.status not in TERMINAL_STATUSES:
             with suppress(KeyError):
-                await asyncio.shield(
-                    manager.cancel(run_id, owner_session_id=owner_session_id)
-                )
+                await asyncio.shield(manager.cancel(run_id, owner_session_id=owner_session_id))
 
 
 def create_app(
@@ -269,11 +267,6 @@ def create_app(
             source = source_catalog.get(payload.source_id)
         except KeyError as error:
             raise HTTPException(status_code=404, detail="受控视频源不存在") from error
-        if payload.trigger_seconds > source.duration_seconds:
-            raise HTTPException(
-                status_code=422,
-                detail="trigger_seconds must be inside the source video",
-            )
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         active = await access_manager.active_run(session.id)
         if active is not None and active.source_id != source.id and active.run_id is not None:
@@ -367,7 +360,7 @@ def create_app(
             404: {
                 "model": ApiErrorResponse,
                 "description": "分析请求不存在、已过期或不属于当前会话。",
-            }
+            },
         },
     )
     async def run_events(run_id: str, request: Request) -> StreamingResponse:

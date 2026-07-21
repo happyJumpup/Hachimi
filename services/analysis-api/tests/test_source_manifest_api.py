@@ -40,7 +40,7 @@ def write_manifest(tmp_path: Path, *, media_path: str = "competition/arm-01.mp4"
                         "id": "arm-01",
                         "title": "手臂训练 01",
                         "media_path": media_path,
-                        "duration_seconds": 96.4,
+                        "duration_seconds": 54.4,
                         "sha256": hashlib.sha256(b"team-owned-video").hexdigest(),
                         "origin_url": "https://www.douyin.com/video/123",
                     },
@@ -48,7 +48,7 @@ def write_manifest(tmp_path: Path, *, media_path: str = "competition/arm-01.mp4"
                         "id": "arm-02",
                         "title": "手臂训练 02",
                         "media_path": "competition/arm-02.mp4",
-                        "duration_seconds": 75,
+                        "duration_seconds": 48,
                         "sha256": hashlib.sha256(b"team-owned-video-2").hexdigest(),
                         "origin_url": None,
                     },
@@ -69,7 +69,7 @@ async def test_manifest_sources_expose_origin_and_redirect_to_controlled_cdn(
         manifest_path=manifest_path,
         media_root=tmp_path / "media",
         public_media_base_url="https://media.example.com/hachimi/",
-        duration_probe=lambda path: 75 if path.name == "arm-02.mp4" else 96.4,
+        duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 54.4,
     )
     app = create_app(catalog=catalog, pipeline=EmptyPipeline())
 
@@ -86,19 +86,34 @@ async def test_manifest_sources_expose_origin_and_redirect_to_controlled_cdn(
             "id": "arm-01",
             "title": "手臂训练 01",
             "media_url": "/api/v1/sources/arm-01/media",
-            "duration_seconds": 96.4,
+            "duration_seconds": 54.4,
             "origin_url": "https://www.douyin.com/video/123",
         },
         {
             "id": "arm-02",
             "title": "手臂训练 02",
             "media_url": "/api/v1/sources/arm-02/media",
-            "duration_seconds": 75.0,
+            "duration_seconds": 48.0,
             "origin_url": None,
         },
     ]
     assert media.status_code == 307
     assert media.headers["location"] == "https://media.example.com/hachimi/competition/arm-01.mp4"
+
+
+def test_manifest_rejects_media_longer_than_full_source_boundary(tmp_path: Path) -> None:
+    manifest_path = write_manifest(tmp_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["sources"][0]["duration_seconds"] = 60
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(SourceManifestError):
+        SourceCatalog.from_manifest(
+            manifest_path=manifest_path,
+            media_root=tmp_path / "media",
+            public_media_base_url="https://media.example.com/hachimi/",
+            duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 60.1,
+        )
 
 
 @pytest.mark.asyncio
@@ -157,7 +172,7 @@ def test_manifest_rejects_media_paths_outside_the_controlled_root(tmp_path: Path
             manifest_path=manifest_path,
             media_root=tmp_path / "media",
             public_media_base_url="https://media.example.com/hachimi/",
-            duration_probe=lambda path: 75 if path.name == "arm-02.mp4" else 96.4,
+            duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 54.4,
         )
 
 
@@ -166,9 +181,7 @@ def test_manifest_rejects_origin_url_userinfo_without_echoing_credentials(
 ) -> None:
     manifest_path = write_manifest(tmp_path)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["sources"][0]["origin_url"] = (
-        "https://demo-user:demo-password@www.douyin.com/video/123"
-    )
+    payload["sources"][0]["origin_url"] = "https://demo-user:demo-password@www.douyin.com/video/123"
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(SourceManifestError) as failure:
@@ -176,7 +189,7 @@ def test_manifest_rejects_origin_url_userinfo_without_echoing_credentials(
             manifest_path=manifest_path,
             media_root=tmp_path / "media",
             public_media_base_url="https://media.example.com/hachimi/",
-            duration_probe=lambda path: 75 if path.name == "arm-02.mp4" else 96.4,
+            duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 54.4,
         )
 
     assert "demo-user" not in str(failure.value)

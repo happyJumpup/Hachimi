@@ -52,6 +52,21 @@ class SuccessfulPipeline:
         )
 
 
+class TriggerCapturePipeline:
+    def __init__(self) -> None:
+        self.received_trigger: float | None | object = object()
+
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del source, emit
+        self.received_trigger = trigger_seconds
+        return PipelineOutput(candidates=[], empty_reason="no_evidence")
+
+
 class SlowPipeline:
     async def analyze(
         self,
@@ -133,9 +148,10 @@ async def test_sources_and_completed_run_are_observable_through_http(tmp_path: P
 
         created = await client.post(
             "/api/v1/analysis-runs",
-            json={"source_id": "legacy-arm-workout", "trigger_seconds": 45},
+            json={"source_id": "legacy-arm-workout"},
         )
         assert created.status_code == 202
+        assert created.json()["trigger_seconds"] is None
         run_id = created.json()["id"]
 
         completed = await wait_for_status(client, run_id, "completed")
@@ -144,6 +160,26 @@ async def test_sources_and_completed_run_are_observable_through_http(tmp_path: P
         events = await client.get(f"/api/v1/analysis-runs/{run_id}/events")
         assert events.status_code == 200
         assert "event: run.completed" in events.text
+
+
+@pytest.mark.asyncio
+async def test_legacy_trigger_is_recorded_but_never_forwarded_to_analysis(
+    tmp_path: Path,
+) -> None:
+    pipeline = TriggerCapturePipeline()
+    app = create_app(catalog=source_catalog(tmp_path), pipeline=pipeline, access=make_test_access())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout", "trigger_seconds": 999},
+        )
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+
+    assert created.status_code == 202
+    assert completed["trigger_seconds"] == 999
+    assert pipeline.received_trigger is None
 
 
 @pytest.mark.asyncio

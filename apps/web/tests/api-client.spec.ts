@@ -11,6 +11,22 @@ describe('API client', () => {
     vi.unstubAllGlobals()
   })
 
+  it('starts explicit whole-video analysis without sending playback time', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ id: 'run-1' }),
+      { status: 202, headers: { 'Content-Type': 'application/json' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await analysisClient.createRun('arm-01')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/analysis-runs', expect.objectContaining({
+      method: 'POST',
+      credentials: 'same-origin',
+      body: JSON.stringify({ source_id: 'arm-01' }),
+    }))
+  })
+
   it('keeps Retry-After when analysis capacity is unavailable', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
       JSON.stringify({ detail: '真实动作分析暂时繁忙，请稍后重试' }),
@@ -23,7 +39,7 @@ describe('API client', () => {
       },
     )))
 
-    await expect(analysisClient.createRun('arm-01', 12)).rejects.toMatchObject({
+    await expect(analysisClient.createRun('arm-01')).rejects.toMatchObject({
       status: 429,
       retryAfterSeconds: 15,
     } satisfies Partial<AnalysisApiError>)

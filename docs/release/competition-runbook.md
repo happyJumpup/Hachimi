@@ -96,7 +96,7 @@ Caddy 必须：
 | `APP_ENV` | 必须为 `production` |
 | `ANALYSIS_PROVIDER` | 必须为 `cloud`；生产环境配置 `test` 时拒绝启动 |
 | `ARK_API_KEY` | 必填秘密，只传入后端 |
-| `ARK_MODEL_ID` / `ARK_BASE_URL` | 使用已验证模型与官方地址；实际值写入发布事实 |
+| `ARK_MODEL_ID` / `ARK_VISUAL_MODEL_ID` / `ARK_BASE_URL` | 语音与视觉默认使用已验证 Mini 模型和官方地址；实际值写入发布事实 |
 | `VOLC_ASR_API_KEY` | 必填秘密，只传入后端 WebSocket 握手 |
 | `VOLC_ASR_RESOURCE_ID` / `VOLC_ASR_URL` | 与现有流式语音识别 2.0 权益一致；不得猜测小时版或并发版 |
 | `SOURCE_MANIFEST_PATH` | 指向容器内只读挂载的该 release 来源清单，例如 `/config/media-manifest.json` |
@@ -112,11 +112,13 @@ Caddy 必须：
 | `PUBLIC_ANALYSIS_CONCURRENCY` | 容量验收后填写；未通过时为 `0` |
 | `CORS_ORIGINS` | 仅精确生产 HTTPS 域名；同源部署不允许 `*` |
 | `RUN_TIMEOUT_SECONDS` | `180` |
+| `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | `11.5`；单分支超出后取消并按证据决定部分成功或失败 |
+| `ANALYSIS_LATENCY_TARGET_MAX_SECONDS_PER_VIDEO_MINUTE` | `15`；真实 smoke 的发布门禁 |
 | `RUN_TTL_SECONDS` | `600` |
 
 `HAKIMI_DEMO_VIDEO_PATH` 仅用于当前单视频本地开发，竞赛生产来源由清单和媒体根目录提供，生产环境不得同时依赖二者。Docker/服务器若需读取私有 GHCR，只配置最小 `read:packages` 凭据到 Docker credential store，不写进应用环境文件。
 
-生产 FFmpeg 不从 `imageio-ffmpeg` wheel 或 GHCR 镜像分发。发布人须把经审核的可执行文件放在 `/opt/hachimi/shared/bin/ffmpeg`，设为不可由应用用户写入，并按 [`licenses/FFMPEG_RUNTIME.md`](../../licenses/FFMPEG_RUNTIME.md) 记录版本、完整配置行、可执行文件与配置行两个 SHA-256、适用许可证和对应源码位置。应用以 FFmpeg 内建 `mpeg4` 编码器生成精确到非关键帧的分析窗口；预期 LGPL 边界不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。生产就绪探针会执行、校验并锁定该二进制；如实际构建包含 GPL 组件，必须先完成相应分发义务，不能用“仅服务器使用”跳过审计。
+生产 FFmpeg 不从 `imageio-ffmpeg` wheel 或 GHCR 镜像分发。发布人须把经审核的可执行文件放在 `/opt/hachimi/shared/bin/ffmpeg`，设为不可由应用用户写入，并按 [`licenses/FFMPEG_RUNTIME.md`](../../licenses/FFMPEG_RUNTIME.md) 记录版本、完整配置行、可执行文件与配置行两个 SHA-256、适用许可证和对应源码位置。主管线使用 FFmpeg 生成整段 PCM 音频和瞬时视觉联系表，不再生成视频分析窗口；兼容路径仍保留内建 `mpeg4` 编码器。预期 LGPL 边界不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。生产就绪探针会执行、校验并锁定该二进制；如实际构建包含 GPL 组件，必须先完成相应分发义务，不能用“仅服务器使用”跳过审计。
 
 发布人检查环境文件时只检查“变量存在、权限正确、值不是空白”，不得把值输出到终端。GitHub Actions 不注入真实 Ark/ASR 密钥；真实云 smoke 只能在受控发布机或服务器执行。
 
@@ -124,7 +126,7 @@ Caddy 必须：
 
 ### 5.1 来源清单
 
-版本化清单只登记 2–3 个团队授权来源。每项固定包含稳定 `id`、`title`、`media_path`、`duration_seconds` 和 `sha256`；可附不参与下载的 `origin_url`。`media_path` 必须是无 `..` 的相对 POSIX 路径。完整 JSON Schema 以技术架构文档为准，部署脚本不得维护第二套字段名。
+版本化清单只登记 2–3 个团队授权来源。每项固定包含稳定 `id`、`title`、`media_path`、`duration_seconds` 和 `sha256`，且声明时长与实际媒体时长都必须大于 0 且不超过 60 秒；可附不参与下载的 `origin_url`。`media_path` 必须是无 `..` 的相对 POSIX 路径。完整 JSON Schema 以技术架构文档为准，部署脚本不得维护第二套字段名。
 
 - 浏览器播放地址：`PUBLIC_MEDIA_BASE_URL + media_path`。
 - 后端分析路径：`SOURCE_MEDIA_ROOT / media_path`。
@@ -215,9 +217,9 @@ docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml pul
 `pnpm smoke:cloud` 已按生产受控来源清单运行，不再接受硬编码的本地 `legacy-arm-workout`。发布前从 [`competition/smoke-annotations.example.json`](../../competition/smoke-annotations.example.json) 复制该 release 的 `smoke-annotations.json`，并遵循以下契约：
 
 - `version` 固定为 `1`；`sources` 必须与媒体清单的来源 ID 完全一致，不能遗漏或额外增加来源。
-- 每个来源至少有一个 `checkpoint`，只登记触发秒数、动作名称的人工认可别名和期望片段起止秒数。
+- 每个来源至少有一个 `checkpoint`，登记用于验收的参考秒数、动作名称人工认可别名和期望片段起止秒数；参考秒数不再传给主管线控制范围。
 - 清单可以登记公开的动作标注，但不得包含转录、提示词、帧、模型原始响应、密钥、体验码、本机路径或签名 URL。
-- 触发点和期望片段必须位于对应来源时长内；动作名称别名只用于确定性语义别名匹配，不额外调用模型判分。
+- 参考点和期望片段必须位于对应来源时长内；动作名称别名只用于确定性语义别名匹配，不额外调用模型判分。
 
 候选镜像在服务器上按同一只读来源/媒体/标注挂载执行：
 
@@ -227,9 +229,9 @@ docker compose --env-file /opt/hachimi/shared/.env.production \
   python -m hakimi_analysis.cloud_smoke
 ```
 
-命令逐来源、逐标注点执行真实管线。任一来源未覆盖、语音或视觉分支未完成、融合阶段缺失、动作语义别名不匹配、片段不相交、候选含重量字段、本地临时目录未恢复，或 Ark 上传与成功删除数量不一致，均返回非零。每条演示视频至少设置一个团队人工标注触发点，并验证：
+命令对每个来源只执行一次整段真实管线，再用该来源的全部标注点验收候选。任一来源未覆盖、两个分支都未完成、缺失分支没有对应警告、候选依据与已完成分支矛盾、融合阶段缺失、动作语义别名不匹配、片段不相交、候选含重量字段、超过 15 秒/视频分钟或临时目录未恢复，均返回非零。每条演示视频至少设置一个团队人工标注点，并验证：
 
-- Ark、豆包流式 ASR 2.0 和融合三个阶段都是真实成功，不使用测试 Provider、缓存候选或预置结果。
+- Ark、豆包流式 ASR 2.0 和融合都使用真实 Provider；允许一个证据分支超预算后带警告部分成功，但不使用测试 Provider、缓存候选或预置结果。
 - 候选名称与人工标注语义一致，绝对片段与标注时间段相交，不产生重量。
 - 真实云命令通过后，再由真实 Web 验收确认候选可校正、可加入跨视频草稿且刷新后恢复。
 - 本地临时目录恢复到运行前状态；Ark 临时文件删除请求成功。
@@ -302,7 +304,7 @@ PUBLIC_ANALYSIS_CONCURRENCY=0
 | 时间 | 操作 | 讲解重点 |
 | --- | --- | --- |
 | 00:00–00:25 | 打开首页并选择受控视频 | 用户寻找的是可训练动作，而不是收藏整条视频 |
-| 00:25–01:35 | 跳到标注触发点，点击“添加动作” | 真实 ASR 与视觉并行；只显示真实阶段，不显示伪造百分比 |
+| 00:25–01:35 | 选择视频，点击“分析视频动作” | 显式分析整段视频；真实 ASR 与视觉并行，只显示真实阶段 |
 | 01:35–02:10 | 预览、修正候选并加入草稿 | 用户最终确认；保留来源视频和演示时间段，不采信模型重量 |
 | 02:10–02:40 | 调整动作参数，补一个无视频自建动作并另存为 | 多来源/无视频动作可自由编排，方案不会被 Agent 擅自决定 |
 | 02:40–03:55 | 开始短训练，完成次数/时长组，经历休息并返回 | Pet 只陪伴不控制流程；休息按墙钟，动作离开页面暂停，支持隐藏 |
@@ -326,7 +328,7 @@ PUBLIC_ANALYSIS_CONCURRENCY=0
 
 对评委和团队统一披露：
 
-- 当前是 Web-first 竞赛版，不是抖音小程序；只支持 2–3 个团队受控视频，不能上传视频或提交任意 URL。
+- 当前是 Web-first 竞赛版，不是抖音小程序；只支持 2–3 个不超过 60 秒的团队受控视频，不能上传视频或提交任意 URL。更长视频需要后续分块方案。
 - 动作分析依赖 Ark 与豆包流式 ASR 2.0，受网络、权益和额度影响；没有运行时 Mock 回退。
 - 单实例重启或 SSE 断开会取消正在进行的分析，不恢复后台任务。
 - 训练数据只在当前浏览器设备保存；无账号、跨设备同步或服务器备份。
@@ -371,6 +373,7 @@ PUBLIC_ANALYSIS_CONCURRENCY=0
 - [Web-first 与受控视频源](../adr/0007-web-first-controlled-video-sources.md)
 - [显式、临时且可取消的分析管线](../adr/0008-explicit-transient-analysis-pipeline.md)
 - [豆包流式语音识别模型 2.0](../adr/0009-use-streaming-input-asr-2.md)
+- [显式整段视频分析与延迟预算](../adr/0012-explicit-full-source-analysis-with-latency-budget.md)
 - [Agent 不长期保存原始媒体](../adr/0006-agent-does-not-retain-raw-media.md)
 - [训练场次可恢复但不在后台训练](../adr/0003-training-sessions-are-recoverable.md)
 - [项目开发与验证入口](../../README.md)

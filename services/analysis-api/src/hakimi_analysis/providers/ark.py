@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 from pathlib import Path
 from typing import Any, TypeVar
@@ -21,6 +22,15 @@ from hakimi_analysis.providers.base import (
 StructuredResult = TypeVar("StructuredResult", bound=BaseModel)
 
 
+def _validate_visual_result(result: VisualLocalizationResult, window: Segment) -> None:
+    for segment in result.segments:
+        if (
+            segment.start_seconds < window.start_seconds - 0.5
+            or segment.end_seconds > window.end_seconds + 0.5
+        ):
+            raise ProviderSchemaError("视觉定位时间超出分析窗口")
+
+
 class ArkResponsesClient:
     def __init__(
         self,
@@ -29,12 +39,14 @@ class ArkResponsesClient:
         model_id: str,
         base_url: str,
         http_client: httpx.AsyncClient,
+        visual_model_id: str | None = None,
         retry_delays: tuple[float, ...] = (1.0, 2.0),
         file_poll_interval_seconds: float = 1.0,
         file_poll_limit: int = 90,
     ) -> None:
         self._api_key = api_key
         self._model_id = model_id
+        self._visual_model_id = visual_model_id or model_id
         self._base_url = base_url.rstrip("/")
         self._http_client = http_client
         self._retry_delays = retry_delays
@@ -45,12 +57,10 @@ class ArkResponsesClient:
         self,
         *,
         transcript: dict[str, Any],
-        trigger_seconds: float,
         window: Segment,
         instructions: str,
     ) -> SpeechUnderstandingResult:
         payload = {
-            "trigger_seconds": trigger_seconds,
             "window": window.model_dump(mode="json"),
             "transcript": transcript,
         }
@@ -78,7 +88,6 @@ class ArkResponsesClient:
         *,
         video_path: Path,
         window: Segment,
-        trigger_seconds: float,
         instructions: str,
     ) -> VisualLocalizationResult:
         file_id, ready = await self._upload_file(video_path)
@@ -86,7 +95,6 @@ class ArkResponsesClient:
             if not ready:
                 await self._wait_for_file(file_id)
             metadata = {
-                "trigger_seconds": trigger_seconds,
                 "window": window.model_dump(mode="json"),
                 "time_rule": "Return absolute source-video seconds within this window.",
             }
@@ -102,15 +110,43 @@ class ArkResponsesClient:
                 result_type=VisualLocalizationResult,
                 schema_name="visual_action_localization",
             )
-            for segment in result.segments:
-                if (
-                    segment.start_seconds < window.start_seconds - 0.5
-                    or segment.end_seconds > window.end_seconds + 0.5
-                ):
-                    raise ProviderSchemaError("视觉定位时间超出分析窗口")
+            _validate_visual_result(result, window)
             return result
         finally:
             await self._delete_file(file_id)
+
+    async def locate_visual_contact_sheet(
+        self,
+        *,
+        image_path: Path,
+        frame_times_seconds: tuple[float, ...],
+        window: Segment,
+        instructions: str,
+    ) -> VisualLocalizationResult:
+        image_bytes = await asyncio.to_thread(image_path.read_bytes)
+        image_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
+        metadata = {
+            "analysis_scope": "full_source",
+            "window": window.model_dump(mode="json"),
+            "contact_sheet": {
+                "columns": 4,
+                "frame_times_seconds": list(frame_times_seconds),
+                "order": "row_major",
+            },
+            "time_rule": "Return approximate absolute source-video seconds.",
+        }
+        result = await self._structured_response(
+            instructions=instructions,
+            content=[
+                {"type": "input_image", "image_url": image_url},
+                {"type": "input_text", "text": json.dumps(metadata, ensure_ascii=False)},
+            ],
+            result_type=VisualLocalizationResult,
+            schema_name="visual_action_localization",
+            model_id=self._visual_model_id,
+        )
+        _validate_visual_result(result, window)
+        return result
 
     async def _upload_file(self, path: Path) -> tuple[str, bool]:
         file_bytes = await asyncio.to_thread(path.read_bytes)
@@ -182,6 +218,7 @@ class ArkResponsesClient:
         content: list[dict[str, str]],
         result_type: type[StructuredResult],
         schema_name: str,
+        model_id: str | None = None,
     ) -> StructuredResult:
         response = await request_with_retry(
             self._http_client,
@@ -190,8 +227,9 @@ class ArkResponsesClient:
             retry_delays=self._retry_delays,
             headers={**self._auth_headers(), "Content-Type": "application/json"},
             json={
-                "model": self._model_id,
+                "model": model_id or self._model_id,
                 "store": False,
+                "thinking": {"type": "disabled"},
                 "instructions": instructions,
                 "input": [{"role": "user", "content": content}],
                 "text": {

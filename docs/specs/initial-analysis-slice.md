@@ -1,5 +1,8 @@
 # Initial action-analysis slice
 
+> Historical specification: the local-window and expansion rules below describe the first foundation slice. [ADR-0012](../adr/0012-explicit-full-source-analysis-with-latency-budget.md) supersedes them with explicit full-source analysis for controlled videos up to 60 seconds, plus a measured latency budget.
+
+
 Status: approved for implementation
 Branch: `foundation/initial-analysis-slice`
 

@@ -1,6 +1,6 @@
 ---
 name: candidate-fusion
-version: 1.0.0
+version: 1.1.0
 description: Fuse speech and visual evidence into reviewable action candidates.
 ---
 
@@ -14,6 +14,8 @@ Structured speech signals and visual segments using absolute source-video times.
 
 - Merge temporally overlapping evidence for the same action.
 - Preserve distinct actions as separate candidates in timeline order.
+- Deduplicate repeated speech and visual evidence for the same demonstration while
+  preserving separate demonstrations that occur at different times.
 - Prefer an explicit speech name; use a visual name only when speech has none.
 - Preserve missing fields as `null`; never create training parameters.
 - Attach each speech or visual evidence span to its candidate.

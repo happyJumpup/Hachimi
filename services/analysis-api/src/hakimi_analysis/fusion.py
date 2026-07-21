@@ -61,6 +61,15 @@ def _overlap_seconds(
     return max(0.0, min(left_end, right_end) - max(left_start, right_start))
 
 
+def _gap_seconds(
+    left_start: float,
+    left_end: float,
+    right_start: float,
+    right_end: float,
+) -> float:
+    return max(0.0, max(left_start, right_start) - min(left_end, right_end))
+
+
 def _parameters(signal: SpeechSignal | None) -> CandidateParameters:
     if signal is None:
         return CandidateParameters()
@@ -101,13 +110,23 @@ def fuse_candidates(
                     visual.start_seconds,
                     visual.end_seconds,
                 ),
+                _gap_seconds(
+                    speech.start_seconds,
+                    speech.end_seconds,
+                    visual.start_seconds,
+                    visual.end_seconds,
+                ),
             )
             for index, visual in enumerate(visual_segments)
             if index not in matched_visual_indexes
             and _same_action(speech.action_name, visual.action_name)
         ]
-        matched_index, overlap = max(matches, key=lambda item: item[1], default=(-1, 0.0))
-        visual = visual_segments[matched_index] if overlap > 0 else None
+        matched_index, overlap, gap = min(
+            matches,
+            key=lambda item: (item[2], -item[1]),
+            default=(-1, 0.0, float("inf")),
+        )
+        visual = visual_segments[matched_index] if overlap > 0 or gap <= 6 else None
         if visual is not None:
             matched_visual_indexes.add(matched_index)
 

@@ -168,8 +168,15 @@
             "$ref": "#/components/schemas/RunStatus"
           },
           "trigger_seconds": {
-            "title": "Trigger Seconds",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Seconds"
           },
           "updated_at": {
             "format": "date-time",
@@ -306,14 +313,22 @@
             "type": "string"
           },
           "trigger_seconds": {
-            "minimum": 0.0,
-            "title": "Trigger Seconds",
-            "type": "number"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated compatibility metadata; full-source analysis ignores it.",
+            "title": "Trigger Seconds"
           }
         },
         "required": [
-          "source_id",
-          "trigger_seconds"
+          "source_id"
         ],
         "title": "CreateAnalysisRunRequest",
         "type": "object"

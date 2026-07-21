@@ -6,7 +6,7 @@
 
 当前 Web MVP 已串起完整的本机训练闭环：
 
-1. 在受控视频的当前时间点发起真实动作分析；语音与视觉并行，Agent 只提出可校正候选。
+1. 用户点击“分析视频动作”后分析整段受控视频；语音与视觉并行，Agent 只提出可校正候选。
 2. 跨视频选择动作，或创建没有参考视频的动作；草稿自动保存，可排序、复制和编辑参数。
 3. 将草稿另存为本机方案，执行次数型或时长型训练，并在休息、离页或刷新后恢复。
 4. 哈肌咪以五种状态陪练，可随时隐藏；训练档案只在本机用于卡路里约值。
@@ -53,6 +53,7 @@ pnpm api:generate
 - [领域词汇表](CONTEXT.md)
 - [首个动作分析纵切片技术设计与开发准入](docs/technical/action-analysis-vertical-slice.md)
 - [竞赛版产品规格](docs/specs/competition-web-mvp.md)
+- [整段视频分析与延迟预算 ADR](docs/adr/0012-explicit-full-source-analysis-with-latency-budget.md)
 - [Web 体验规范](docs/design/web-experience-guidelines.md)
 - [完整 Web 架构](docs/technical/web-mvp-architecture.md)
 - [训练场次合同](docs/technical/training-session-contract.md)
