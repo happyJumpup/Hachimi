@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "seed": 20260721,
+  "models": {
+    "seed_lite": "doubao-seed-2-0-lite-260428",
+    "seed_mini": "doubao-seed-2-0-mini-260428",
+    "qwen_omni": "qwen3.5-omni-flash-2026-03-15",
+    "qwen_vl": "qwen3-vl-flash-2026-01-22",
+    "asr_resource": "volc.seedasr.sauc.duration"
+  },
+  "samples": [
+    {
+      "sample_id": "short-silent-54s",
+      "source_path": "C:/replace/short.mp4",
+      "window_start_seconds": 0,
+      "duration_seconds": 54.87,
+      "av_path": "C:/replace/work/short-av.mp4",
+      "silent_video_path": "C:/replace/work/short-silent.mp4",
+      "audio_path": "C:/replace/work/short-audio.wav",
+      "av_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "silent_video_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "audio_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "gold_path": "C:/replace/work/short-gold.json",
+      "gold_status": "draft"
+    },
+    {
+      "sample_id": "seven-minute-dense-window",
+      "source_path": "C:/replace/7min.mp4",
+      "window_start_seconds": 0,
+      "duration_seconds": 60,
+      "av_path": "C:/replace/work/7min-av.mp4",
+      "silent_video_path": "C:/replace/work/7min-silent.mp4",
+      "audio_path": "C:/replace/work/7min-audio.wav",
+      "av_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "silent_video_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "audio_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "gold_path": "C:/replace/work/7min-gold.json",
+      "gold_status": "draft"
+    },
+    {
+      "sample_id": "nineteen-minute-dense-window",
+      "source_path": "C:/replace/19min.mp4",
+      "window_start_seconds": 0,
+      "duration_seconds": 60,
+      "av_path": "C:/replace/work/19min-av.mp4",
+      "silent_video_path": "C:/replace/work/19min-silent.mp4",
+      "audio_path": "C:/replace/work/19min-audio.wav",
+      "av_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "silent_video_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "audio_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "gold_path": "C:/replace/work/19min-gold.json",
+      "gold_status": "draft"
+    }
+  ]
+}

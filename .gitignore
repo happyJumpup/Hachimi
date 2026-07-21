@@ -24,6 +24,8 @@ htmlcov/
 
 # Runtime media and transient analysis material
 tmp/
+.benchmark-work/
+benchmark-results/
 *.mp4
 *.mov
 *.mkv

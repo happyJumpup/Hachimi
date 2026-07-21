@@ -12,9 +12,11 @@ Command:
 pnpm spike:qwen-long-video
 ```
 
-The command reads an ignored `.env.local` and uploads the source only to
-DashScope's model-bound temporary OSS. It does not persist the video or raw model
-response.
+The command reads an ignored `.env.local` and uploads the source to DashScope's
+model-bound temporary OSS. DashScope retains that temporary object for up to
+48 hours and does not expose a delete API; the spike does not persist the raw
+model response locally. This transport is benchmark-only and must not be used by
+the production analysis API.
 
 Observed on 2026-07-21 with `qwen3-vl-flash`:
 

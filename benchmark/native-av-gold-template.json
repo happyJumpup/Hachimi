@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "sample_id": "replace-with-sample-id",
+  "status": "draft",
+  "reviewed_by": [],
+  "events": [
+    {
+      "canonical_name": "动作规范名",
+      "accepted_aliases": ["动作规范名"],
+      "start_seconds": 0,
+      "end_seconds": 1,
+      "kind": "action",
+      "sets": null,
+      "reps": null,
+      "duration_seconds": null,
+      "rest_seconds": null,
+      "weight_kg": null,
+      "evidence_channels": ["visual"],
+      "uncertain_parameters": [],
+      "notes": null
+    }
+  ]
+}
