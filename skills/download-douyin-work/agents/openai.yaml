@@ -1,0 +1,4 @@
+interface:
+  display_name: "抖音作品下载器"
+  short_description: "从抖音作品链接下载视频、元数据、封面和可选评论数据"
+  default_prompt: "Use $download-douyin-work to download this authorized Douyin work and return the generated files."
