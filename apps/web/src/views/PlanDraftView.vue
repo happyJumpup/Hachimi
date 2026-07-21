@@ -3,10 +3,12 @@ import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { toSafeOriginUrl } from '@/domain/source'
+import { fingerprintMatches, probeVideoDuration, SUPPORTED_LOCAL_MEDIA_TYPES } from '@/domain/local-media'
 import type { ActionMode, DraftItem } from '@/domain/types'
 import { QUICK_EXPERIENCE_PLAN_NAME } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
+import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
 
 type OperationError = {
@@ -17,6 +19,7 @@ type OperationError = {
 const router = useRouter()
 const draft = useDraftStore()
 const library = useLibraryStore()
+const localMedia = useLocalMediaStore()
 const training = useTrainingStore()
 const manualName = ref('')
 const manualMode = ref<ActionMode>('reps')
@@ -30,6 +33,10 @@ const operationError = ref<OperationError | null>(null)
 const planNameError = ref('')
 const quickPlanPending = ref(false)
 const quickPlanError = ref('')
+const previewingItemId = ref<string | null>(null)
+const previewUrl = ref<string | null>(null)
+const previewError = ref('')
+let previewGeneration = 0
 
 const totalSets = computed(() =>
   draft.items.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
@@ -51,8 +58,76 @@ const validationId = (itemId: string): string => `validation-${itemId}`
 
 const sourceLabel = (item: DraftItem): string =>
   item.sourceRef
-    ? `视频动作 · ${item.sourceRef.title ?? item.sourceRef.sourceId}`
+    ? `${isLocalSource(item) ? '本地视频动作' : '视频动作'} · ${item.sourceRef.title ?? item.sourceRef.sourceId}`
     : '自建动作 · 无参考视频'
+
+const isLocalSource = (item: DraftItem): boolean => Boolean(
+  item.sourceRef && (item.sourceRef.kind === 'local' || item.sourceRef.sourceId.startsWith('local:')),
+)
+
+const segmentRoleLabel = (item: DraftItem): string | null => {
+  const role = item.segmentRole?.value
+  if (role === 'follow_along') return '跟练执行'
+  if (role === 'teaching_demo') return '教学演示'
+  return null
+}
+
+const openLocalPreview = async (item: DraftItem): Promise<void> => {
+  if (!item.sourceRef || !isLocalSource(item)) return
+  const sourceId = item.sourceRef.sourceId
+  const currentGeneration = ++previewGeneration
+  previewingItemId.value = item.id
+  previewUrl.value = null
+  previewError.value = ''
+  try {
+    const resolved = await localMedia.resolve(sourceId)
+    if (previewGeneration !== currentGeneration || previewingItemId.value !== item.id) return
+    previewUrl.value = resolved
+    if (!resolved) previewError.value = '本地视频已不可用，请重新选择原文件'
+  } catch {
+    if (previewGeneration === currentGeneration && previewingItemId.value === item.id) {
+      previewError.value = '本地视频读取失败，请重新选择原文件'
+    }
+  }
+}
+
+const reselectLocalMedia = async (item: DraftItem, event: Event): Promise<void> => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || !item.sourceRef) return
+  const sourceId = item.sourceRef.sourceId
+  const currentGeneration = ++previewGeneration
+  previewingItemId.value = item.id
+  previewUrl.value = null
+  previewError.value = ''
+  if (!SUPPORTED_LOCAL_MEDIA_TYPES.includes(file.type as typeof SUPPORTED_LOCAL_MEDIA_TYPES[number])) {
+    previewError.value = '请选择 MP4、MOV 或 WebM 视频'
+    return
+  }
+  try {
+    const duration = await probeVideoDuration(file)
+    if (previewGeneration !== currentGeneration || previewingItemId.value !== item.id) return
+    const expected = item.sourceRef.localMedia
+    if (!expected || !fingerprintMatches(expected, file, duration)) {
+      if (!window.confirm('文件信息与原视频不一致，确认仍使用这个文件吗？')) {
+        previewError.value = '没有替换原视频，方案保持不变'
+        return
+      }
+    }
+    await localMedia.importFile({
+      file,
+      durationSeconds: duration,
+      sourceId,
+    })
+    if (previewGeneration !== currentGeneration || previewingItemId.value !== item.id) return
+    previewUrl.value = localMedia.urlFor(sourceId)
+  } catch {
+    if (previewGeneration === currentGeneration && previewingItemId.value === item.id) {
+      previewError.value = '无法读取这个视频，请重新选择'
+    }
+  }
+}
 
 const originalUrl = (item: DraftItem): string | undefined =>
   toSafeOriginUrl(item.sourceRef?.originUrl)
@@ -216,7 +291,12 @@ const retryOperation = async (): Promise<void> => {
 
         <div class="card-content">
           <div class="source-row">
-            <p class="source-label">{{ sourceLabel(item) }}</p>
+            <div class="source-summary">
+              <p class="source-label">{{ sourceLabel(item) }}</p>
+              <span v-if="segmentRoleLabel(item)" class="segment-role-badge">
+                {{ segmentRoleLabel(item) }}
+              </span>
+            </div>
             <a
               v-if="originalUrl(item)"
               class="original-video-link"
@@ -226,6 +306,39 @@ const retryOperation = async (): Promise<void> => {
             >
               查看原视频
             </a>
+            <button
+              v-else-if="isLocalSource(item)"
+              type="button"
+              class="local-preview-button"
+              @click="openLocalPreview(item)"
+            >
+              {{ previewingItemId === item.id ? '重新读取来源视频' : '预览来源视频' }}
+            </button>
+          </div>
+          <div v-if="previewingItemId === item.id" class="local-preview">
+            <video
+              v-if="previewUrl"
+              :src="previewUrl"
+              controls
+              playsinline
+              preload="metadata"
+            />
+            <p v-else role="status">{{ previewError || '正在读取本地视频…' }}</p>
+            <label v-if="!previewUrl" class="reselect-local-media">
+              重新选择原视频
+              <input
+                type="file"
+                :accept="SUPPORTED_LOCAL_MEDIA_TYPES.join(',')"
+                @change="reselectLocalMedia(item, $event)"
+              />
+            </label>
+            <p
+              v-if="localMedia.current?.sourceId === item.sourceRef?.sourceId && localMedia.storageMessage"
+              class="local-storage-message"
+              role="status"
+            >
+              {{ localMedia.storageMessage }}
+            </p>
           </div>
           <input
             class="plan-name"
@@ -491,8 +604,17 @@ const retryOperation = async (): Promise<void> => {
 
 .card-content { min-width: 0; padding: 16px; }
 .source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.source-summary { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .source-label { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
+.segment-role-badge { flex: 0 0 auto; padding: 4px 6px; border: 1px solid rgb(38 235 213 / 25%); border-radius: 999px; color: var(--cyan); font-size: 11px; }
 .original-video-link { display: inline-grid; min-width: 44px; min-height: 44px; flex: 0 0 auto; place-items: center; color: var(--cyan); font-size: 11px; font-weight: 700; text-decoration: none; }
+.local-preview-button { min-height: 44px; flex: 0 0 auto; padding: 0 6px; border: 0; color: var(--cyan); background: transparent; font-size: 11px; font-weight: 700; }
+.local-preview { display: grid; gap: 8px; margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgb(0 0 0 / 16%); }
+.local-preview video { width: 100%; max-height: 260px; border-radius: 8px; background: #000; }
+.local-preview p { margin: 0; color: var(--muted); font-size: 11px; }
+.local-preview .local-storage-message { color: var(--cyan); }
+.reselect-local-media { position: relative; display: inline-grid; min-height: 44px; place-items: center; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); font-size: 11px; font-weight: 700; cursor: pointer; }
+.reselect-local-media input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .plan-name { width: 100%; min-height: 44px; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 28px/1.1 var(--font-display), var(--font-cn); }
 .mode-toggle { display: inline-flex; gap: 4px; margin: 14px 0; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
 .mode-toggle button { min-width: 44px; min-height: 44px; padding: 7px 12px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; }

@@ -16,6 +16,11 @@ const runView = (runId: string, outcome: TerminalOutcome) => ({
   error: outcome === 'failed'
     ? { code: 'provider_error', message: '动作分析暂时不可用，请重试', retryable: true }
     : null,
+  source_duration_seconds: 4,
+  processed_seconds: 4,
+  discovered_candidate_count: 0,
+  coverage_status: 'complete',
+  coverage_gaps: [],
   created_at: now,
   updated_at: now,
 })
@@ -40,10 +45,23 @@ const mockTerminalRun = async (page: Page, outcome: TerminalOutcome): Promise<vo
   })
   await page.route(`**/api/v1/analysis-runs/${runId}/events`, async (route) => {
     const eventName = outcome === 'empty' ? 'run.completed' : 'run.failed'
+    const data = {
+      stage: outcome === 'empty' ? 'completed' : 'failed',
+      source_duration_seconds: 4,
+      processed_seconds: 4,
+      discovered_candidate_count: 0,
+      coverage_status: 'complete',
+      coverage_gaps: [],
+    }
     await route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
-      body: `event: ${eventName}\ndata: {"data":{"stage":"${outcome === 'empty' ? 'completed' : 'failed'}"}}\n\n`,
+      body: `event: ${eventName}\ndata: ${JSON.stringify({
+        sequence: 1,
+        type: eventName,
+        run_id: runId,
+        data,
+      })}\n\n`,
     })
   })
 }

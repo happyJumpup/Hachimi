@@ -28,7 +28,10 @@ export interface AnalysisCandidate {
   parameters: CandidateParameters
   evidence: EvidenceSpan[]
   needs_confirmation: boolean
+  segment_role?: SegmentRole
 }
+
+export type SegmentRole = 'follow_along' | 'teaching_demo' | 'unknown'
 
 export type SourceSummary = components['schemas']['SourceSummary']
 
@@ -50,6 +53,17 @@ export interface AnalysisError {
   retryable: boolean
 }
 
+export interface AnalysisCapabilities {
+  local_upload_enabled: boolean
+  local_analysis_max_seconds: number
+  local_upload_max_bytes: number
+}
+
+export interface CoverageGap extends Segment {
+  reason: 'provider_error' | 'timeout' | 'media_error' | 'unknown'
+  retryable: boolean
+}
+
 export interface AnalysisRun {
   id: string
   source_id: string
@@ -68,8 +82,40 @@ export interface AnalysisRun {
   warnings: AnalysisWarning[]
   empty_reason: 'no_evidence' | null
   error: AnalysisError | null
+  source_duration_seconds: number
+  processed_seconds: number
+  discovered_candidate_count: number
+  coverage_status: 'complete' | 'partial' | null
+  coverage_gaps: CoverageGap[]
   created_at: string
   updated_at: string
+}
+
+export interface LocalMediaFingerprint {
+  fileName: string
+  mimeType: string
+  sizeBytes: number
+  lastModified: number
+  durationSeconds: number
+}
+
+export interface LocalMediaRecord extends LocalMediaFingerprint {
+  sourceId: string
+  blob: Blob
+  importedAt: string
+  updatedAt: string
+}
+
+export interface LocalMediaRepository {
+  load(sourceId: string): Promise<LocalMediaRecord | undefined>
+  loadLatest(): Promise<LocalMediaRecord | undefined>
+  save(record: LocalMediaRecord): Promise<void>
+  replaceFromSelection(
+    sourceId: string,
+    expected: LocalMediaFingerprint,
+    file: File,
+    durationSeconds: number,
+  ): Promise<LocalMediaRecord>
 }
 
 export interface SourcedValue<T> {
@@ -79,8 +125,10 @@ export interface SourcedValue<T> {
 
 export interface DraftSourceRef {
   sourceId: string
+  kind?: 'controlled' | 'local'
   title?: string
   originUrl?: string
+  localMedia?: LocalMediaFingerprint
 }
 
 export interface DraftItem {
@@ -88,6 +136,7 @@ export interface DraftItem {
   name: string
   sourceRef: DraftSourceRef | null
   segment: SourcedValue<Segment>
+  segmentRole?: SourcedValue<SegmentRole>
   mode: ActionMode
   sets: SourcedValue<number>
   reps: SourcedValue<number>

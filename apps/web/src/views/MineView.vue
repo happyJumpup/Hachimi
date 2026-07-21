@@ -138,11 +138,11 @@ const endCurrentTraining = async (): Promise<void> => {
 }
 
 const clearEverything = async (): Promise<void> => {
-  if (!window.confirm('将清除本机上的草稿、方案、未完成训练、记录和训练档案。确定继续吗？')) return
+  if (!window.confirm('将清除本机上的来源视频、分析恢复点、草稿、方案、未完成训练、记录和训练档案。确定继续吗？')) return
   pending.value = true
   try {
     await localDataClear.clearAllLocalData()
-    notice.value = '本机训练数据已清除'
+    notice.value = '本机视频和训练数据已清除'
   } catch (error) {
     notice.value = error instanceof LocalDataCoordinationUnavailableError
       ? '当前浏览器无法安全协调其他标签页，数据没有清除'

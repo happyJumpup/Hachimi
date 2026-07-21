@@ -409,7 +409,15 @@ describe('我的训练', () => {
     const libraryRepository = new MemoryLibraryRepository()
     await useLibraryStore().load(libraryRepository)
     useLocalDataClearStore().initialize(new InlineClearCoordinator())
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    localStorage.setItem('hachimi-fitness:active-analysis', JSON.stringify({
+      version: 1,
+      sourceId: 'local:clear-test',
+      sourceKind: 'local',
+      rootRunId: 'run-clear-test',
+      retries: [],
+      lastSequences: {},
+    }))
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { wrapper } = await mountMine(pinia)
 
     await wrapper.get('button.clear-data').trigger('click')
@@ -420,6 +428,11 @@ describe('我的训练', () => {
     await flushPromises()
     expect(libraryRepository.clearCalls).toBe(1)
     expect(draft.items).toHaveLength(0)
+    expect(localStorage.getItem('hachimi-fitness:active-analysis')).toBeNull()
+    expect(confirm).toHaveBeenCalledWith(
+      '将清除本机上的来源视频、分析恢复点、草稿、方案、未完成训练、记录和训练档案。确定继续吗？',
+    )
+    expect(wrapper.get('.notice').text()).toBe('本机视频和训练数据已清除')
   })
 
   it('does not claim data was cleared when safe cross-tab coordination is unavailable', async () => {

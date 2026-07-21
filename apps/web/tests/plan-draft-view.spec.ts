@@ -9,6 +9,7 @@ import type { TrainingSession } from '@/domain/training'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
+import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
 import type { TrainingCommand, TrainingEngine, TrainingEngineResult } from '@/training/training-engine'
 import PlanDraftView from '@/views/PlanDraftView.vue'
@@ -382,5 +383,58 @@ describe('方案草稿保存状态', () => {
       target: '_blank',
       rel: 'noopener noreferrer',
     })
+  })
+
+  it('restores a local source preview from the immutable draft snapshot', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    const sourceId = 'local:plan-preview'
+    draft.addCandidates([{
+      id: 'candidate-local',
+      name: '本地弯举',
+      source_id: sourceId,
+      segment: { start_seconds: 4, end_seconds: 12 },
+      segment_role: 'follow_along',
+      parameters: {
+        mode: 'reps',
+        sets: 3,
+        reps: 10,
+        duration_seconds: null,
+        rest_seconds: 60,
+      },
+      evidence: [{ type: 'visual', start_seconds: 4, end_seconds: 12 }],
+      needs_confirmation: false,
+    }], [], {
+      [sourceId]: {
+        kind: 'local',
+        title: 'local.mp4',
+        origin_url: null,
+        localMedia: {
+          fileName: 'local.mp4',
+          mimeType: 'video/mp4',
+          sizeBytes: 12,
+          lastModified: 1,
+          durationSeconds: 30,
+        },
+      },
+    })
+    vi.spyOn(useLocalMediaStore(), 'resolve').mockResolvedValue('blob:plan-preview')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/plan', component: PlanDraftView }],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
+
+    expect(wrapper.text()).toContain('跟练执行')
+    await wrapper.get('button.local-preview-button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('video').attributes('src')).toBe('blob:plan-preview')
   })
 })

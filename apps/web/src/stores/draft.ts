@@ -7,6 +7,7 @@ import type {
   DraftItem,
   DraftPlan,
   DraftRepository,
+  LocalMediaFingerprint,
   Segment,
   SourceSummary,
   SourcedValue,
@@ -33,12 +34,16 @@ const sourced = <T>(value: T | null, source: SourcedValue<T>['source']): Sourced
   source,
 })
 
-type SourceSnapshot = Pick<SourceSummary, 'title' | 'origin_url'>
+type SourceSnapshot = Pick<SourceSummary, 'title' | 'origin_url'> & {
+  kind?: 'controlled' | 'local'
+  localMedia?: LocalMediaFingerprint
+}
 
 const fromCandidate = (
   candidate: AnalysisCandidate,
   segmentEdited = false,
   source?: SourceSnapshot,
+  roleEdited = false,
 ): DraftItem => {
   const mode = candidate.parameters.mode
   if (mode === null) {
@@ -52,10 +57,16 @@ const fromCandidate = (
       sourceId: candidate.source_id,
       title: source?.title,
       originUrl: toSafeOriginUrl(source?.origin_url),
+      ...(source?.kind ? { kind: source.kind } : {}),
+      ...(source?.localMedia ? { localMedia: cloneJson(source.localMedia) } : {}),
     },
     segment: sourced(
       candidate.segment ? cloneJson(candidate.segment) : null,
       candidate.segment ? (segmentEdited ? 'user' : 'video') : null,
+    ),
+    segmentRole: sourced(
+      candidate.segment_role ?? 'unknown',
+      roleEdited ? 'user' : 'video',
     ),
     mode,
     sets: candidate.parameters.sets === null
@@ -201,10 +212,21 @@ export const useDraftStore = defineStore('draft', () => {
     candidates: AnalysisCandidate[],
     editedSegmentIds: string[] = [],
     sources: Record<string, SourceSnapshot> = {},
+    editedRoleIds: string[] = [],
   ): void {
     const edited = new Set(editedSegmentIds)
-    plan.value.items.push(...candidates.map((candidate) =>
-      fromCandidate(candidate, edited.has(candidate.id), sources[candidate.source_id]),
+    const roleEdited = new Set(editedRoleIds)
+    const ordered = [...candidates].sort((left, right) => (
+      left.segment.start_seconds - right.segment.start_seconds
+      || left.segment.end_seconds - right.segment.end_seconds
+    ))
+    plan.value.items.push(...ordered.map((candidate) =>
+      fromCandidate(
+        candidate,
+        edited.has(candidate.id),
+        sources[candidate.source_id],
+        roleEdited.has(candidate.id),
+      ),
     ))
     schedulePersist()
   }

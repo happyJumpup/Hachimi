@@ -1,14 +1,19 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
+import { analysisClient, browserEventStreamFactory } from '@/api/client'
 import type { LocalDataClearCoordinator } from '@/local-data/clear-coordinator'
+import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
+import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
 
 export const useLocalDataClearStore = defineStore('local-data-clear', () => {
   const draft = useDraftStore()
   const library = useLibraryStore()
+  const analysis = useAnalysisStore()
+  const localMedia = useLocalMediaStore()
   const training = useTrainingStore()
   const initialized = ref(false)
   let coordinator: LocalDataClearCoordinator | null = null
@@ -24,11 +29,14 @@ export const useLocalDataClearStore = defineStore('local-data-clear', () => {
           library.quiescePersistence(),
           training.quiescePersistence(),
         ])
+        analysis.disconnect()
+        localMedia.resetLocalState()
         draft.resetLocalState(true)
         library.resetLocalState(true)
         training.resetLocalState(true)
       },
       commit: () => {
+        analysis.clearResult()
         draft.resumePersistence()
         library.resumePersistence()
         training.resumePersistence()
@@ -40,6 +48,8 @@ export const useLocalDataClearStore = defineStore('local-data-clear', () => {
         await Promise.allSettled([
           draft.reload(),
           library.reload(),
+          localMedia.restore(),
+          analysis.restore({ client: analysisClient, events: browserEventStreamFactory }),
           training.restore(),
         ])
       },

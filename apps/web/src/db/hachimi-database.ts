@@ -1,6 +1,6 @@
 import Dexie, { type Table, type Transaction } from 'dexie'
 
-import type { DraftPlan } from '@/domain/types'
+import type { DraftPlan, LocalMediaRecord } from '@/domain/types'
 import type {
   Preferences,
   SavedPlan,
@@ -16,6 +16,7 @@ export class HachimiDatabase extends Dexie {
   records!: Table<TrainingRecord, string>
   profiles!: Table<TrainingProfile, string>
   preferences!: Table<Preferences, string>
+  localMedia!: Table<LocalMediaRecord, string>
 
   constructor(name = 'hachimi-fitness') {
     super(name)
@@ -37,6 +38,16 @@ export class HachimiDatabase extends Dexie {
         draft.name = '未命名方案'
         draft.linkedPlanId = null
       })
+    })
+
+    this.version(3).stores({
+      drafts: '&id, updatedAt, linkedPlanId',
+      plans: '&id, updatedAt, createdAt, name',
+      sessions: '&id, sessionId, status, updatedAt',
+      records: '&id, endedAt, outcome',
+      profiles: '&id, updatedAt',
+      preferences: '&id, updatedAt',
+      localMedia: '&sourceId, importedAt, updatedAt',
     })
   }
 }

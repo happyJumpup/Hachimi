@@ -26,6 +26,7 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await expect(
     page.locator('.candidate-panel').getByRole('textbox', { name: '动作名称' }),
   ).toHaveValue('拖拽弯举')
+  await page.locator('.candidate-panel').getByRole('button', { name: '跟练执行' }).click()
   await page.locator('.candidate-panel').getByRole('button', { name: '按次数' }).click()
   await page.getByRole('button', { name: '加入草稿 · 1' }).click()
 
@@ -37,6 +38,7 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   await expect(page.getByText('规则', { exact: true }).first()).toBeVisible()
 
   await page.getByRole('link', { name: '继续找动作' }).click()
+  await page.getByText('快速体验 / 本地导入不可用时使用', { exact: true }).click()
   await sourceSelect.selectOption('legacy-arm-workout-alt')
   await expect(sourceSelect.locator('option:checked')).toContainText('合成测试来源')
   await page.locator('video').evaluate((video: HTMLVideoElement) => {
@@ -44,6 +46,7 @@ test('video candidate can be reviewed, added, and restored from the draft', asyn
   })
   await page.getByRole('button', { name: /分析视频动作/ }).click()
   await expect(page.getByRole('heading', { name: '找到 1 个动作' })).toBeVisible()
+  await page.locator('.candidate-panel').getByRole('button', { name: '跟练执行' }).click()
   const modeButton = page.locator('.candidate-panel').getByRole('button', { name: '按次数' })
   const modeButtonBox = await modeButton.boundingBox()
   expect(modeButtonBox).not.toBeNull()

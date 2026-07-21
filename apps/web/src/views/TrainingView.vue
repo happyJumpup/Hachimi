@@ -10,20 +10,26 @@ import {
 import { onBeforeRouteLeave } from 'vue-router'
 
 import { analysisClient } from '@/api/client'
+import { fingerprintMatches, probeVideoDuration, SUPPORTED_LOCAL_MEDIA_TYPES } from '@/domain/local-media'
 import { toSafeOriginUrl } from '@/domain/source'
 import HachimiPet from '@/features/experience/HachimiPet.vue'
 import { derivePetState } from '@/features/experience/pet-state'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useLibraryStore } from '@/stores/library'
+import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
 
 const analysis = useAnalysisStore()
 const library = useLibraryStore()
+const localMedia = useLocalMediaStore()
 const training = useTrainingStore()
 const video = ref<HTMLVideoElement | null>(null)
 const nowMilliseconds = ref(Date.now())
 const commandPending = ref(false)
 const mediaLoadFailed = ref(false)
+const localMediaUrl = ref<string | null>(null)
+const localMediaResolving = ref(false)
+const localMediaError = ref('')
 let ticker: ReturnType<typeof setInterval> | null = null
 let pausePending = false
 
@@ -34,13 +40,22 @@ const source = computed(() => {
   const sourceId = item.value?.sourceRef?.sourceId
   return sourceId ? analysis.sources.find((entry) => entry.id === sourceId) ?? null : null
 })
+const isLocalSource = computed(() => Boolean(
+  item.value?.sourceRef
+  && (
+    item.value.sourceRef.kind === 'local'
+    || item.value.sourceRef.sourceId.startsWith('local:')
+  ),
+))
+const mediaUrl = computed(() => isLocalSource.value ? localMediaUrl.value : source.value?.media_url ?? null)
 const segment = computed(() => item.value?.segment.value ?? null)
 const hasPlayableVideo = computed(() => Boolean(
-  item.value?.sourceRef && source.value && segment.value && !mediaLoadFailed.value,
+  item.value?.sourceRef && mediaUrl.value && segment.value && !mediaLoadFailed.value,
 ))
 const mediaBadge = computed(() => {
   if (!item.value?.sourceRef) return '自建动作'
-  return hasPlayableVideo.value ? '演示片段循环' : '参考视频不可用'
+  if (!hasPlayableVideo.value) return isLocalSource.value ? '本地视频不可用' : '参考视频不可用'
+  return isLocalSource.value ? '本地片段循环' : '演示片段循环'
 })
 const originalUrl = computed(() => toSafeOriginUrl(item.value?.sourceRef?.originUrl))
 const targetSets = computed(() => item.value?.sets.value ?? 0)
@@ -129,6 +144,67 @@ const restartVideoSegment = (): void => {
   if (session.value?.status === 'active') void element.play().catch(() => undefined)
 }
 
+const resolveCurrentMedia = async (): Promise<void> => {
+  const sourceId = item.value?.sourceRef?.sourceId
+  localMediaUrl.value = null
+  localMediaError.value = ''
+  localMediaResolving.value = false
+  if (!sourceId) return
+  if (!isLocalSource.value) {
+    if (!analysis.sources.length && !analysis.sourcesLoading) {
+      await analysis.loadSources(analysisClient)
+    }
+    return
+  }
+  localMediaResolving.value = true
+  try {
+    const resolved = await localMedia.resolve(sourceId)
+    if (item.value?.sourceRef?.sourceId !== sourceId) return
+    localMediaUrl.value = resolved
+    if (!resolved) localMediaError.value = '本地视频已不可用，请重新选择原文件'
+  } catch {
+    if (item.value?.sourceRef?.sourceId === sourceId) {
+      localMediaError.value = '本地视频读取失败，请重新选择原文件'
+    }
+  } finally {
+    if (item.value?.sourceRef?.sourceId === sourceId) localMediaResolving.value = false
+  }
+}
+
+const reselectCurrentLocalMedia = async (event: Event): Promise<void> => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  const sourceRef = item.value?.sourceRef
+  if (!file || !sourceRef || !isLocalSource.value) return
+  const sourceId = sourceRef.sourceId
+  localMediaError.value = ''
+  if (!SUPPORTED_LOCAL_MEDIA_TYPES.includes(file.type as typeof SUPPORTED_LOCAL_MEDIA_TYPES[number])) {
+    localMediaError.value = '请选择 MP4、MOV 或 WebM 视频'
+    return
+  }
+  try {
+    const durationSeconds = await probeVideoDuration(file)
+    if (item.value?.sourceRef?.sourceId !== sourceId) return
+    if (
+      (!sourceRef.localMedia || !fingerprintMatches(sourceRef.localMedia, file, durationSeconds))
+      && !window.confirm('文件信息与原视频不一致，确认仍使用这个文件吗？')
+    ) {
+      localMediaError.value = '没有替换原视频，训练进度保持不变'
+      return
+    }
+    await localMedia.importFile({ file, durationSeconds, sourceId })
+    if (item.value?.sourceRef?.sourceId !== sourceId) return
+    localMediaUrl.value = localMedia.urlFor(sourceId)
+    mediaLoadFailed.value = false
+    await syncVideo()
+  } catch {
+    if (item.value?.sourceRef?.sourceId === sourceId) {
+      localMediaError.value = '无法读取这个视频，请重新选择'
+    }
+  }
+}
+
 watch(
   () => [session.value?.status, item.value?.id, training.commandLocked],
   () => { void syncVideo() },
@@ -136,7 +212,10 @@ watch(
 
 watch(
   () => item.value?.id,
-  () => { mediaLoadFailed.value = false },
+  () => {
+    mediaLoadFailed.value = false
+    void resolveCurrentMedia()
+  },
 )
 
 const run = async (operation: () => Promise<unknown>): Promise<void> => {
@@ -199,7 +278,7 @@ onBeforeRouteLeave(async () => {
 
 onMounted(async () => {
   await training.restore()
-  if (!analysis.sources.length) await analysis.loadSources(analysisClient)
+  await resolveCurrentMedia()
   document.addEventListener('visibilitychange', handleVisibility)
   window.addEventListener('pagehide', handlePageHide)
   ticker = setInterval(() => {
@@ -288,7 +367,7 @@ onBeforeUnmount(() => {
         <video
           v-if="hasPlayableVideo"
           ref="video"
-          :src="source?.media_url"
+          :src="mediaUrl ?? undefined"
           playsinline
           controls
           preload="metadata"
@@ -297,19 +376,36 @@ onBeforeUnmount(() => {
           @ended="restartVideoSegment"
           @error="mediaLoadFailed = true"
         />
-        <div v-else-if="item.sourceRef && analysis.sourcesLoading" class="media-placeholder">
-          <span>正在读取参考视频…</span>
+        <div
+          v-else-if="item.sourceRef && (analysis.sourcesLoading || localMediaResolving)"
+          class="media-placeholder"
+        >
+          <span>正在读取{{ isLocalSource ? '本地' : '参考' }}视频…</span>
         </div>
         <div v-else-if="item.sourceRef" class="media-placeholder" role="status">
           <span class="no-video-mark">VIDEO UNAVAILABLE</span>
-          <strong>参考视频暂时不可用</strong>
-          <small>可以继续训练，不影响进度记录</small>
+          <strong>{{ isLocalSource ? '本地视频已不可用' : '参考视频暂时不可用' }}</strong>
+          <small>{{ localMediaError || '可以继续训练，不影响进度记录' }}</small>
+          <label v-if="isLocalSource" class="reselect-local-media">
+            重新选择原视频
+            <input
+              type="file"
+              :accept="SUPPORTED_LOCAL_MEDIA_TYPES.join(',')"
+              @change="reselectCurrentLocalMedia"
+            />
+          </label>
         </div>
         <div v-else class="media-placeholder">
           <span class="no-video-mark">NO VIDEO</span>
           <strong>这个动作没有参考视频</strong>
           <small>按自己的节奏完成本组即可</small>
         </div>
+        <small
+          v-if="isLocalSource && localMedia.current?.sourceId === item.sourceRef?.sourceId && localMedia.storageMessage"
+          class="local-storage-message"
+        >
+          {{ localMedia.storageMessage }}
+        </small>
         <HachimiPet
           class="training-pet"
           :state="petState"
@@ -434,6 +530,9 @@ onBeforeUnmount(() => {
 .media-placeholder { display: grid; height: 100%; place-content: center; gap: 8px; padding: 20px; color: var(--muted); text-align: center; }
 .media-placeholder strong { color: var(--ink); font-size: 18px; }
 .media-placeholder small { font-size: 11px; }
+.reselect-local-media { position: relative; display: inline-grid; min-height: 44px; margin-top: 6px; place-items: center; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--cyan); font-size: 11px; font-weight: 800; cursor: pointer; }
+.reselect-local-media input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.local-storage-message { position: absolute; right: 12px; bottom: 12px; left: 12px; z-index: 2; padding: 7px 9px; border-radius: 8px; color: var(--cyan); background: rgb(7 9 11 / 82%); line-height: 1.5; text-align: center; }
 .no-video-mark { color: var(--coral); font: 700 12px/1 var(--font-display); letter-spacing: .16em; }
 .stage-badge { position: absolute; top: 12px; left: 12px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: rgb(7 9 11 / 78%); font-size: 11px; backdrop-filter: blur(10px); }
 .training-pet { position: absolute; right: 12px; bottom: 38px; z-index: 3; }

@@ -58,6 +58,7 @@ function candidate(sourceId: string): AnalysisCandidate {
       { type: 'visual', start_seconds: 41, end_seconds: 51 },
     ],
     needs_confirmation: false,
+    segment_role: 'follow_along',
   }
 }
 
@@ -65,6 +66,45 @@ describe('方案草稿 store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
+  })
+
+  it('stores local source fingerprints, segment roles, and repeated actions in source order', async () => {
+    const store = useDraftStore()
+    await store.load(new MemoryDraftRepository())
+    const sourceId = 'local:11111111-1111-4111-8111-111111111111'
+    const later = candidate(sourceId)
+    later.id = 'later'
+    later.segment = { start_seconds: 40, end_seconds: 50 }
+    const earlier = candidate(sourceId)
+    earlier.id = 'earlier'
+    earlier.segment = { start_seconds: 10, end_seconds: 20 }
+    earlier.segment_role = 'teaching_demo'
+
+    store.addCandidates([later, earlier], [], {
+      [sourceId]: {
+        title: '训练.mp4',
+        origin_url: null,
+        kind: 'local',
+        localMedia: {
+          fileName: '训练.mp4',
+          mimeType: 'video/mp4',
+          sizeBytes: 123,
+          lastModified: 456,
+          durationSeconds: 60,
+        },
+      },
+    }, ['earlier'])
+
+    expect(store.items.map((item) => item.segment.value?.start_seconds)).toEqual([10, 40])
+    expect(store.items[0]!.sourceRef).toMatchObject({
+      sourceId,
+      kind: 'local',
+      localMedia: { fileName: '训练.mp4', sizeBytes: 123 },
+    })
+    expect(store.items.map((item) => item.segmentRole)).toEqual([
+      { value: 'teaching_demo', source: 'user' },
+      { value: 'follow_along', source: 'video' },
+    ])
   })
 
   it('applies visible rule defaults and persists actions from multiple videos', async () => {

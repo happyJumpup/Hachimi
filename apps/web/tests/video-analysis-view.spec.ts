@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 import type { DraftPlan, DraftRepository } from '@/domain/types'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
+import { useLocalMediaStore } from '@/stores/local-media'
 import VideoAnalysisView from '@/views/VideoAnalysisView.vue'
 
 class ControllableDraftRepository implements DraftRepository {
@@ -53,6 +54,7 @@ const showCompletedCandidate = (analysis: ReturnType<typeof useAnalysisStore>): 
     },
     evidence: [{ type: 'visual', start_seconds: 41, end_seconds: 51 }],
     needs_confirmation: false,
+    segment_role: 'follow_along',
   }]
 }
 
@@ -84,6 +86,65 @@ describe('视频动作分析页', () => {
     expect(error.text()).toContain('视频暂时没有读取成功，请重试')
     await error.get('button').trigger('click')
     expect(loadSources).toHaveBeenCalledTimes(2)
+  })
+
+  it('restores a local source as the primary entry and uploads only after the explicit action', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const analysis = useAnalysisStore()
+    vi.spyOn(analysis, 'restore').mockResolvedValue()
+    vi.spyOn(analysis, 'loadCapabilities').mockImplementation(async () => {
+      analysis.capabilities = {
+        local_upload_enabled: true,
+        local_analysis_max_seconds: 60,
+        local_upload_max_bytes: 25_000_000,
+      }
+    })
+    vi.spyOn(analysis, 'loadSources').mockImplementation(async () => {
+      analysis.sources = []
+    })
+    const start = vi.spyOn(analysis, 'start').mockResolvedValue()
+    const file = new File(['local-video'], 'local.mp4', {
+      type: 'video/mp4',
+      lastModified: 1,
+    })
+    const record = {
+      sourceId: 'local:primary-test',
+      blob: file,
+      fileName: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      lastModified: file.lastModified,
+      durationSeconds: 30,
+      importedAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    }
+    const localMedia = useLocalMediaStore()
+    localMedia.current = record
+    vi.spyOn(localMedia, 'restore').mockResolvedValue(record)
+    vi.spyOn(localMedia, 'urlFor').mockReturnValue('blob:local-primary-test')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: VideoAnalysisView },
+        { path: '/plan', component: { template: '<p>plan</p>' } },
+        { path: '/mine', component: { template: '<p>mine</p>' } },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(VideoAnalysisView, { global: { plugins: [pinia, router] } })
+    await flushPromises()
+
+    expect(wrapper.get('video').attributes('src')).toBe('blob:local-primary-test')
+    expect(start).not.toHaveBeenCalled()
+    await wrapper.get('.analyze-button').trigger('click')
+    await flushPromises()
+
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: 'local:primary-test',
+      file: expect.any(File),
+    }))
   })
 
   it('disables analysis and keeps plan navigation when source media cannot play', async () => {
@@ -143,6 +204,7 @@ describe('视频动作分析页', () => {
       analysis.status = 'cancelled'
       analysis.activeRunId = null
     })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -202,7 +264,7 @@ describe('视频动作分析页', () => {
     expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
   })
 
-  it('cancels an owned run on leave even after its visible state becomes failed', async () => {
+  it('disconnects without cancelling an owned run when the page leaves', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const analysis = useAnalysisStore()
@@ -210,6 +272,7 @@ describe('视频动作分析页', () => {
     analysis.status = 'failed'
     vi.spyOn(analysis, 'loadSources').mockResolvedValue()
     const cancel = vi.spyOn(analysis, 'cancel').mockResolvedValue()
+    const disconnect = vi.spyOn(analysis, 'disconnect')
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -225,10 +288,11 @@ describe('视频动作分析页', () => {
     await flushPromises()
     wrapper.unmount()
 
-    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(disconnect).toHaveBeenCalledTimes(1)
   })
 
-  it('invalidates a pending create request when the page leaves before a run id exists', async () => {
+  it('does not cancel a pending create request when the page leaves', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const analysis = useAnalysisStore()
@@ -236,6 +300,7 @@ describe('视频动作分析页', () => {
     analysis.activeRunId = null
     vi.spyOn(analysis, 'loadSources').mockResolvedValue()
     const cancel = vi.spyOn(analysis, 'cancel').mockResolvedValue()
+    const disconnect = vi.spyOn(analysis, 'disconnect')
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -251,7 +316,8 @@ describe('视频动作分析页', () => {
 
     wrapper.unmount()
 
-    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(disconnect).toHaveBeenCalledTimes(1)
   })
 
   it('returns from candidate review to the video so the whole source can be retried', async () => {
@@ -282,6 +348,7 @@ describe('视频动作分析页', () => {
         },
         evidence: [{ type: 'visual', start_seconds: 41, end_seconds: 51 }],
         needs_confirmation: false,
+        segment_role: 'follow_along',
       }]
     })
     const router = createRouter({

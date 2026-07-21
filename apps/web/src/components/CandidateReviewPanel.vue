@@ -1,12 +1,20 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 
-import type { ActionMode, AnalysisCandidate, AnalysisWarning, Segment } from '@/domain/types'
+import type {
+  ActionMode,
+  AnalysisCandidate,
+  AnalysisWarning,
+  CoverageGap,
+  Segment,
+  SegmentRole,
+} from '@/domain/types'
 
 interface EditableCandidate extends Omit<AnalysisCandidate, 'segment'> {
   segment: Segment | null
   selected: boolean
   originalSegment: Segment | null
+  originalRole: SegmentRole
 }
 
 const props = defineProps<{
@@ -15,11 +23,15 @@ const props = defineProps<{
   maxSegmentEnd?: number
   submitting?: boolean
   submissionError?: string
+  coverageGaps?: CoverageGap[]
+  retryingGap?: CoverageGap | null
+  gapRetryError?: string | null
 }>()
 
 const emit = defineEmits<{
   preview: [segment: Segment]
-  add: [candidates: AnalysisCandidate[], editedSegmentIds: string[]]
+  add: [candidates: AnalysisCandidate[], editedSegmentIds: string[], editedRoleIds: string[]]
+  retryGap: [gap: CoverageGap]
   close: []
 }>()
 
@@ -35,8 +47,10 @@ const toEditableCandidate = (candidate: AnalysisCandidate): EditableCandidate =>
     parameters: { ...candidate.parameters },
     evidence: candidate.evidence.map((evidence) => ({ ...evidence })),
     needs_confirmation: candidate.needs_confirmation,
+    segment_role: candidate.segment_role ?? 'unknown',
     selected: true,
     originalSegment: segment ? { ...segment } : null,
+    originalRole: candidate.segment_role ?? 'unknown',
   }
 }
 
@@ -50,19 +64,36 @@ const toAnalysisCandidate = (candidate: EditableCandidate): AnalysisCandidate =>
     parameters: { ...candidate.parameters },
     evidence: candidate.evidence.map((evidence) => ({ ...evidence })),
     needs_confirmation: candidate.needs_confirmation,
+    segment_role: candidate.segment_role ?? 'unknown',
   }
 }
 
 watch(
   () => props.candidates,
   (candidates) => {
-    editable.value = candidates.map(toEditableCandidate)
+    const current = new Map(editable.value.map((candidate) => [candidate.id, candidate]))
+    editable.value = candidates.map((candidate) => {
+      const previous = current.get(candidate.id)
+      if (!previous) return toEditableCandidate(candidate)
+      const refreshed = toEditableCandidate(candidate)
+      return {
+        ...refreshed,
+        name: previous.name,
+        segment: previous.segment ? { ...previous.segment } : null,
+        parameters: { ...previous.parameters },
+        segment_role: previous.segment_role,
+        selected: previous.selected,
+        originalSegment: previous.originalSegment ? { ...previous.originalSegment } : null,
+        originalRole: previous.originalRole,
+      }
+    })
   },
   { immediate: true },
 )
 
 const selected = computed(() => editable.value.filter((candidate) => candidate.selected))
 const needsMode = computed(() => selected.value.some((candidate) => candidate.parameters.mode === null))
+const needsRole = computed(() => selected.value.some((candidate) => candidate.segment_role === 'unknown'))
 const invalidName = computed(() => selected.value.some((candidate) => !candidate.name.trim()))
 const missingSegment = computed(() => selected.value.some((candidate) => candidate.segment === null))
 const invalidSegment = computed(() =>
@@ -82,6 +113,7 @@ const invalidSegment = computed(() =>
 const canAdd = computed(
   () => selected.value.length > 0
     && !needsMode.value
+    && !needsRole.value
     && !invalidName.value
     && !missingSegment.value
     && !invalidSegment.value
@@ -99,6 +131,23 @@ const setMode = (candidate: EditableCandidate, mode: ActionMode): void => {
   else candidate.parameters.reps = null
 }
 
+const gapReason = (reason: CoverageGap['reason']): string => ({
+  provider_error: '处理服务暂时出错',
+  timeout: '处理超时',
+  media_error: '这段媒体暂时无法读取',
+  unknown: '这段暂时无法判断',
+})[reason]
+
+const isRetryingGap = (gap: CoverageGap): boolean => Boolean(
+  props.retryingGap
+  && props.retryingGap.start_seconds === gap.start_seconds
+  && props.retryingGap.end_seconds === gap.end_seconds,
+)
+
+const setRole = (candidate: EditableCandidate, role: Exclude<SegmentRole, 'unknown'>): void => {
+  candidate.segment_role = role
+}
+
 const isSegmentEdited = (candidate: EditableCandidate): boolean => {
   if (!candidate.segment || !candidate.originalSegment) return candidate.segment !== candidate.originalSegment
   return (
@@ -107,6 +156,9 @@ const isSegmentEdited = (candidate: EditableCandidate): boolean => {
   )
 }
 
+const isRoleEdited = (candidate: EditableCandidate): boolean =>
+  candidate.segment_role !== candidate.originalRole
+
 const submit = (): void => {
   if (!canAdd.value) return
   const chosen = selected.value.map(toAnalysisCandidate)
@@ -114,6 +166,7 @@ const submit = (): void => {
     'add',
     chosen,
     selected.value.filter(isSegmentEdited).map((candidate) => candidate.id),
+    selected.value.filter(isRoleEdited).map((candidate) => candidate.id),
   )
 }
 </script>
@@ -142,6 +195,29 @@ const submit = (): void => {
     <p v-for="warning in warnings" :key="warning.code" class="warning-note">
       {{ warning.message }}
     </p>
+
+    <section v-if="props.coverageGaps?.length" class="coverage-gaps" aria-label="分析覆盖缺口">
+      <div>
+        <strong>部分完成</strong>
+        <span>可靠候选仍可使用；未完成区间可以单独重试</span>
+      </div>
+      <article v-for="gap in props.coverageGaps" :key="`${gap.start_seconds}-${gap.end_seconds}`">
+        <p>
+          <b>{{ formatTime(gap.start_seconds) }}—{{ formatTime(gap.end_seconds) }}</b>
+          <span>{{ gapReason(gap.reason) }}</span>
+        </p>
+        <button
+          type="button"
+          :disabled="!gap.retryable || Boolean(props.retryingGap)"
+          @click="emit('retryGap', gap)"
+        >
+          {{ isRetryingGap(gap) ? '正在重试…' : gap.retryable ? '重试这段' : '暂不可重试' }}
+        </button>
+      </article>
+      <p v-if="props.gapRetryError" class="gap-retry-error" role="alert">
+        {{ props.gapRetryError }}
+      </p>
+    </section>
 
     <div class="candidate-list">
       <article
@@ -216,11 +292,26 @@ const submit = (): void => {
             按时长
           </button>
         </div>
+
+        <div v-if="candidate.segment_role === 'unknown'" class="role-picker needs-choice">
+          <span>片段用途</span>
+          <button type="button" :disabled="!candidate.selected" @click="setRole(candidate, 'follow_along')">
+            跟练执行
+          </button>
+          <button type="button" :disabled="!candidate.selected" @click="setRole(candidate, 'teaching_demo')">
+            教学演示
+          </button>
+        </div>
+        <p v-else class="role-note">
+          <strong>{{ candidate.segment_role === 'follow_along' ? '跟练执行' : '教学演示' }}</strong>
+          {{ candidate.segment_role === 'follow_along' ? '可保留视频明确表达的训练节奏' : '片段只用于预览，训练时长不会取自片段长度' }}
+        </p>
       </article>
     </div>
 
     <footer class="panel-footer">
       <p v-if="props.submissionError" role="alert">{{ props.submissionError }}</p>
+      <p v-else-if="needsRole">先确认片段用途：跟练执行或教学演示</p>
       <p v-else-if="needsMode">先为选中的动作选择训练方式</p>
       <p v-else-if="invalidName">动作名称不能为空</p>
       <p v-else-if="missingSegment">这个候选缺少可预览片段，请重新分析</p>
@@ -263,7 +354,8 @@ const submit = (): void => {
 .candidate-select,
 .evidence-row,
 .segment-editor,
-.mode-picker {
+.mode-picker,
+.role-picker {
   display: flex;
   align-items: center;
 }
@@ -426,6 +518,64 @@ const submit = (): void => {
   gap: 6px;
   margin-top: 12px;
 }
+
+.coverage-gaps {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 12px;
+  padding: 12px;
+  border: 1px solid rgb(255 111 97 / 35%);
+  border-radius: 14px;
+  background: rgb(255 111 97 / 7%);
+}
+
+.coverage-gaps > div,
+.coverage-gaps article {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.coverage-gaps > div { align-items: flex-start; flex-direction: column; gap: 3px; }
+.coverage-gaps > div strong { color: var(--coral); }
+.coverage-gaps > div span,
+.coverage-gaps article span { color: var(--muted); font-size: 11px; }
+.coverage-gaps article { padding-top: 8px; border-top: 1px solid var(--line); }
+.coverage-gaps article p { display: grid; gap: 2px; margin: 0; }
+.coverage-gaps article b { font: 700 15px/1 var(--font-display); }
+.coverage-gaps article button { min-height: 44px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--coral); background: transparent; font-weight: 700; }
+.coverage-gaps article button:disabled { color: var(--muted); opacity: .6; }
+.gap-retry-error { margin: 0; color: var(--coral); font-size: 11px; }
+
+.role-picker {
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.role-picker > span {
+  margin-right: auto;
+  color: var(--coral);
+  font-size: 12px;
+}
+
+.role-picker button {
+  min-height: 44px;
+  padding: 7px 10px;
+  border: 1px solid rgb(255 111 97 / 35%);
+  border-radius: 9px;
+  color: var(--ink);
+  background: transparent;
+}
+
+.role-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.role-note strong { color: var(--cyan); }
 
 .mode-picker > span {
   margin-right: auto;

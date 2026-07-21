@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.all(databases.splice(0).map((name) => Dexie.delete(name)))
 })
 
-describe('Dexie v2 local training data', () => {
+describe('Dexie local training data', () => {
   it('upgrades the v1 current draft without changing its actions or field sources', async () => {
     const databaseName = uniqueDatabaseName()
     const legacy = new Dexie(databaseName)
@@ -71,12 +71,56 @@ describe('Dexie v2 local training data', () => {
     })
     expect(database.tables.map((table) => table.name).sort()).toEqual([
       'drafts',
+      'localMedia',
       'plans',
       'preferences',
       'profiles',
       'records',
       'sessions',
     ])
+
+    database.close()
+  })
+
+  it('upgrades v2 without losing a draft and can persist a local video Blob', async () => {
+    const databaseName = uniqueDatabaseName()
+    const legacy = new Dexie(databaseName)
+    legacy.version(2).stores({
+      drafts: '&id, updatedAt, linkedPlanId',
+      plans: '&id, updatedAt, createdAt, name',
+      sessions: '&id, sessionId, status, updatedAt',
+      records: '&id, endedAt, outcome',
+      profiles: '&id, updatedAt',
+      preferences: '&id, updatedAt',
+    })
+    await legacy.table('drafts').put({
+      id: 'current',
+      name: '本地动作',
+      linkedPlanId: null,
+      items: [],
+      updatedAt: '2026-07-21T16:00:00.000Z',
+    })
+    legacy.close()
+
+    const database = createHachimiDatabase(databaseName)
+    await database.open()
+    const blob = new Blob(['video-bytes'], { type: 'video/mp4' })
+    await database.localMedia.put({
+      sourceId: 'local:11111111-1111-4111-8111-111111111111',
+      blob,
+      fileName: '训练.mp4',
+      mimeType: 'video/mp4',
+      sizeBytes: blob.size,
+      lastModified: 123,
+      durationSeconds: 42,
+      importedAt: '2026-07-21T16:00:00.000Z',
+      updatedAt: '2026-07-21T16:00:00.000Z',
+    })
+
+    expect((await database.drafts.get('current'))?.name).toBe('本地动作')
+    const restored = await database.localMedia.get('local:11111111-1111-4111-8111-111111111111')
+    expect(restored).toMatchObject({ fileName: '训练.mp4', durationSeconds: 42 })
+    expect(restored?.blob).toBeDefined()
 
     database.close()
   })

@@ -19,6 +19,7 @@ const candidates: AnalysisCandidate[] = [
     },
     evidence: [{ type: 'visual', start_seconds: 41, end_seconds: 51 }],
     needs_confirmation: true,
+    segment_role: 'unknown',
   },
   {
     id: 'candidate-b',
@@ -34,6 +35,7 @@ const candidates: AnalysisCandidate[] = [
     },
     evidence: [{ type: 'speech', start_seconds: 54, end_seconds: 62 }],
     needs_confirmation: false,
+    segment_role: 'follow_along',
   },
 ]
 
@@ -64,13 +66,18 @@ describe('CandidateReviewPanel', () => {
       .findAll('.mode-picker button')
       .find((button) => button.text() === '按次数')!
       .trigger('click')
+    await cards[0]
+      .findAll('.role-picker button')
+      .find((button) => button.text() === '跟练执行')!
+      .trigger('click')
     await cards[1].get<HTMLInputElement>('.candidate-select input').setValue(false)
 
     expect(addButton.attributes('disabled')).toBeUndefined()
     await addButton.trigger('click')
 
-    const [[chosen, editedIds]] = wrapper.emitted<[
+    const [[chosen, editedIds, editedRoleIds]] = wrapper.emitted<[
       AnalysisCandidate[],
+      string[],
       string[],
     ]>('add')!
     expect(chosen).toHaveLength(1)
@@ -79,9 +86,90 @@ describe('CandidateReviewPanel', () => {
       name: '单臂拖拽弯举',
       segment: { start_seconds: 42, end_seconds: 51 },
       parameters: { mode: 'reps' },
+      segment_role: 'follow_along',
     })
     expect(editedIds).toEqual(['candidate-a'])
+    expect(editedRoleIds).toEqual(['candidate-a'])
     expect(candidates[0].name).toBe('拖拽弯举')
+  })
+
+  it('requires a role choice for unknown segments and explains known teaching segments', async () => {
+    const wrapper = mount(CandidateReviewPanel, {
+      props: {
+        candidates: [{
+          ...candidates[1],
+          segment_role: 'teaching_demo',
+          parameters: { ...candidates[1].parameters },
+        }],
+        warnings: [],
+      },
+    })
+
+    expect(wrapper.text()).toContain('教学演示')
+    expect(wrapper.text()).toContain('片段只用于预览')
+
+    await wrapper.setProps({
+      candidates: [{
+        ...candidates[1],
+        id: 'unknown-role',
+        segment_role: 'unknown',
+        parameters: { ...candidates[1].parameters },
+      }],
+    })
+    expect(wrapper.get('.primary-action').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('先确认片段用途')
+  })
+
+  it('keeps root candidate edits when a gap retry adds another candidate', async () => {
+    const root = { ...candidates[1]!, parameters: { ...candidates[1]!.parameters } }
+    const wrapper = mount(CandidateReviewPanel, {
+      props: { candidates: [root], warnings: [] },
+    })
+    await wrapper.get('.action-name-input').setValue('我修改过的锤式弯举')
+    await wrapper.findAll('.segment-editor input')[0]!.setValue(55)
+
+    await wrapper.setProps({
+      candidates: [
+        root,
+        {
+          ...root,
+          id: 'run-gap:candidate-1',
+          name: '缺口新动作',
+          segment: { start_seconds: 20, end_seconds: 30 },
+        },
+      ],
+    })
+
+    const cards = wrapper.findAll('.candidate-card')
+    expect(cards).toHaveLength(2)
+    expect(cards[0]!.get<HTMLInputElement>('.action-name-input').element.value).toBe('我修改过的锤式弯举')
+    expect(cards[0]!.findAll<HTMLInputElement>('.segment-editor input')[0]!.element.value).toBe('55')
+  })
+
+  it('keeps a failed coverage gap visible and emits a retry for only that range', async () => {
+    const gap = {
+      start_seconds: 20,
+      end_seconds: 30,
+      reason: 'timeout' as const,
+      retryable: true,
+    }
+    const wrapper = mount(CandidateReviewPanel, {
+      props: {
+        candidates: [candidates[1]!],
+        warnings: [],
+        coverageGaps: [gap],
+        gapRetryError: '这段暂时没有重试成功，缺口已保留',
+      },
+    })
+
+    const coverage = wrapper.get('.coverage-gaps')
+    expect(coverage.text()).toContain('部分完成')
+    expect(coverage.text()).toContain('0:20—0:30')
+    expect(coverage.text()).toContain('处理超时')
+    expect(coverage.text()).not.toContain('provider')
+    expect(coverage.text()).toContain('缺口已保留')
+    await coverage.get('button').trigger('click')
+    expect(wrapper.emitted('retryGap')).toEqual([[gap]])
   })
 
   it('does not add a selected candidate with an empty name', async () => {

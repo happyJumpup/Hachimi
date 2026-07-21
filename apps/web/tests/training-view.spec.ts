@@ -7,6 +7,7 @@ import type { SourceSummary } from '@/domain/types'
 import type { TrainingSession } from '@/domain/training'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
 import { useAnalysisStore } from '@/stores/analysis'
+import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
 import type { TrainingCommand, TrainingEngine, TrainingEngineResult } from '@/training/training-engine'
 import TrainingView from '@/views/TrainingView.vue'
@@ -187,6 +188,53 @@ describe('训练页合同', () => {
 
     expect(wrapper.get('.media-placeholder[role="status"]').text()).toContain('参考视频暂时不可用')
     expect(wrapper.get('button.primary-action').text()).toBe('继续训练')
+    wrapper.unmount()
+  })
+
+  it('plays a restored local Blob and still loads controlled sources after advancing', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('paused')
+    current.plan.items[0]!.sourceRef = {
+      sourceId: 'local:training-source',
+      kind: 'local',
+      title: '本地训练视频',
+      localMedia: {
+        fileName: 'training.mp4',
+        mimeType: 'video/mp4',
+        sizeBytes: 12,
+        lastModified: 1,
+        durationSeconds: 60,
+      },
+    }
+    current.plan.items[0]!.segment = {
+      value: { start_seconds: 4, end_seconds: 12 },
+      source: 'video',
+    }
+    current.plan.items[1]!.sourceRef = { sourceId: source.id, title: source.title }
+    current.plan.items[1]!.segment = {
+      value: { start_seconds: 20, end_seconds: 30 },
+      source: 'video',
+    }
+    const training = useTrainingStore()
+    await training.load(new SessionEngine(current))
+    const localMedia = useLocalMediaStore()
+    vi.spyOn(localMedia, 'resolve').mockResolvedValue('blob:restored-local-video')
+    const analysis = useAnalysisStore()
+    const loadSources = vi.spyOn(analysis, 'loadSources').mockImplementation(async () => {
+      analysis.sources = [source]
+    })
+    const wrapper = await mountTraining(pinia)
+
+    expect(wrapper.get('video').attributes('src')).toBe('blob:restored-local-video')
+    expect(wrapper.text()).toContain('本地片段循环')
+    expect(loadSources).not.toHaveBeenCalled()
+
+    training.session = { ...current, currentItemIndex: 1 }
+    await flushPromises()
+
+    expect(loadSources).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('video').attributes('src')).toBe(source.media_url)
     wrapper.unmount()
   })
 

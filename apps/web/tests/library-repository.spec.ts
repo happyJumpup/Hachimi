@@ -88,12 +88,28 @@ describe('training library repository', () => {
     await draftRepository.save(draft())
     await library.saveProfile({ sex: 'female', age: 28, heightCm: 165, weightKg: 55 })
     await library.savePreferences({ petVisible: false })
+    await database.localMedia.put({
+      sourceId: 'local:clear-test',
+      blob: new Blob(['video'], { type: 'video/mp4' }),
+      fileName: 'clear-test.mp4',
+      mimeType: 'video/mp4',
+      sizeBytes: 5,
+      lastModified: 1,
+      durationSeconds: 8,
+      importedAt: '2026-07-21T00:00:00.000Z',
+      updatedAt: '2026-07-21T00:00:00.000Z',
+    })
 
     expect(await library.loadProfile()).toMatchObject({ id: 'current', sex: 'female' })
     expect(await library.loadPreferences()).toMatchObject({ id: 'current', petVisible: false })
+    expect(await database.localMedia.count()).toBe(1)
 
     await library.clearAllLocalData()
-    expect(await Promise.all(database.tables.map((table) => table.count()))).toEqual([0, 0, 0, 0, 0, 0])
+    expect(database.tables).toHaveLength(7)
+    expect(await Promise.all(database.tables.map((table) => table.count()))).toEqual([
+      0, 0, 0, 0, 0, 0, 0,
+    ])
+    expect(await database.localMedia.count()).toBe(0)
     database.close()
   })
 
