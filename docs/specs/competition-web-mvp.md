@@ -1,5 +1,7 @@
 # 竞赛 Web MVP 产品规格
 
+> 历史竞赛基线：下一轮原型的入口、分析生命周期和真实能力边界以 [本地视频训练原型规格](local-video-training-prototype.md) 与 [ADR-0013](../adr/0013-local-video-import-and-recoverable-analysis.md) 为准。本文件继续记录已完成的受控视频竞赛闭环。
+
 Status: frozen for implementation
 
 Issue: #3

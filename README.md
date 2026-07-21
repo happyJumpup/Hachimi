@@ -1,8 +1,10 @@
-# 哈基米练臂力动
+# 哈基米练臂力动（内部工作名）
 
-抖音 AI 创变者黑客松联赛当前主推进项目。项目把用户主动找到的健身视频，转化为可以确认、修正并自由编排的训练动作。
+项目把用户主动找到的健身视频，转化为可以确认、修正并自由编排的训练动作。正式产品名尚未决定；哈肌咪是 Agent／Pet 的角色名，不自动成为产品品牌。
 
-## 竞赛版闭环
+下一轮原型以当前设备的本地视频导入为主、受控视频为快速体验兜底。浏览器同设备保存原视频，服务端只处理并清理临时副本；当前部署能力以公共能力接口为准，不能把 10 分钟产品目标表述为已经实现。
+
+## 已完成的竞赛版基线
 
 当前 Web MVP 已串起完整的本机训练闭环：
 
@@ -33,7 +35,7 @@ Copy-Item .env.example .env.local
 pnpm dev
 ```
 
-`.env.local` 只由后端读取且必须保持 Git 忽略。单视频开发可用 `HAKIMI_DEMO_VIDEO_PATH` 指向本地文件；竞赛部署使用版本化来源清单和只读媒体缓存。视频不会复制进仓库。
+`.env.local` 只由后端读取且必须保持 Git 忽略。`HAKIMI_DEMO_VIDEO_PATH` 只配置受控快速体验；用户本地视频由浏览器主动选择，不通过环境变量或服务器路径导入。竞赛部署使用版本化来源清单和只读媒体缓存，视频不会复制进仓库。
 
 测试 Provider 仅允许 `APP_ENV=test`，不能作为开发或生产回退。真实云配置缺失时，后端会明确失败。
 
@@ -49,15 +51,15 @@ pnpm api:generate
 
 ## 文档
 
-- [当前竞赛版进展、发布缺口与下一步（团队同步版）](docs/team/project-status-and-next-steps.md)
+- [当前原型状态与下一步（团队同步版）](docs/team/project-status-and-next-steps.md)
 - [领域词汇表](CONTEXT.md)
-- [首个动作分析纵切片技术设计与开发准入](docs/technical/action-analysis-vertical-slice.md)
-- [竞赛版产品规格](docs/specs/competition-web-mvp.md)
-- [整段视频分析与延迟预算 ADR](docs/adr/0012-explicit-full-source-analysis-with-latency-budget.md)
+- [本地视频训练原型权威规格](docs/specs/local-video-training-prototype.md)
+- [本地视频优先与可恢复覆盖分析 ADR](docs/adr/0013-local-video-import-and-recoverable-analysis.md)
 - [Web 体验规范](docs/design/web-experience-guidelines.md)
 - [完整 Web 架构](docs/technical/web-mvp-architecture.md)
-- [训练场次合同](docs/technical/training-session-contract.md)
-- [竞赛部署与演示 Runbook](docs/release/competition-runbook.md)
+- [训练场次、本地媒体与本地数据合同](docs/technical/training-session-contract.md)
+- [历史竞赛版产品规格](docs/specs/competition-web-mvp.md)
+- [历史竞赛部署与演示 Runbook](docs/release/competition-runbook.md)
 - [架构决策](docs/adr)
 - [原始项目方案](docs/source/哈基米练臂力动%20-%20抖音内置健身小程序项目方案.md)
 

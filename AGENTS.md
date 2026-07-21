@@ -22,26 +22,45 @@
 
 ## Product and architecture boundaries
 
-- The product is Web-first. A future Douyin adapter may supply controlled video
-  sources, but arbitrary URL fetching and feed scraping are out of scope.
+- The product is an independent Web-first training product. Local video import
+  is the primary prototype entry; controlled videos are a clearly labelled
+  fallback. Arbitrary URL fetching, platform cookies, login-state reuse, and
+  feed scraping are out of scope.
 - The core object is a **训练动作**, not a complete video. A video action keeps
   its source and demonstration time range; a self-created action may have none.
 - The runtime has one task-oriented 动作分析 Agent. Its speech, visual, and
-  fusion Skills propose candidates; the user chooses and edits the plan.
-- Analysis Runs are transient, cancellable, and never continue as background
-  jobs. Do not introduce runtime mock fallbacks.
+  fusion Skills propose candidates and distinguish 跟练执行段 from
+  教学演示段; the user chooses and edits the plan.
+- Analysis Runs are explicit, cancellable, and recoverable for a short time on
+  the same device. Page navigation, refresh, or an SSE disconnect must not
+  cancel a run. Do not turn them into permanent or cross-device background
+  jobs, and do not introduce runtime mock fallbacks.
 - Do not copy source code or components from the GPL-3.0 historical demo.
 - Analysis starts only after an explicit user action and covers the complete
-  controlled source up to 60 seconds. Legacy trigger metadata must not narrow
-  scope, and page load, playback, or seeking must not auto-create a run.
+  selected source or an explicit coverage-gap retry range. The product target
+  is at most 10 minutes, but each deployment must expose and enforce its
+  measured capability; the prototype default remains 60 seconds until longer
+  inputs pass benchmark and recovery verification. Page load, playback, and
+  seeking must not auto-create a run.
+- Progress uses real processed source time and read-only intermediate discovery.
+  Reliable partial results must expose coverage gaps and a per-gap retry; a
+  provider or system failure must never be presented as “no action evidence.”
+- Source loops use an 展开式执行时间线 such as `A1 → B1 → A2 → B2`.
+  Do not introduce nested loop state or use sets as a substitute for rounds.
+- Keep the current production Provider. The completed native audio/video
+  benchmark did not select a Seed/Qwen quality winner or validate the long-video
+  production route; a switch requires new reviewed evidence and an ADR.
+- GymBTI details, the public product name, and new Pet capabilities are deferred.
+  Keep the current calorie contract and non-blocking five-state Pet.
 
 ## Security and data handling
 
 - Never print, log, commit, expose to the frontend, or include secrets in test
   artifacts. Local credentials belong only in ignored `.env.local` files.
-- Raw audio, video windows, frames, transcripts, prompts, and model responses
-  are transient. Delete local and provider-side files on success, cancellation,
-  and failure.
+- The user-selected source video may persist only in browser storage on the
+  current device. Server-side upload copies, audio, video windows, frames,
+  transcripts, prompts, and model responses are transient; delete them on
+  success, partial completion, cancellation, and failure.
 - Logs may contain run/source IDs, stages, timing, version identifiers, provider
   request IDs, and redacted error codes only.
 

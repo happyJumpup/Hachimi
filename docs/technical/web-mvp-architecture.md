@@ -1,208 +1,190 @@
-# 竞赛 Web MVP 技术架构合同
+# 本地视频训练原型 Web 技术架构合同
 
-> 状态：已冻结，可供 Issue #3 的后续纵切片实现
+> 状态：下一轮原型已冻结；实现通过验收前不得表述为全部完成
 >
 > 更新日期：2026-07-21
 >
-> 适用范围：三天竞赛 Web 版本；不代表公开规模化架构
+> 适用范围：独立 Web 原型；竞赛受控来源部署细节继续见历史 Runbook
 
 ## 1. 目标与不变量
 
-竞赛版在一个公网 HTTPS 站点中完成“动作识别—方案编排—训练—记录—海报”闭环。实现必须保持以下不变量：
+原型在一个 Web 应用中完成“本地视频导入—动作分析—方案编排—训练—记录”闭环。实现必须保持以下不变量：
 
-- 浏览器只提交受控 `source_id`，不能让服务端读取任意路径、代理任意 URL 或抓取信息流。
-- 方案、训练档案、未完成训练和训练记录只保存在当前设备的 IndexedDB；后端不建立用户数据库。
-- 动作分析请求仍是内存态、可取消的临时任务。SSE 断开、显式取消、切换视频或 180 秒超时都会终止请求并释放容量。
-- 生产环境只运行真实 Ark 与豆包流式语音识别模型 2.0。快速体验方案是明确标注的静态产品样例，不是假的 Agent 结果或运行时回退。
-- 原始媒体、音频、帧、转录和模型原始响应不进入训练数据、日志、仓库或镜像。
+- 本地视频导入是主入口，受控视频源是明确标注的快速体验兜底。客户端不能提交任意服务器路径、远程 URL、平台 Cookie 或登录态。
+- 原视频只在当前设备浏览器长期保存。服务端上传副本和分析材料只属于单次运行，并在所有终态清理。
+- 分析只由用户显式创建。页面切换、刷新或 SSE 断线不取消；显式取消、更换来源、运行安全边界或进程丢失才结束运行。
+- 产品目标为完整覆盖不超过 10 分钟的视频，但部署能力以 `GET /api/v1/capabilities` 为准。今晚安全默认仍是经过验证的 60 秒。
+- 过程反馈来自真实处理位置和暂时发现数量。部分结果必须明确覆盖缺口并允许逐段重试，不能把系统错误伪装成没有动作。
+- 当前生产 Provider 保持不变。已完成的 native audio/video benchmark 没有产生质量冠军或验证长视频生产路线；未来切换需补齐证据并单独形成技术路线决策。生产环境不使用测试 Provider 或预置候选回退。
 
 ## 2. 运行拓扑与数据所有权
 
 ```mermaid
 flowchart LR
-    B["浏览器 Vue Web"] -->|"同源 HTTPS / Cookie"| C["Caddy"]
-    C --> A["单 FastAPI 实例<br/>单 Uvicorn worker"]
-    B -->|"307 后的 Range 播放"| COS["腾讯 COS / CDN"]
-    A --> M["只读媒体缓存<br/>SOURCE_MEDIA_ROOT"]
-    A --> ASR["豆包流式 ASR 2.0"]
-    A --> ARK["Ark Skills"]
-    B --> IDB["IndexedDB / Dexie v2"]
+    U["用户选择本地视频"] --> B["Vue Web"]
+    B --> IDB["IndexedDB / Dexie v3<br/>本地媒体与训练数据"]
+    B -->|"multipart 临时副本"| A["FastAPI / Analysis Run"]
+    A --> T["运行独占临时目录"]
+    A --> P["现有生产分析 Provider"]
+    B -->|"source_id"| C["受控来源兜底"]
+    C --> A
 ```
 
-| 数据 | 唯一权威位置 | 生命周期 |
+| 数据 | 权威位置 | 生命周期 |
 | --- | --- | --- |
-| 来源清单、SHA-256、出处链接 | 服务端受控清单 | 随部署版本更新 |
-| 浏览器播放媒体 | COS/CDN | 团队运维控制，不进 Git |
-| 后端分析媒体 | 服务器只读缓存 | 随部署同步，不由客户端写入 |
-| 分析请求、事件和容量占用 | 单 FastAPI 进程内存 | 终态十分钟后过期；重启即丢失 |
-| 分析临时材料 | 每次请求独立临时目录、Ark 临时文件 | 成功、失败、取消和超时均清理 |
-| 草稿、方案、场次、记录、档案、偏好 | 浏览器 IndexedDB | 同设备持久化，用户可清除 |
-| 完成海报 | 浏览器由训练记录即时生成 | 分享或下载，不作为数据库 Blob 保存 |
+| 本地来源媒体 Blob 与元数据 | 浏览器 IndexedDB | 同设备持久化；用户可清除或重新选择恢复 |
+| 受控来源清单与分析媒体 | 服务端受控配置 | 随部署版本更新 |
+| 上传副本、音频、帧、转录、提示与模型原始响应 | 单次运行临时目录或内存 | 成功、部分完成、失败、取消均清理 |
+| Analysis Run 状态、事件和容量占用 | 单 FastAPI 进程 | 活跃期及短时终态 TTL；重启即丢失 |
+| 草稿、方案、场次、记录、档案、偏好 | 浏览器 IndexedDB | 同设备持久化；用户可清除 |
+| 完成海报 | 浏览器即时生成 | 分享或下载，不保存为数据库 Blob |
 
-编译后的 Vue SPA 与 FastAPI 放入同一个 `app` 镜像，由 FastAPI 提供静态文件；只有未知的非 `/api` GET 路径使用 SPA history fallback，未知 API 仍返回 JSON 404。Caddy 只负责 TLS、压缩和反向代理。生产环境不开放 FastAPI 容器端口到公网。
+客户端恢复 Analysis Run 只依赖同一匿名会话中的 `run_id` 和服务端快照，不依赖服务端保留来源媒体。服务重启后无法恢复是当前原型的明确边界；未来多实例或跨重启恢复需要共享运行注册表和新 ADR。
 
-## 3. 受控来源与 COS/CDN
+## 3. 浏览器本地媒体仓储
 
-`SOURCE_MANIFEST_PATH` 指向部署时版本化的 JSON 清单，格式固定为：
-
-```json
-{
-  "version": 1,
-  "sources": [
-    {
-      "id": "arm-workout-01",
-      "title": "手臂训练 01",
-      "media_path": "competition/arm-workout-01.mp4",
-      "duration_seconds": 54.4,
-      "sha256": "64-character-lowercase-hex",
-      "origin_url": "https://www.douyin.com/video/..."
-    }
-  ]
-}
-```
-
-- `id` 必须唯一且稳定；`media_path` 必须是无 `..` 的相对 POSIX 路径。
-- 分析文件只允许解析为 `SOURCE_MEDIA_ROOT/media_path` 下的普通文件，启动时校验 SHA-256，并验证清单时长与实际时长都不超过 60 秒、两者相差不超过一秒。
-- 播放地址只允许由 `PUBLIC_MEDIA_BASE_URL` 与受控 `media_path` 拼接。客户端输入永远不能成为重定向目标。
-- `origin_url` 可为 `null`，只用于“查看原视频”找回出处；后端不会抓取或分析该 URL。
-- 任一清单、路径、哈希或时长校验失败时，该实例不得进入 ready；不能悄悄略过异常来源。
-
-`GET /api/v1/sources` 保持现有字段，并增加可选 `origin_url`：
+Dexie v3 在现有训练表之外增加本地媒体表。逻辑记录如下：
 
 ```ts
-interface SourceSummary {
-  id: string
-  title: string
-  media_url: string
-  duration_seconds: number
-  origin_url: string | null
+interface LocalSourceMedia {
+  sourceId: `local:${string}`
+  blob: Blob
+  fileName: string
+  mimeType: 'video/mp4' | 'video/quicktime' | 'video/webm'
+  sizeBytes: number
+  lastModified: number
+  durationSeconds: number
+  importedAt: string
+  updatedAt: string
 }
 ```
 
-`media_url` 仍为同源 `/api/v1/sources/{source_id}/media`。该接口校验来源后返回 `307 Temporary Redirect` 到 COS/CDN，浏览器把 Range 请求继续交给对象存储；未知来源返回 404。训练中的演示片段只改变播放时间和循环边界，不生成裁剪后的视频文件。
+- `sourceId` 必须是规范小写 `local:<UUID>`，由浏览器生成；`DraftSourceRef.sourceId` 引用同一个值。它不包含路径、文件名或内容哈希。
+- 导入顺序是先读取 `GET /api/v1/capabilities`，再探测 MIME、大小和媒体时长，最后以单条 Dexie 写入保存 Blob 与元数据。客户端校验不替代服务端校验。
+- 播放使用从 Blob 创建的对象 URL；组件释放或切换来源时撤销旧 URL，但不删除 IndexedDB 记录。
+- 写入失败时允许当前标签页使用内存 Blob，并明确标记“仅本次打开可用”。刷新恢复、稍后训练和复练不能依赖该降级路径。
+- 本地记录缺失时，视频动作及结构化训练数据继续可读；播放区要求用户重新选择。重选先比对文件名、MIME、大小、`lastModified` 和时长，再把新 Blob 绑定到原 `sourceId`，不能自动创建不同来源替代。
+- “清除本机训练数据”在一个本地事务中清理本地媒体及全部训练表；对象 URL 也必须释放。
 
-## 4. 访问分级与分析容量
+旧 Dexie 数据没有来源种类时按 `controlled` 解释，不重写已有动作 ID、字段来源或训练记录。
 
-### 4.1 会话接口
+## 4. 公共 API
 
-新增以下同源接口：
+### 4.1 能力接口
 
-| 方法 | 路径 | 行为 |
-| --- | --- | --- |
-| `GET` | `/api/v1/access/session` | 创建或读取匿名会话，返回当前层级和是否可发起分析 |
-| `POST` | `/api/v1/access/session` | 接收 `{access_code}`，校验评委体验码并升级当前会话 |
-| `GET` | `/api/v1/ready` | 返回无敏感信息的生产就绪结果 |
-
-访问响应为：
+`GET /api/v1/capabilities` 返回部署真实能力：
 
 ```ts
-interface AccessSessionView {
-  tier: 'public' | 'judge'
-  can_analyze: boolean
-  retry_after_seconds: number | null
+interface CapabilitiesView {
+  local_upload_enabled: boolean
+  local_analysis_max_seconds: number
+  local_upload_max_bytes: number
 }
 ```
 
-服务端签发 `hachimi_access` Cookie，内容只有随机会话 ID、层级和过期时间并由 `ACCESS_COOKIE_SECRET` 签名；Cookie 使用 `Secure`、`HttpOnly`、`SameSite=Lax`，有效期十二小时。两个访问接口均返回 `Cache-Control: no-store`。`JUDGE_ACCESS_CODE` 在生产门禁中至少为 16 字节，只在后端以常量时间比较；无效值统一返回 401，连续失败达到上限后按会话和真实客户端 IP 返回带 `Retry-After` 的 429，不暴露是否已配置或具体原因。所有改变状态的请求检查同源 `Origin`；Caddy 是唯一可信代理，应用不接受公网直连伪造的转发地址，并将单次请求体限制为 64 KiB。
+接口不返回未来 10 分钟目标、Provider 名称、内部模型 ID 或密钥。前端不得用编译时常量扩大这些值。能力读取失败时，本地上传失败关闭，受控快速体验仍可用。
+`local_analysis_max_seconds` 必须在 `(0, 600]` 内，`local_upload_max_bytes` 必须为正整数；功能关闭时仍返回配置边界，由 `local_upload_enabled` 单独控制创建能力。
 
-### 4.2 准入规则
+### 4.2 本地分析创建
 
-- 每个匿名会话同时最多一个未终态分析请求。
-- 安全默认值为 `JUDGE_ANALYSIS_CONCURRENCY=2`、`PUBLIC_ANALYSIS_CONCURRENCY=0`，两个池互不挤占。只有目标主机达到 4C/8GB，并通过发布手册规定的三路真实并发资源门禁后，才允许由运维显式提升为 3 个评委槽位和 1 个公共槽位。
-- 公共会话每十分钟最多创建一次分析，评委会话每小时最多十次；会话 ID 为主键，并使用可信代理提供的客户端 IP 做第二层滥用保护。
-- 创建成功后立即占用对应槽位；完成、失败、取消、SSE 断开和超时都必须在 `finally` 中释放。服务重启清空内存限流和占用状态。
-- 没有槽位或超过频率时，`POST /api/v1/analysis-runs` 返回 429、`Retry-After` 和自然中文提示。系统不排队、不在后台等待，也不返回预置候选。
-- 已创建请求的层级在创建时固定；中途升级 Cookie 不迁移或复制请求。
+`POST /api/v1/analysis-runs/local` 使用 `multipart/form-data`：
 
-普通访客始终可以使用前端内置的快速体验方案，完成训练、记录和分享。公共实时 AI 关闭或繁忙时，界面清楚区分“快速体验”和“真实分析暂时繁忙”。
+- `media`：必填，MIME 仅允许 `video/mp4`、`video/quicktime`、`video/webm`；
+- `local_source_id`：必填，规范小写 `local:<UUID>`；
+- `range_start_seconds` 与 `range_end_seconds`：成对可选，用于覆盖缺口的绝对来源区间。
 
-## 5. Analysis Run 与 SSE
+无区间时处理完整来源；有区间时要求 `0 <= start < end <= source duration`。区间分析仍由浏览器重新上传原文件，服务端不复用上一次副本。创建成功返回 `202` 与 `AnalysisRunView`；候选及证据时间始终是原视频绝对秒数。
 
-现有分析接口和候选 Schema 保持兼容：
+公开错误为：本地上传关闭 `404`、不支持 MIME `415`、超过字节上限 `413`、ID／媒体／时长／区间无效 `422`，以及现有访问 `403`、容量 `429`、就绪 `503`。代理请求体上限必须与 `local_upload_max_bytes` 一致或更大，但不能无界放开。
 
-- `POST /api/v1/analysis-runs`
-- `GET /api/v1/analysis-runs/{run_id}/events`
-- `GET /api/v1/analysis-runs/{run_id}`
-- `DELETE /api/v1/analysis-runs/{run_id}`
+### 4.3 现有接口
 
-创建请求先完成请求 Schema 和 `source_id` 校验，再执行会话频率与容量准入，避免无效请求占用槽位。新 Web 只提交 `source_id`；可选 `trigger_seconds` 仅为旧客户端兼容字段，后端接受但不用于范围、排序或提示。
+- `POST /api/v1/analysis-runs`：以受控 `source_id` 创建兜底分析；
+- `GET /api/v1/analysis-runs/{run_id}`：读取权威快照；
+- `GET /api/v1/analysis-runs/{run_id}/events`：接收 SSE 阶段、进度与终态；
+- `DELETE /api/v1/analysis-runs/{run_id}`：仅用于用户显式取消或确认更换来源；
+- `GET /api/v1/sources` 与媒体 Range 接口：继续服务受控快速体验。
 
-用户点击“分析视频动作”后，主管线完整覆盖不超过 60 秒的受控来源：整段音频与均匀视觉联系表并行生成，音频就绪即启动 ASR，视觉分支继续等待联系表。ASR 以 4 秒 PCM 包加速发送，Ark 语音/视觉默认使用 Mini；两个证据分支共享 11.5 秒预算。单分支超预算可以带警告部分成功，真实 smoke 以不超过 15 秒/视频分钟为发布门禁，180 秒只保留为安全上限。
+访问会话、频率和并发门禁继续覆盖两种创建入口。本地上传不能绕过现有 `403`、`429` 和生产就绪检查。
 
-SSE 继续使用 `{sequence,type,run_id,timestamp,data}` 包络，15 秒发送一次心跳。Caddy 必须关闭响应缓冲和缓存，并把上游读取超时设为大于 180 秒；浏览器 `EventSource` 使用同源 Cookie。断线不恢复原请求，服务端取消运行，用户重试会得到新 `run_id`。
+## 5. Analysis Run 与恢复
 
-单分支成功、空结果、系统失败、临时材料清理和迟到结果丢弃继续遵循 ADR-0006、0008、0009、0012，不因部署层级改变。公开响应和日志不得加入转录、模型原始响应、提示词、置信度或密钥。
+`AnalysisRunView` 在现有字段上增加：
 
-## 6. 就绪、失败与安全行为
+```ts
+type CoverageGapReason =
+  | 'provider_error'
+  | 'timeout'
+  | 'media_error'
+  | 'unknown'
 
-`GET /api/v1/health` 只证明进程存活，不调用外部提供方。`GET /api/v1/ready` 在以下条件全部满足时返回 200：
+interface CoverageGap {
+  start_seconds: number
+  end_seconds: number
+  reason: CoverageGapReason
+  retryable: boolean
+}
 
-- `APP_ENV=production`、`ANALYSIS_PROVIDER=cloud`，两项云端密钥和三个 Skill 均已配置；
-- 来源清单可解析，所有本地媒体的路径、哈希和时长校验通过；
-- `IMAGEIO_FFMPEG_EXE` 指向服务器只读挂载的真实文件，生产镜像不含 wheel 自带二进制；`FFMPEG_EXPECTED_SHA256` 与 `FFMPEG_EXPECTED_CONFIGURATION_SHA256` 分别锁定可执行文件和完整 `configuration:` 行；
-- 分析临时根目录可创建、写入和删除探针文件；
-- 访问 Cookie 密钥、评委码以及并发配置有效，未启用测试 Provider。
+interface AnalysisRunView {
+  // 现有字段保持不变
+  source_duration_seconds: number
+  processed_seconds: number
+  discovered_candidate_count: number
+  coverage_status: 'complete' | 'partial' | null
+  coverage_gaps: CoverageGap[]
+}
+```
 
-失败返回 503 和安全检查码，例如 `source_manifest_invalid`、`media_cache_invalid`、`media_processor_unavailable`、`provider_configuration_invalid`、`web_static_unavailable`、`proxy_configuration_invalid`、`temp_storage_unavailable`；响应不能包含本机路径、密钥片段或提供方正文。就绪检查不为每次探针调用真实模型；真实 Provider 可用性由发布 smoke 验证。
+- `AnalysisCandidate` 增加必填 `segment_role: 'follow_along' | 'teaching_demo' | 'unknown'`。只有一侧提供明确角色时保留该角色；两侧都明确且一致时保留共同角色，冲突或都未知时输出 `unknown`。`unknown` 和单一证据分支候选必须 `needs_confirmation=true`；教学演示片段长度不得映射到 `parameters.duration_seconds`。
+- `source_duration_seconds` 是有限正数且表示原视频完整时长；`processed_seconds` 是本次请求范围已经实际处理的有限非负时长，必须在 `[0, requested range length]` 内单调前进。
+- `discovered_candidate_count` 是非负整数，表示当前只读中间发现数量，不保证与最终去重后的候选数相同。
+- 排队、运行、失败和取消时 `coverage_status=null`。可靠终态的请求范围完整时为 `complete`；仍有系统未知区间时为 `partial`，并提供非重叠、按时间排序的 `coverage_gaps`。
+- 当前产品中的部分结果缺口必须可单独重试；`reason` 是独立、版本化的公开安全枚举，非白名单值不能进入 GET／SSE。用户界面只展示自然中文，不显示 Provider 正文。
+- 区间重试是新的 Analysis Run。其 `coverage_status=complete` 表示该请求区间完整；客户端把结果合并回来源级覆盖状态，而不是修改旧运行记录。
 
-| 故障 | 外部行为 |
-| --- | --- |
-| 来源不存在 | 404，不尝试下载或猜测来源 |
-| 容量或频率受限 | 429 + `Retry-After`，保留访客快速体验入口 |
-| 一个分析分支失败但另一个有证据 | 部分成功，并携带非技术化警告 |
-| 两个提供方正常但没有证据 | 完成且候选为空 |
-| 系统错误导致无证据 | 明确失败，不伪装为空结果 |
-| 应用重启 | 进行中的分析失败并释放；浏览器本地训练数据不受影响 |
-| COS 播放失败 | 显示视频不可用；已有自建动作和方案仍可训练 |
+SSE 包络继续使用 `{sequence,type,run_id,timestamp,data}`，每个事件的 `data` 携带最新进度／覆盖快照。浏览器断线后先 GET 快照，再重连事件流；客户端只应用当前来源与 `run_id` 的事件，并对重放 `sequence` 保持幂等。服务器不能把连接关闭当作取消信号。运行代次仍隔离迟到事件，旧来源结果不得覆盖当前来源。
 
-生产环境使用同源请求，不依赖宽泛 CORS；本地 Vite 开发才允许明确列出的 localhost Origin。密钥只通过 `/opt/hachimi/shared/.env.production` 注入后端，镜像、SPA、来源清单、错误响应和日志均不得包含密钥。
+服务端流程保持“确定性媒体处理 + 动作分析 Agent 协调 Skills”。现有生产 Provider、配置和进程安全超时继续生效；既有 benchmark 没有选出质量冠军，本合同不切换 Provider，也不沿用旧单样本延迟作为长视频承诺。
 
-## 7. 单实例部署合同
+## 6. 覆盖合并与来源时间线
 
-部署入口固定为 `deploy/compose.yml` 和 `deploy/Caddyfile`：
+- 客户端以 `local_source_id` 作为来源边界，将成功区间内的新候选按绝对开始时间合并，并只移除实际覆盖的缺口。
+- 用户已经校正的候选优先；新候选与其时间重叠时要求确认，不能静默覆盖。重试失败保留旧候选和缺口。
+- 正常分析完成但没有动作证据的区间属于已覆盖区域，不生成 `coverage_gaps`；整段无证据才返回空结果。
+- Agent 通过公开 `segment_role` 区分跟练执行段与教学演示段。`follow_along` 的来源顺序、时长和休息可成为视频默认值；`teaching_demo` 只提供预览与出处；`unknown` 在影响参数时要求确认。
+- 重复和循环动作按来源绝对顺序形成展开式执行时间线。传给方案的每次动作出现都是独立、扁平的 `DraftItem`；不新增嵌套循环状态机。
 
-- `app`：一个容器、一个 FastAPI 实例、一个 Uvicorn worker，包含编译后的 SPA。
-- `caddy`：唯一公网入口，负责 HTTPS 和 SSE 透传。
-- 环境文件：`/opt/hachimi/shared/.env.production`。
-- 分析媒体：`/var/lib/hachimi/media`，只读挂载为 `SOURCE_MEDIA_ROOT`。
-- 媒体同步：发布前用同一 GHCR `app` 镜像一次性运行 `python -m hakimi_analysis.sync_media`，清单只读、媒体根可写；同步和哈希校验成功后，常驻 `app` 才以只读方式挂载媒体根。
-- 镜像以提交 SHA 标记；回滚只切换到上一个验证过的 SHA，不执行服务端数据迁移。
+今晚纵切片不要求独立时间线编辑器或新的嵌套公开 Schema；只要 Provider 返回重复候选，Web 就按绝对时间展开。无法可靠判断段类型且会影响参数时，候选必须保持需确认状态。
 
-单 worker 是正确性边界，不是临时调优：分析请求、SSE 事件、取消句柄、准入池和限流窗口都在进程内。竞赛版禁止增加 worker、容器副本或负载均衡随机分发。扩为多实例前，必须先引入共享运行注册表、跨实例取消和容量协调，或证明完整的会话粘滞方案，并新增 ADR。
+## 7. 安全、隐私与失败行为
 
-## 8. 扩展边界
+- 浏览器不会读取用户未主动选择的文件、目录、Cookie、浏览器配置或平台登录态。
+- 上传文件名不得进入日志；日志只包含运行／来源 ID、阶段、处理时长、字节量级、版本、Provider 请求 ID 和脱敏错误码。
+- API Key 只在后端环境中使用，不进入 multipart、SSE、错误响应、SPA 或本地媒体记录。
+- 临时目录按运行隔离，并在完整、部分、空、失败、取消和超时终态统一清理。恢复依赖结构化运行状态，不得为恢复而延长原媒体副本生命周期。
+- 服务端无法读取媒体、区间越界或来源不匹配时失败关闭；不得猜测时长、截断后继续或回填受控候选。
+- 本地媒体丢失不删除方案或记录。播放区说明“需要重新选择原视频”，训练控制仍可继续。
 
-- 抖音适配器以后只负责生成同一 `source_id`/`SourceSummary` 契约，不改变训练动作、演示片段和方案模型。
-- 账号和跨设备同步以后通过替换训练 Repository 接入；训练状态机不直接依赖网络或用户身份。
-- 用户上传视频、用户上传 Pet、后台分析队列和完整生产扩缩容不属于竞赛版，不能以预留代码路径提前实现。
-- 50 人并发验收针对静态页面、快速体验和本地训练；确定性 Test Provider 只能在 `APP_ENV=test` 且仅监听 loopback 的隔离候选环境中用于该负载测试。生产环境只验证受控的三路真实评委并发，超出容量必须稳定返回 429，而不是追求 50 路模型调用。
+## 8. 兼容与部署
 
-## 9. 运维配置
+- 现有受控 `source_id`、候选、草稿和训练记录继续可读；本地来源使用同一候选 `source_id` 字段承载 `local:<UUID>`。
+- `DraftSourceRef` 增加可选 `kind: 'controlled' | 'local'` 和本地媒体指纹；缺少 `kind` 的旧记录按 `controlled` 读取。
+- 当前单 FastAPI 实例仍是运行、事件、取消和容量协调边界。增加 worker 或副本前必须实现共享运行注册表或完整会话粘滞，并另立 ADR。
+- 受控来源的 COS/CDN、清单、就绪、回滚与发布流程继续遵循[竞赛发布 Runbook](../release/competition-runbook.md)，但它不定义本地导入的产品上限或取消语义。
 
-竞赛版新增且只由后端读取的变量如下：
+## 9. 验证门禁
 
-| 变量 | 含义 |
-| --- | --- |
-| `SOURCE_MANIFEST_PATH` | 受控来源清单绝对路径 |
-| `SOURCE_MEDIA_ROOT` | 校验后的本地分析媒体根目录 |
-| `PUBLIC_MEDIA_BASE_URL` | COS/CDN 的 HTTPS 公共播放前缀 |
-| `IMAGEIO_FFMPEG_EXE` | 生产服务器只读挂载、已完成许可与哈希审计的 FFmpeg 绝对路径 |
-| `FFMPEG_EXPECTED_SHA256` | 被挂载 FFmpeg 可执行文件的 SHA-256 |
-| `FFMPEG_EXPECTED_CONFIGURATION_SHA256` | `ffmpeg -version` 中完整 `configuration:` 行的 SHA-256 |
-| `SMOKE_ANNOTATIONS_PATH` | 与受控来源一一对应的人工 smoke 标注清单 |
-| `WEB_STATIC_ROOT` | 构建后 SPA 的只读目录 |
-| `JUDGE_ACCESS_CODE` | 评委体验码 |
-| `ACCESS_COOKIE_SECRET` | 匿名访问 Cookie 的签名密钥 |
-| `JUDGE_ANALYSIS_CONCURRENCY` | 评委保留分析槽位，安全默认 2；通过容量门禁后可设为 3 |
-| `PUBLIC_ANALYSIS_CONCURRENCY` | 公共分析槽位，安全默认 0；通过容量门禁后可设为 1 |
-| `TRUSTED_PROXY_CIDRS` | 唯一受信任的同机 Caddy 网段；不能使用全网段 |
-| `CORS_ORIGINS` | 生产环境只允许精确 HTTPS Origin；同源部署不使用通配符 |
-
-现有 Ark、ASR、超时和 TTL 变量继续有效。部署流程通过同镜像的一次性同步命令准备媒体，并在切换流量前检查 `/api/v1/ready`；宿主机不要求安装 Python 或 uv，但必须按发布手册提供单独审计的 FFmpeg 文件。完整发布与回滚步骤由竞赛发布运行手册定义。
+- 能力接口与客户端预检一致覆盖上传关闭、MIME、字节数和实际媒体时长。
+- multipart 正常、非法 ID、超限、损坏媒体、区间边界与访问／容量门禁均通过公共 API 测试。
+- 页面切换、刷新和 SSE 断线恢复同一运行；显式取消和更换来源才释放运行，迟到结果被拒绝。
+- 进度只来自实际处理位置；中间候选只读；完整、空、部分和失败语义分离。
+- 覆盖缺口逐段重试，绝对时间合并正确，失败不丢失可靠结果或重试入口。
+- IndexedDB v2→v3 无损升级，本地 Blob 可恢复播放；写入失败、清除数据和重新选择文件行为可验证。
+- 每个终态都确认本地与 Provider 临时材料清理；日志、错误和前端构建不含文件名、内容、密钥或 Provider 正文。
 
 ## 10. 关联决策
 
-- [ADR-0006：Agent 不长期保存原始媒体](../adr/0006-agent-does-not-retain-raw-media.md)
-- [ADR-0007：Web-first 使用受控视频源](../adr/0007-web-first-controlled-video-sources.md)
-- [ADR-0008：显式、临时且可取消的分析管线](../adr/0008-explicit-transient-analysis-pipeline.md)
-- [ADR-0011：竞赛部署采用同源单实例](../adr/0011-single-instance-competition-deployment.md)
+- [本地视频训练原型规格](../specs/local-video-training-prototype.md)
+- [ADR-0006：Agent 不长期保存服务端媒体](../adr/0006-agent-does-not-retain-raw-media.md)
+- [ADR-0010：训练数据留在同设备](../adr/0010-local-training-data-and-single-active-session.md)
+- [ADR-0013：本地视频优先与可恢复的覆盖分析](../adr/0013-local-video-import-and-recoverable-analysis.md)

@@ -1,5 +1,7 @@
 # 竞赛 Web MVP 发布、验收与回滚手册
 
+> 历史竞赛部署基线：下一轮本地视频原型的入口、能力与分析恢复语义以[权威规格](../specs/local-video-training-prototype.md)和 [ADR-0013](../adr/0013-local-video-import-and-recoverable-analysis.md) 为准。本手册继续用于受控快速体验的既有部署，不覆盖本地上传合同。
+
 > 状态：Issue #3 冻结的发布合同；部署实现由 Issue #8 完成
 >
 > 适用范围：腾讯云单机竞赛环境、2–3 个团队受控视频源、评委真实 AI 与访客快速体验

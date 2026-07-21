@@ -1,6 +1,6 @@
-# 训练场次与本地数据合同
+# 训练场次、本地媒体与本地数据合同
 
-> 状态：已冻结，可供 Issue #3 的训练、体验和记录纵切片实现
+> 状态：下一轮本地视频原型已冻结；训练状态机继续沿用已验收基线
 >
 > 更新日期：2026-07-21
 
@@ -9,28 +9,31 @@
 训练执行器只消费用户已经确认的动作安排，不调用动作分析 Agent，也不评价动作顺序、训练量、伤病风险或训练效果。
 
 - 当前设备同时最多存在一个未完成训练，固定存为 `sessions/current`。
+- 用户导入的来源视频以 Blob 保存在同一浏览器数据库；它可以被方案、场次和记录引用，但不是训练记录本身，也不上传为服务端视频资产。
 - 开始训练会深拷贝方案快照；之后编辑草稿或方案库不能改变正在训练或已经完成的记录。
 - 活动训练只累计前台实际执行时间；组间休息按墙钟流逝，但计入时长最多不超过计划休息时间。
 - 未完成训练可恢复，但不进入训练记录，也不产生最终卡路里或海报。
 - 自建动作没有来源视频和演示片段，训练页显示无视频状态，不自动匹配替代视频。
+- 本地来源媒体丢失时保留动作、参数和训练控制，并要求用户重新选择原视频；不得静默替换来源或阻止完成训练。
 - Pet、卡路里、训练记录和海报都是训练执行器状态或终态记录的消费者，不能反向控制状态机。
 
-## 2. Dexie v2
+## 2. Dexie v3
 
-数据库名称继续使用 `hachimi-fitness`。v2 只增加表和草稿元数据，不清除或重建现有 v1 数据：
+数据库名称继续使用 `hachimi-fitness`。v3 在现有 v2 六张训练表之外增加本地媒体表，不清除或重建已有数据：
 
 ```ts
-db.version(2).stores({
+db.version(3).stores({
   drafts: '&id, updatedAt, linkedPlanId',
   plans: '&id, updatedAt, createdAt, name',
   sessions: '&id, sessionId, status, updatedAt',
   records: '&id, endedAt, outcome',
   profiles: '&id, updatedAt',
   preferences: '&id, updatedAt',
+  localMedia: '&sourceId, importedAt, updatedAt',
 })
 ```
 
-v1 → v2 的升级事务遍历 `drafts`：保留原有 `items` 和 `updatedAt`，为 `current` 补充 `name='未命名方案'`、`linkedPlanId=null`；其他五张表从空表开始。迁移中发生异常必须整体回滚并提示“本机训练数据暂时无法读取”，不得以清空数据库作为自动恢复。
+v1 → v2 的既有升级继续保留：迁移 `drafts` 并创建其余训练表。v2 → v3 只创建空的 `localMedia` 表；旧 `DraftSourceRef` 没有 `kind` 时按 `controlled` 读取，不批量重写历史记录。迁移中发生异常必须整体回滚并提示“本机训练数据暂时无法读取”，不得以清空数据库作为自动恢复。
 
 ### 2.1 草稿、方案、档案与偏好
 
@@ -67,6 +70,36 @@ interface Preferences {
   petVisible: boolean
   updatedAt: string
 }
+
+interface LocalMediaFingerprint {
+  fileName: string
+  mimeType: string
+  sizeBytes: number
+  lastModified: number
+  durationSeconds: number
+}
+
+interface LocalSourceMedia extends LocalMediaFingerprint {
+  sourceId: `local:${string}`
+  blob: Blob
+  importedAt: string
+  updatedAt: string
+}
+
+interface DraftSourceRef {
+  sourceId: string
+  title?: string
+  originUrl?: string
+  kind?: 'controlled' | 'local'
+  localMedia?: LocalMediaFingerprint
+}
+
+type SegmentRole = 'follow_along' | 'teaching_demo' | 'unknown'
+
+interface DraftItem {
+  // 既有字段保持不变
+  segmentRole?: SourcedValue<SegmentRole>
+}
 ```
 
 - 草稿继续 300ms 防抖自动保存。
@@ -75,8 +108,19 @@ interface Preferences {
 - 快速体验方案是版本化前端 fixture。用户选择后只复制到当前草稿，除非主动“另存为”，否则不进入方案库。
 - 删除一个方案不删除由它产生的训练场次或记录；若当前草稿仍链接该方案，删除事务同时把 `linkedPlanId` 置空，但保留草稿内容。
 - 首次读取不到偏好时使用 `petVisible=true`。隐藏 Pet 立即写入长期偏好，不是当前场次临时状态。
+- 本地导入生成规范小写 `local:<UUID>`，先完成能力、类型、大小和时长检查，再把 Blob 与指纹写入 `localMedia`。保存失败时可保留当前标签页内存 Blob，但不能写入“已保存到本机”状态。
+- 本地视频动作的 `DraftSourceRef.kind='local'`，`sourceId` 等于 `LocalSourceMedia.sourceId`，并嵌入不含 Blob 的指纹；受控来源可显式写 `controlled`，旧数据缺少 `kind` 时仍按受控来源读取。
+- 重新选择媒体时，用户选中的文件必须通过基本指纹与时长校验后才可替换相同 `sourceId` 的 Blob。替换媒体不改写方案、场次或记录快照。
+- 新候选加入草稿时把 `segment_role` 写入可选 `DraftItem.segmentRole`：Agent 明确值使用 `video` 来源，用户确认或修改后使用 `user` 来源；该字段不使用 `rule`。旧草稿缺少字段时按 `unknown` 行为处理，不进行破坏性迁移。
 
-### 2.2 方案快照、训练场次与记录
+### 2.2 展开式执行时间线
+
+- 从来源视频得到的候选按绝对开始时间排序。循环或重复出现的动作不去重，每次出现都创建不同 ID 的扁平 `DraftItem`，例如 `A1 → B1 → A2 → B2`。
+- 轮次只作为可选展示标签，不参与训练状态机。每个 `DraftItem.sets` 只表示该次动作安排内的连续组数，不能用 `sets=2` 把 `A → B` 的两轮折叠成 `A(2组) → B(2组)`。
+- `segment_role='follow_along'` 时，明确的动作时长、休息和顺序可以写入 `video` 来源值；`teaching_demo` 的时间只写入演示片段，绝不自动写入训练时长，训练参数继续使用明确口令、规则默认值或用户值。
+- `segment_role='unknown'` 且会改变参数时，加入草稿前要求一次确认。训练执行器只消费确认后的扁平安排，不在运行时重新调用 Agent 或推断段类型。
+
+### 2.3 方案快照、训练场次与记录
 
 ```ts
 interface PlanSnapshot {
@@ -166,6 +210,8 @@ interface TrainingRecord {
 - 休息秒数为非负整数；重量为空或正数，且非空重量的来源必须为 `user`。
 - 视频动作的 `sourceRef` 与有效演示片段同时存在；自建动作两者同时为空。
 
+结构校验不要求本地媒体 Blob 此刻可读：Blob 缺失只影响演示播放，不能把已有视频动作改成自建动作或阻止训练。训练页应显示来源指纹和“重新选择原视频”，校验成功后恢复同一来源片段。
+
 校验通过后，在一个 Dexie 写事务中使用固定主键 `current` 执行 `sessions.add`。若已经存在记录，返回 `active_session_exists`，界面只提供“继续训练”或“结束当前训练”，不能覆盖。新场次深拷贝方案，生成 `sessionId`，初始状态为 `paused/before_start`；用户再次点击“开始本组”后才进入 `active`。
 
 训练安全提示与结构校验结果同时显示，但安全提示不要求额外确认，也不能阻止用户开始。
@@ -220,7 +266,7 @@ stateDiagram-v2
 - 所有改变训练场次的命令携带调用方读到的 `revision`。Dexie 事务只在 revision 匹配时更新并递增；不匹配返回 `session_conflict`、重新加载最新场次并暂停当前页面，防止重复点击和多标签页静默覆盖。
 - “完成本组”、自动计时完成、跳过和暂停都通过同一个训练 Repository 调用状态机，不允许视图直接写表。
 - 终态事务先按 `sessionId` 检查记录：记录已存在时返回该记录；否则 `records.add` 后删除 `sessions/current`。重复完成、返回键重放或刷新不会生成第二条记录。
-- 删除全部本机训练数据必须在一个事务中清空六张表，并要求用户明确确认；不删除服务端来源媒体或分析运行。
+- 删除全部本机训练数据必须在一个事务中清空七张表，并要求用户明确确认；同时释放当前对象 URL。它不删除受控来源、活动中的服务端分析运行或已经在各终态清理的上传副本。
 
 ## 6. 领域事件与下游消费者
 
@@ -249,6 +295,8 @@ type TrainingEvent =
 Pet 加载失败、被隐藏或使用低动效都不改变状态机。Pet 可见性不影响完成海报：完整训练海报按产品合同始终包含哈肌咪。
 
 ## 7. 卡路里合同
+
+GymBTI 的计算细节不属于本轮原型。本节既有卡路里规则继续作为当前训练结果基线，不因本地视频导入、Agent 分类或 Provider 路线变化而调整。
 
 档案只有在性别、年龄、身高、体重四项均通过表单校验时才算完整：性别为 `male` 或 `female`，年龄为 18–100 的整数，身高为 100–250 cm、体重为 20–300 kg 的有限数值。不完整时不填入默认体重或虚构个人数据。
 
@@ -286,6 +334,9 @@ genericKcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 ## 9. 验收场景
 
 - 从 v1 含跨视频和自建动作的 `current` 草稿升级，全部动作及字段来源保持不变。
+- 从 v2 升级到 v3 后旧受控动作仍可训练；导入本地视频、刷新并复练时从同一 `local_source_id` 恢复 Blob 和片段。
+- 本地 Blob 丢失时结构化方案仍可训练；重新选择正确文件恢复播放，错误文件不能静默替换。
+- `A → B` 两轮来源按 `A1 → B1 → A2 → B2` 形成四个独立安排，完成、跳过和记录都按四个扁平条目推进。
 - 草稿另存为、打开原方案继续编辑、再次另存为，三个副本互不串改。
 - 次数型手动完成、时长型前台自动完成、计划休息自然结束和提前继续均产生正确实际时间。
 - 活动训练切到后台、刷新和崩溃恢复后不会补算后台活动；休息恢复按计划上限进入准备继续。
@@ -299,6 +350,7 @@ genericKcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 - 未来账号同步通过新的 Repository 与冲突协议实现，不能让当前本地表直接承担服务端同步队列。
 - 未来抖音推荐页只消费 `resting`/`ready_to_continue` 的召回视图；离开训练页仍必须暂停活动训练。
 - 自动计数、动作质量评判、健康风险判断、用户自定义 Pet 和训练处方不属于本状态机。
+- GymBTI 细节、Pet 新能力和正式产品命名不属于本合同；没有新决策前保持现有卡路里与 Pet 五态。
 - 新训练状态、跨设备并发或服务端记录都必须先更新本合同及 ADR-0010。
 
 ## 11. 关联决策
@@ -309,3 +361,4 @@ genericKcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 - [ADR-0004：分离草稿、方案库和训练记录](../adr/0004-separate-drafts-library-and-training-records.md)
 - [ADR-0005：Agent 提出动作候选，用户决定训练方案](../adr/0005-agent-proposes-actions-users-decide-plans.md)
 - [ADR-0010：训练数据留在同设备且仅有一个未完成场次](../adr/0010-local-training-data-and-single-active-session.md)
+- [ADR-0013：本地视频优先与可恢复的覆盖分析](../adr/0013-local-video-import-and-recoverable-analysis.md)
