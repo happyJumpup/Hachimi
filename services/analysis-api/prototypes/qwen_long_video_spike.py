@@ -11,10 +11,14 @@ is not copied into the repository. The raw provider response is never persisted.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import os
+import subprocess
 import sys
 import time
+from email.utils import formatdate
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +81,67 @@ def upload_temporary_video(
     return f"oss://{object_key}"
 
 
+def upload_temporary_video_curl(
+    client: httpx.Client,
+    *,
+    api_key: str,
+    model: str,
+    video_path: Path,
+) -> str:
+    policy_response = client.get(
+        POLICY_URL,
+        params={"action": "getPolicy", "model": model},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    policy_response.raise_for_status()
+    policy = policy_response.json()["data"]
+    object_key = f"{policy['upload_dir']}/{video_path.name}"
+    fields = {
+        "OSSAccessKeyId": policy["oss_access_key_id"],
+        "Signature": policy["signature"],
+        "policy": policy["policy"],
+        "key": object_key,
+        "x-oss-object-acl": policy["x_oss_object_acl"],
+        "x-oss-forbid-overwrite": policy["x_oss_forbid_overwrite"],
+        "success_action_status": "200",
+        "x-oss-content-type": mimetypes.guess_type(video_path)[0]
+        or "application/octet-stream",
+    }
+    command = [
+        "curl.exe",
+        "--proxy",
+        os.getenv("QWEN_UPLOAD_PROXY_URL", "socks5h://127.0.0.1:7897"),
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "180",
+        "--silent",
+        "--show-error",
+        "--output",
+        "NUL",
+        "--write-out",
+        "%{http_code}",
+        "--header",
+        "Accept: application/json",
+        "--header",
+        f"Date: {formatdate(timeval=None, localtime=False, usegmt=True)}",
+        "--header",
+        "User-Agent: dashscope-upload-probe",
+    ]
+    for name, value in fields.items():
+        command.extend(["--form-string", f"{name}={value}"])
+    command.extend(
+        ["--form", f"file=@{video_path};type=video/mp4", policy["upload_host"]]
+    )
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"curl upload failed with exit code {completed.returncode}")
+    status_code = int(completed.stdout.strip())
+    if status_code != 200:
+        raise RuntimeError(f"curl upload returned HTTP {status_code}")
+    return f"oss://{object_key}"
+
+
 def extract_text(response: dict[str, Any]) -> str:
     choices = response.get("output", {}).get("choices", [])
     if not choices:
@@ -123,6 +188,49 @@ def stream_generation(
                 text = part.get("text") if isinstance(part, dict) else None
                 if isinstance(text, str):
                     chunks.append(text)
+    if not chunks:
+        raise RuntimeError("Provider stream did not contain text content")
+    return "".join(chunks), final_event
+
+
+def requests_stream_generation(
+    *,
+    api_key: str,
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    import requests
+
+    chunks: list[str] = []
+    final_event: dict[str, Any] = {}
+    with requests.Session() as session:
+        session.trust_env = True
+        with session.post(
+            GENERATION_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "X-DashScope-SSE": "enable",
+            },
+            json=payload,
+            stream=True,
+            timeout=(30, 300),
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line.removeprefix("data:").strip()
+                if data == "[DONE]":
+                    break
+                event = json.loads(data)
+                final_event = event
+                choices = event.get("output", {}).get("choices", [])
+                if not choices:
+                    continue
+                for part in choices[0].get("message", {}).get("content", []):
+                    text = part.get("text") if isinstance(part, dict) else None
+                    if isinstance(text, str):
+                        chunks.append(text)
     if not chunks:
         raise RuntimeError("Provider stream did not contain text content")
     return "".join(chunks), final_event
@@ -188,7 +296,11 @@ def sdk_generation(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--transport", choices=("manual", "sdk"), default="manual")
+    parser.add_argument(
+        "--transport",
+        choices=("manual", "sdk", "base64", "curl-oss"),
+        default="manual",
+    )
     args = parser.parse_args()
 
     load_dotenv(ROOT / ".env.local", override=False)
@@ -243,16 +355,64 @@ def main() -> int:
             f"stage=sdk-upload-and-inference completed seconds={inference_seconds:.2f}",
             flush=True,
         )
+    elif args.transport == "base64":
+        size_mb = video_path.stat().st_size / 1024 / 1024
+        if size_mb >= 7:
+            raise RuntimeError("Base64 transport requires a video smaller than 7 MB")
+        print(f"stage=base64-inference started size_mb={size_mb:.2f}", flush=True)
+        encoded_video = base64.b64encode(video_path.read_bytes()).decode("ascii")
+        inference_started_at = time.perf_counter()
+        response_text, provider_response = requests_stream_generation(
+                api_key=api_key,
+                payload={
+                    "model": model,
+                    "input": {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "video": f"data:video/mp4;base64,{encoded_video}",
+                                        "fps": fps,
+                                        "min_pixels": 4096,
+                                        "max_pixels": 65536,
+                                        "total_pixels": 67108864,
+                                    },
+                                    {"text": prompt},
+                                ],
+                            }
+                        ]
+                    },
+                    "parameters": {
+                        "result_format": "message",
+                        "response_format": {"type": "json_object"},
+                        "incremental_output": True,
+                        "temperature": 0.1,
+                        "max_tokens": 4096,
+                    },
+                },
+        )
+        inference_seconds = time.perf_counter() - inference_started_at
+        upload_seconds = 0.0
+        print(f"stage=base64-inference completed seconds={inference_seconds:.2f}", flush=True)
     else:
         with httpx.Client(timeout=httpx.Timeout(900.0, connect=30.0)) as client:
             print("stage=upload started", flush=True)
             upload_started_at = time.perf_counter()
-            temporary_url = upload_temporary_video(
-                client,
-                api_key=api_key,
-                model=model,
-                video_path=video_path,
-            )
+            if args.transport == "curl-oss":
+                temporary_url = upload_temporary_video_curl(
+                    client,
+                    api_key=api_key,
+                    model=model,
+                    video_path=video_path,
+                )
+            else:
+                temporary_url = upload_temporary_video(
+                    client,
+                    api_key=api_key,
+                    model=model,
+                    video_path=video_path,
+                )
             upload_seconds = time.perf_counter() - upload_started_at
             print(f"stage=upload completed seconds={upload_seconds:.2f}", flush=True)
 

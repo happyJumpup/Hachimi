@@ -40,7 +40,32 @@ The same question was retested on 2026-07-21 with the existing 54.87-second,
 - No candidate content was returned, so the expected action around 41–51 seconds
   could not be evaluated.
 
-Final product decision: remove single-request whole-video VLM ingestion from the
-competition path for both short and long videos. A provider may only re-enter
-consideration through a bounded-chunk benchmark that meets the product latency
-and timestamp-quality gates.
+This decision was superseded by the diagnosed rerun below. The earlier failures
+were caused by the local Vortex/Fake-IP upload path, not by Qwen inference.
+
+### Diagnosed rerun and corrected decision
+
+The Windows resolver mapped the DashScope OSS host to the Vortex Fake-IP range,
+and large multipart or Base64 POST bodies were reset. Policy acquisition remained
+healthy and reported a 1024 MB account/model upload limit. A curl SOCKS upload
+probe established a working low-payload path and allowed the complete controlled
+54.87-second video to reach Qwen3-VL.
+
+Three complete-video inference runs succeeded:
+
+| Input | Upload | Inference | Video tokens | Result |
+| --- | ---: | ---: | ---: | --- |
+| 160×284, 5 FPS, 116 KB | 13.16 s | 7.60 s | 6,167 | 5 actions; drag curl 40.9–49.5 s |
+| 240×426, 6 FPS, 253 KB | 32.66 s | 6.43 s | 9,842 | 5 actions; drag curl 41–49 s |
+| 240×426, 2 FPS, 253 KB | 29.29 s | 5.28 s | 3,302 | 5 actions; drag curl 41–49 s |
+
+All three covered the full source, intersected the 41–51 second human annotation,
+and produced no weight field. The stable action list contained normal curl,
+light-weight curl, seated curl, cross-body curl, and drag curl.
+
+Corrected decision: retain direct Qwen video understanding as a provider candidate.
+At 2 FPS, model inference meets the 5–15 seconds per video-minute target on the
+controlled short video. Production evaluation must place media on a provider-
+reachable OSS/CDN or run from the deployment network; the Codex desktop Vortex
+upload timing is not representative. Long-video acceptance still requires a real
+deployment-network benchmark before choosing whole-video versus bounded chunks.
