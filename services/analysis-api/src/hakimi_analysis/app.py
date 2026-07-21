@@ -25,6 +25,8 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from starlette.datastructures import Headers
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from hakimi_analysis.access import (
     ACCESS_COOKIE_NAME,
@@ -33,6 +35,7 @@ from hakimi_analysis.access import (
     AccessManager,
     AccessSession,
     AdmissionDenied,
+    AnalysisLease,
 )
 from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.models import (
@@ -59,6 +62,93 @@ LOCAL_MEDIA_TYPES = {
     "video/quicktime": ".mov",
     "video/webm": ".webm",
 }
+LOCAL_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+
+
+class _RequestBodyTooLarge(OSError):
+    # Starlette closes partially spooled multipart files when parsing raises OSError.
+    pass
+
+
+class LocalUploadBodyLimitMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        max_body_bytes: int,
+        app_env: str,
+        development_origins: list[str],
+    ) -> None:
+        self._app = app
+        self._max_body_bytes = max_body_bytes
+        self._app_env = app_env
+        self._development_origins = development_origins
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope["method"] != "POST"
+            or scope["path"] != "/api/v1/analysis-runs/local"
+        ):
+            await self._app(scope, receive, send)
+            return
+        try:
+            _require_same_origin(
+                Request(scope),
+                app_env=self._app_env,
+                development_origins=self._development_origins,
+            )
+        except HTTPException as error:
+            response = JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail},
+                headers={"Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+            return
+        content_length = Headers(scope=scope).get("content-length")
+        if content_length is not None:
+            try:
+                declared_bytes = int(content_length)
+            except ValueError:
+                declared_bytes = 0
+            if declared_bytes > self._max_body_bytes:
+                await _local_upload_too_large_response(scope, receive, send)
+                return
+        received_bytes = 0
+        too_large = False
+
+        async def limited_receive() -> Message:
+            nonlocal received_bytes, too_large
+            message = await receive()
+            if message["type"] == "http.request":
+                received_bytes += len(message.get("body", b""))
+                if received_bytes > self._max_body_bytes:
+                    too_large = True
+                    raise _RequestBodyTooLarge
+            return message
+
+        async def limited_send(message: Message) -> None:
+            if not too_large:
+                await send(message)
+
+        with suppress(_RequestBodyTooLarge):
+            await self._app(scope, limited_receive, limited_send)
+        if too_large:
+            await _local_upload_too_large_response(scope, receive, send)
+
+
+async def _local_upload_too_large_response(
+    scope: Scope,
+    receive: Receive,
+    send: Send,
+) -> None:
+    response = JSONResponse(
+        status_code=413,
+        content={"detail": "视频文件超过上传大小限制"},
+        headers={"Cache-Control": "no-store"},
+    )
+    await response(scope, receive, send)
 
 
 async def stream_run_events(
@@ -148,6 +238,13 @@ def create_app(
     app.state.run_manager = manager
     app.state.source_catalog = source_catalog
     app.state.access_manager = access_manager
+    if local_upload_enabled:
+        app.add_middleware(
+            LocalUploadBodyLimitMiddleware,
+            max_body_bytes=local_upload_max_bytes + LOCAL_MULTIPART_OVERHEAD_BYTES,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_cors_origins,
@@ -380,36 +477,56 @@ def create_app(
         range_start_seconds: Annotated[float | None, Form(ge=0)] = None,
         range_end_seconds: Annotated[float | None, Form(gt=0)] = None,
     ) -> AnalysisRunView:
-        _require_same_origin(
-            request,
-            app_env=app_env,
-            development_origins=resolved_cors_origins,
-        )
-        if not local_upload_enabled:
-            raise HTTPException(status_code=404, detail="本地视频导入未启用")
-        if app_env == "production":
-            failure_code = await asyncio.to_thread(readiness_probe.check)
-            if failure_code is not None:
-                raise HTTPException(status_code=503, detail="动作分析服务尚未就绪")
-        if LOCAL_SOURCE_ID_PATTERN.fullmatch(local_source_id) is None:
-            raise HTTPException(status_code=422, detail="本地来源标识无效")
-        if (range_start_seconds is None) != (range_end_seconds is None):
-            await media.close()
-            raise HTTPException(
-                status_code=422,
-                detail="分析范围必须同时包含开始和结束时间",
-            )
-        suffix = LOCAL_MEDIA_TYPES.get(media.content_type or "")
-        if suffix is None:
-            await media.close()
-            raise HTTPException(status_code=415, detail="暂不支持这种视频格式")
+        upload_directory: Path | None = None
+        duration_task: asyncio.Task[float] | None = None
+        lease: AnalysisLease | None = None
+        ownership_transferred = False
 
-        upload_directory = await asyncio.to_thread(_make_upload_directory, local_upload_temp_root)
-        source_path = upload_directory / f"source{suffix}"
-        try:
-            await _write_upload(media, source_path, max_bytes=local_upload_max_bytes)
+        async def cleanup_request_resources() -> None:
             try:
-                duration_seconds = await asyncio.to_thread(duration_probe, source_path)
+                await media.close()
+            finally:
+                if duration_task is not None:
+                    await asyncio.gather(duration_task, return_exceptions=True)
+                if not ownership_transferred:
+                    try:
+                        if upload_directory is not None:
+                            await _remove_upload_directory(upload_directory)
+                    finally:
+                        if lease is not None:
+                            await lease.release()
+
+        try:
+            _require_same_origin(
+                request,
+                app_env=app_env,
+                development_origins=resolved_cors_origins,
+            )
+            if not local_upload_enabled:
+                raise HTTPException(status_code=404, detail="本地视频导入未启用")
+            if app_env == "production":
+                failure_code = await asyncio.to_thread(readiness_probe.check)
+                if failure_code is not None:
+                    raise HTTPException(status_code=503, detail="动作分析服务尚未就绪")
+            if LOCAL_SOURCE_ID_PATTERN.fullmatch(local_source_id) is None:
+                raise HTTPException(status_code=422, detail="本地来源标识无效")
+            if (range_start_seconds is None) != (range_end_seconds is None):
+                raise HTTPException(
+                    status_code=422,
+                    detail="分析范围必须同时包含开始和结束时间",
+                )
+            suffix = LOCAL_MEDIA_TYPES.get(media.content_type or "")
+            if suffix is None:
+                raise HTTPException(status_code=415, detail="暂不支持这种视频格式")
+
+            upload_directory = _make_upload_directory(local_upload_temp_root)
+            source_path = upload_directory / f"source{suffix}"
+            await _write_upload(media, source_path, max_bytes=local_upload_max_bytes)
+            duration_task = asyncio.create_task(asyncio.to_thread(duration_probe, source_path))
+            try:
+                duration_seconds = await asyncio.shield(duration_task)
+            except asyncio.CancelledError:
+                raise
             except Exception as error:
                 raise HTTPException(status_code=422, detail="无法读取视频时长") from error
             if not math.isfinite(duration_seconds) or duration_seconds <= 0:
@@ -453,30 +570,27 @@ def create_app(
                     headers={"Retry-After": str(error.retry_after_seconds)},
                 ) from error
 
+            owned_directory = upload_directory
+            owned_lease = lease
+
             async def finalize_local_run() -> None:
                 try:
-                    await _remove_upload_directory(upload_directory)
+                    await _remove_upload_directory(owned_directory)
                 finally:
-                    await lease.release()
+                    await owned_lease.release()
 
-            try:
-                created = await manager.create(
-                    source,
-                    None,
-                    owner_session_id=session.id,
-                    on_terminal=finalize_local_run,
-                )
-            except Exception:
-                await lease.release()
-                raise
+            created = await manager.create(
+                source,
+                None,
+                owner_session_id=session.id,
+                on_terminal=finalize_local_run,
+            )
+            ownership_transferred = True
             await lease.bind(created.id)
             _set_access_cookie(response, access_manager, session)
             return created
-        except Exception:
-            await _remove_upload_directory(upload_directory)
-            raise
         finally:
-            await media.close()
+            await _run_cleanup_to_completion(cleanup_request_resources())
 
     if not local_upload_enabled:
 
@@ -618,6 +732,15 @@ async def _write_upload(media: UploadFile, destination: Path, *, max_bytes: int)
 
 async def _remove_upload_directory(directory: Path) -> None:
     await asyncio.to_thread(shutil.rmtree, directory, True)
+
+
+async def _run_cleanup_to_completion(cleanup: Awaitable[None]) -> None:
+    cleanup_task = asyncio.ensure_future(cleanup)
+    try:
+        await asyncio.shield(cleanup_task)
+    except asyncio.CancelledError:
+        await cleanup_task
+        raise
 
 
 def _validate_production_cors_origins(origins: list[str]) -> None:

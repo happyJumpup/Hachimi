@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import threading
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
@@ -10,6 +12,7 @@ from fastapi.routing import APIRoute
 
 from hakimi_analysis.access import AccessManager
 from hakimi_analysis.app import create_app
+from hakimi_analysis.bootstrap import DeterministicTestPipeline
 from hakimi_analysis.models import (
     AnalysisCandidate,
     CandidateParameters,
@@ -120,6 +123,220 @@ class SecretFailureCapturePipeline:
         )
 
 
+class CandidateBoundaryPipeline:
+    def __init__(
+        self,
+        *,
+        segment_end_seconds: float = 3,
+        evidence_end_seconds: float = 2.75,
+        candidate_source_id: str | None = None,
+    ) -> None:
+        self._segment_end_seconds = segment_end_seconds
+        self._evidence_end_seconds = evidence_end_seconds
+        self._candidate_source_id = candidate_source_id
+
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del trigger_seconds, emit
+        return PipelineOutput(
+            candidates=[
+                AnalysisCandidate(
+                    id="candidate-local",
+                    name="深蹲",
+                    source_id=self._candidate_source_id or source.id,
+                    segment=Segment(start_seconds=1, end_seconds=self._segment_end_seconds),
+                    parameters=CandidateParameters(),
+                    evidence=[
+                        EvidenceSpan(
+                            type=EvidenceType.VISUAL,
+                            start_seconds=1.25,
+                            end_seconds=self._evidence_end_seconds,
+                        )
+                    ],
+                    segment_role=SegmentRole.UNKNOWN,
+                    needs_confirmation=True,
+                )
+            ]
+        )
+
+
+class FailsIfConsumedStream(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.consumed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        self.consumed = True
+        raise AssertionError("request body must not be consumed")
+        yield b""  # pragma: no cover
+
+
+class ChunkedStream(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes, *, chunk_size: int = 4096) -> None:
+        self._payload = payload
+        self._chunk_size = chunk_size
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for offset in range(0, len(self._payload), self._chunk_size):
+            yield self._payload[offset : offset + self._chunk_size]
+
+
+class PausingStream(httpx.AsyncByteStream):
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+        self.paused = asyncio.Event()
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._payload[:4096]
+        self.paused.set()
+        await asyncio.Event().wait()
+        yield self._payload[4096:]  # pragma: no cover
+
+
+@pytest.mark.asyncio
+async def test_declared_oversize_local_upload_is_rejected_before_reading_body(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    probe_called = False
+
+    def duration_probe(_: Path) -> float:
+        nonlocal probe_called
+        probe_called = True
+        return 10.0
+
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_max_bytes=4,
+        local_upload_temp_root=upload_root,
+        local_duration_probe=duration_probe,
+    )
+    body = FailsIfConsumedStream()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/analysis-runs/local",
+            content=body,
+            headers={
+                "Content-Type": "multipart/form-data; boundary=not-consumed",
+                "Content-Length": "10000000",
+            },
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "视频文件超过上传大小限制"}
+    assert response.headers["cache-control"] == "no-store"
+    assert body.consumed is False
+    assert probe_called is False
+    assert not upload_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_declared_oversize_upload_keeps_allowed_development_cors_headers(
+    tmp_path: Path,
+) -> None:
+    body = FailsIfConsumedStream()
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_max_bytes=4,
+        local_upload_temp_root=tmp_path / "uploads",
+        local_duration_probe=lambda _: 10.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/analysis-runs/local",
+            content=body,
+            headers={
+                "Content-Type": "multipart/form-data; boundary=not-consumed",
+                "Content-Length": "10000000",
+                "Origin": "http://localhost:5173",
+            },
+        )
+
+    assert response.status_code == 413
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+    assert body.consumed is False
+
+
+@pytest.mark.asyncio
+async def test_streamed_oversize_local_upload_is_rejected_before_endpoint(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    probe_called = False
+
+    def duration_probe(_: Path) -> float:
+        nonlocal probe_called
+        probe_called = True
+        return 10.0
+
+    encoded = httpx.Request(
+        "POST",
+        "https://test/api/v1/analysis-runs/local",
+        files={"media": ("private.mp4", b"x" * 70_000, "video/mp4")},
+        data={"local_source_id": LOCAL_SOURCE_ID},
+    )
+    payload = encoded.read()
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_max_bytes=4,
+        local_upload_temp_root=upload_root,
+        local_duration_probe=duration_probe,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/analysis-runs/local",
+            content=ChunkedStream(payload),
+            headers={"Content-Type": encoded.headers["Content-Type"]},
+        )
+
+    assert response.status_code == 413
+    assert response.json() == {"detail": "视频文件超过上传大小限制"}
+    assert response.headers["cache-control"] == "no-store"
+    assert probe_called is False
+    assert not upload_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_cross_origin_local_upload_is_rejected_before_reading_body(tmp_path: Path) -> None:
+    upload_root = tmp_path / "uploads"
+    body = FailsIfConsumedStream()
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_temp_root=upload_root,
+        local_duration_probe=lambda _: 10.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/analysis-runs/local",
+            content=body,
+            headers={
+                "Content-Type": "multipart/form-data; boundary=not-consumed",
+                "Content-Length": "1",
+                "Origin": "https://evil.example",
+            },
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "请求来源无效"}
+    assert body.consumed is False
+    assert not upload_root.exists()
+
+
 @pytest.mark.asyncio
 async def test_capabilities_publish_the_configured_local_upload_limits(tmp_path: Path) -> None:
     app = create_app(
@@ -224,6 +441,134 @@ async def test_local_range_upload_returns_absolute_candidate_times_and_cleans_me
         await asyncio.sleep(0.01)
     assert not pipeline.source.path.exists()
     assert not upload_root.exists() or list(upload_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_deterministic_provider_respects_short_range_and_unknown_role_confirmation(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        pipeline=DeterministicTestPipeline(),
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "uploads",
+        local_duration_probe=lambda _: 30.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={
+                "local_source_id": LOCAL_SOURCE_ID,
+                "range_start_seconds": "10",
+                "range_end_seconds": "14",
+            },
+        )
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+
+    candidates = cast(list[dict[str, object]], completed["candidates"])
+    assert candidates[0]["segment"] == {
+        "start_seconds": 10.0,
+        "end_seconds": 14.0,
+    }
+    assert candidates[0]["segment_role"] == "unknown"
+    assert candidates[0]["needs_confirmation"] is True
+
+
+@pytest.mark.asyncio
+async def test_range_run_fails_closed_when_candidate_segment_exceeds_requested_range(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        pipeline=CandidateBoundaryPipeline(segment_end_seconds=10.5),
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "uploads",
+        local_duration_probe=lambda _: 30.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={
+                "local_source_id": LOCAL_SOURCE_ID,
+                "range_start_seconds": "10",
+                "range_end_seconds": "20",
+            },
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["error"] == {
+        "code": "schema_error",
+        "message": "这次没有分析成功，请重试",
+        "retryable": True,
+    }
+    assert failed["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_range_run_fails_closed_when_evidence_exceeds_requested_range(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        pipeline=CandidateBoundaryPipeline(
+            segment_end_seconds=10,
+            evidence_end_seconds=10.5,
+        ),
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "uploads",
+        local_duration_probe=lambda _: 30.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={
+                "local_source_id": LOCAL_SOURCE_ID,
+                "range_start_seconds": "10",
+                "range_end_seconds": "20",
+            },
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["error"] == {
+        "code": "schema_error",
+        "message": "这次没有分析成功，请重试",
+        "retryable": True,
+    }
+    assert failed["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_local_run_fails_closed_when_candidate_source_does_not_match(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        pipeline=CandidateBoundaryPipeline(candidate_source_id=SECOND_LOCAL_SOURCE_ID),
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "uploads",
+        local_duration_probe=lambda _: 30.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["error"] == {
+        "code": "schema_error",
+        "message": "这次没有分析成功，请重试",
+        "retryable": True,
+    }
+    assert failed["candidates"] == []
 
 
 @pytest.mark.asyncio
@@ -349,6 +694,115 @@ async def test_local_upload_rejects_unreadable_and_over_limit_durations(tmp_path
         assert response.status_code == 422
         assert response.json() == {"detail": expected_detail}
         assert list(upload_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_cancelling_during_duration_probe_cleans_upload_and_allows_retry(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+    probe_calls = 0
+
+    def duration_probe(_: Path) -> float:
+        nonlocal probe_calls
+        probe_calls += 1
+        if probe_calls == 1:
+            probe_started.set()
+            assert release_probe.wait(timeout=5)
+        return 10.0
+
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_temp_root=upload_root,
+        local_duration_probe=duration_probe,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        await client.get("/api/v1/access/session")
+        request = asyncio.create_task(
+            client.post(
+                "/api/v1/analysis-runs/local",
+                files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+                data={"local_source_id": LOCAL_SOURCE_ID},
+            )
+        )
+        assert await asyncio.to_thread(probe_started.wait, 1)
+        request.cancel()
+        await asyncio.sleep(0)
+        release_probe.set()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+        retried = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        completed = await wait_for_status(client, retried.json()["id"], "completed")
+
+    assert retried.status_code == 202
+    assert completed["status"] == "completed"
+    assert probe_calls == 2
+    assert list(upload_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_cancelling_during_request_upload_never_acquires_run_resources(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    probe_calls = 0
+
+    def duration_probe(_: Path) -> float:
+        nonlocal probe_calls
+        probe_calls += 1
+        return 10.0
+
+    encoded = httpx.Request(
+        "POST",
+        "https://test/api/v1/analysis-runs/local",
+        files={"media": ("private.mp4", b"x" * 8192, "video/mp4")},
+        data={"local_source_id": LOCAL_SOURCE_ID},
+    )
+    body = PausingStream(encoded.read())
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_temp_root=upload_root,
+        local_duration_probe=duration_probe,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        await client.get("/api/v1/access/session")
+        request = asyncio.create_task(
+            client.post(
+                "/api/v1/analysis-runs/local",
+                content=body,
+                headers={"Content-Type": encoded.headers["Content-Type"]},
+            )
+        )
+        await asyncio.wait_for(body.paused.wait(), timeout=1)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+        assert not upload_root.exists()
+        retried = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        completed = await wait_for_status(client, retried.json()["id"], "completed")
+
+    assert retried.status_code == 202
+    assert completed["status"] == "completed"
+    assert probe_calls == 1
+    assert list(upload_root.iterdir()) == []
 
 
 def test_direct_app_configuration_rejects_non_finite_local_analysis_limit() -> None:

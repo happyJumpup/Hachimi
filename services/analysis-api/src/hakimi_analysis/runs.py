@@ -19,6 +19,7 @@ from hakimi_analysis.models import (
     ErrorCode,
     RunStage,
     RunStatus,
+    Segment,
 )
 from hakimi_analysis.observability import log_safe_fields
 from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure, PipelineOutput
@@ -170,6 +171,7 @@ class AnalysisRunManager:
                     None,
                     emit,
                 )
+            _validate_pipeline_candidates(output.candidates, source)
             candidates = _offset_candidates(output.candidates, source.analysis_start_seconds)
             processed_seconds, coverage_gaps = _coverage_for_source(output, source)
             await self._notify_terminal(record)
@@ -373,6 +375,41 @@ def _offset_candidates(
         )
         for candidate in candidates
     ]
+
+
+def _validate_pipeline_candidates(
+    candidates: list[AnalysisCandidate],
+    source: VideoSource,
+) -> None:
+    duration_seconds = source.analysis_duration_seconds
+    for candidate in candidates:
+        if candidate.source_id != source.id:
+            raise PipelineFailure(
+                "schema_error",
+                "candidate source does not match the requested source",
+                retryable=True,
+            )
+        if not _span_is_within_duration(candidate.segment, duration_seconds):
+            raise PipelineFailure(
+                "schema_error",
+                "candidate segment is outside the requested range",
+                retryable=True,
+            )
+        for evidence in candidate.evidence:
+            if not _span_is_within_duration(evidence, duration_seconds):
+                raise PipelineFailure(
+                    "schema_error",
+                    "candidate evidence is outside the requested range",
+                    retryable=True,
+                )
+
+
+def _span_is_within_duration(span: Segment, duration_seconds: float) -> bool:
+    return (
+        math.isfinite(span.start_seconds)
+        and math.isfinite(span.end_seconds)
+        and span.end_seconds <= duration_seconds
+    )
 
 
 def _coverage_for_source(

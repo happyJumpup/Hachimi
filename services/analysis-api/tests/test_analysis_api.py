@@ -316,6 +316,16 @@ def test_coverage_gap_reason_rejects_non_allowlisted_provider_text() -> None:
         )
 
 
+def test_coverage_gap_must_be_retryable() -> None:
+    with pytest.raises(ValidationError):
+        CoverageGap(
+            start_seconds=20,
+            end_seconds=30,
+            reason="provider_error",
+            retryable=False,
+        )
+
+
 @pytest.mark.parametrize(
     "gaps",
     [

@@ -425,6 +425,7 @@
             "$ref": "#/components/schemas/CoverageGapReason"
           },
           "retryable": {
+            "const": true,
             "title": "Retryable",
             "type": "boolean"
           },

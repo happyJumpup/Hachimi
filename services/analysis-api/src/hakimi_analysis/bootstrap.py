@@ -53,7 +53,7 @@ class DeterministicTestPipeline:
     ) -> PipelineOutput:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
         start = 0
-        end = min(source.duration_seconds, 10)
+        end = min(source.analysis_duration_seconds, 10)
         await emit(RunStage.FUSING_CANDIDATES, "stage.changed", {})
         return PipelineOutput(
             candidates=[
@@ -76,7 +76,7 @@ class DeterministicTestPipeline:
                         ),
                     ],
                     segment_role=SegmentRole.UNKNOWN,
-                    needs_confirmation=False,
+                    needs_confirmation=True,
                 )
             ]
         )

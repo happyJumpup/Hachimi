@@ -114,7 +114,7 @@ class EvidenceSpan(Segment):
 
 class CoverageGap(Segment):
     reason: CoverageGapReason
-    retryable: bool
+    retryable: Literal[True]
 
 
 class CandidateParameters(StrictModel):
