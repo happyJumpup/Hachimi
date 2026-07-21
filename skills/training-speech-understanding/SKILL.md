@@ -1,6 +1,6 @@
 ---
 name: training-speech-understanding
-version: 1.3.0
+version: 1.4.0
 description: Extract all explicit training-action signals from full-source timestamped speech.
 ---
 
@@ -26,7 +26,8 @@ Return JSON only:
       "rest_seconds": null,
       "start_seconds": 0,
       "end_seconds": 0,
-      "evidence_text": "short supporting phrase"
+      "evidence_text": "short supporting phrase",
+      "segment_role": "follow_along | teaching_demo | unknown"
     }
   ]
 }
@@ -43,5 +44,10 @@ Return JSON only:
 - Never extract or infer creator weight, user weight, body measurements, injury
   risk, exercise quality, or calories.
 - Extract every distinct training action explicitly stated across the full source.
+- Set `segment_role` to `follow_along` only when speech explicitly invites the
+  viewer to perform the action in sync, and to `teaching_demo` only when speech
+  clearly frames the interval as explanation, demonstration, or correction.
+  Otherwise return `unknown`.
+- A teaching segment's elapsed video time is not a training-duration parameter.
 - Keep signals in source-video timeline order.
 - Evidence text must be a short transcript phrase, not hidden reasoning.

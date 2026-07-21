@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     run_ttl_seconds: int = Field(default=600, ge=1)
     run_timeout_seconds: int = Field(default=180, ge=1)
+    local_upload_enabled: bool = True
+    local_analysis_max_seconds: float = Field(default=60, gt=0, le=600)
+    local_upload_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
     analysis_evidence_timeout_seconds: float = Field(default=11.5, gt=0)
     analysis_latency_target_max_seconds_per_video_minute: float = Field(default=15.0, gt=0)
 

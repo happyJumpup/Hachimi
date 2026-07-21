@@ -6,16 +6,20 @@ from typing import cast
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from hakimi_analysis.access import AccessManager
 from hakimi_analysis.app import create_app, stream_run_events
 from hakimi_analysis.models import (
     AnalysisCandidate,
     CandidateParameters,
+    CoverageGap,
+    CoverageStatus,
     EvidenceSpan,
     EvidenceType,
     RunStage,
     Segment,
+    SegmentRole,
 )
 from hakimi_analysis.observability import ALLOWED_LOG_FIELDS
 from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
@@ -46,6 +50,7 @@ class SuccessfulPipeline:
                             end_seconds=51,
                         )
                     ],
+                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=True,
                 )
             ]
@@ -90,6 +95,72 @@ class SecretFailurePipeline:
             "provider_error",
             "provider-secret-response-must-not-be-logged",
             retryable=False,
+        )
+
+
+class PartialCoveragePipeline:
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del source, trigger_seconds, emit
+        return PipelineOutput(
+            coverage_status=CoverageStatus.PARTIAL,
+            processed_seconds=44,
+            coverage_gaps=[
+                CoverageGap(
+                    start_seconds=20,
+                    end_seconds=30,
+                    reason="provider_error",
+                    retryable=True,
+                )
+            ],
+        )
+
+
+class ProvisionalProgressPipeline:
+    def __init__(self) -> None:
+        self.emitted = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del source, trigger_seconds
+        await emit(
+            RunStage.ANALYZING_EVIDENCE,
+            "branch.completed",
+            {"branch": "visual", "evidence_count": 2},
+        )
+        self.emitted.set()
+        await self.release.wait()
+        return PipelineOutput(candidates=[], empty_reason="no_evidence")
+
+
+class InconsistentPartialCoveragePipeline:
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del source, trigger_seconds, emit
+        return PipelineOutput(
+            coverage_status=CoverageStatus.PARTIAL,
+            processed_seconds=45,
+            coverage_gaps=[
+                CoverageGap(
+                    start_seconds=20,
+                    end_seconds=30,
+                    reason="unknown",
+                    retryable=True,
+                )
+            ],
         )
 
 
@@ -160,6 +231,202 @@ async def test_sources_and_completed_run_are_observable_through_http(tmp_path: P
         events = await client.get(f"/api/v1/analysis-runs/{run_id}/events")
         assert events.status_code == 200
         assert "event: run.completed" in events.text
+
+
+@pytest.mark.asyncio
+async def test_completed_run_and_sse_report_real_non_chunked_coverage(tmp_path: Path) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path), pipeline=SuccessfulPipeline(), access=make_test_access()
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout"},
+        )
+        assert created.json()["source_duration_seconds"] == 54.0
+        assert created.json()["processed_seconds"] == 0.0
+        assert created.json()["discovered_candidate_count"] == 0
+        assert created.json()["coverage_status"] is None
+        assert created.json()["coverage_gaps"] == []
+
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+        assert completed["source_duration_seconds"] == 54.0
+        assert completed["processed_seconds"] == 54.0
+        assert completed["discovered_candidate_count"] == 1
+        assert completed["coverage_status"] == "complete"
+        assert completed["coverage_gaps"] == []
+
+        events = await client.get(f"/api/v1/analysis-runs/{created.json()['id']}/events")
+
+    completed_payload = next(
+        json.loads(line.removeprefix("data: "))
+        for line in events.text.splitlines()
+        if line.startswith("data: ") and '"type": "run.completed"' in line
+    )
+    assert completed_payload["data"] | {
+        "source_duration_seconds": 54.0,
+        "processed_seconds": 54.0,
+        "discovered_candidate_count": 1,
+        "coverage_status": "complete",
+        "coverage_gaps": [],
+    } == completed_payload["data"]
+
+
+@pytest.mark.asyncio
+async def test_injected_reliable_partial_output_is_returned_by_get_and_sse(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=PartialCoveragePipeline(),
+        access=make_test_access(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout"},
+        )
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+        events = await client.get(f"/api/v1/analysis-runs/{created.json()['id']}/events")
+
+    expected_gap = {
+        "start_seconds": 20.0,
+        "end_seconds": 30.0,
+        "reason": "provider_error",
+        "retryable": True,
+    }
+    assert completed["processed_seconds"] == 44.0
+    assert completed["coverage_status"] == "partial"
+    assert completed["coverage_gaps"] == [expected_gap]
+    assert '"coverage_status": "partial"' in events.text
+    assert json.dumps(expected_gap, ensure_ascii=False) in events.text
+
+
+def test_coverage_gap_reason_rejects_non_allowlisted_provider_text() -> None:
+    with pytest.raises(ValidationError):
+        CoverageGap(
+            start_seconds=20,
+            end_seconds=30,
+            reason="provider transcript and path detail",
+            retryable=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "gaps",
+    [
+        [
+            CoverageGap(
+                start_seconds=20,
+                end_seconds=30,
+                reason="timeout",
+                retryable=True,
+            ),
+            CoverageGap(
+                start_seconds=10,
+                end_seconds=15,
+                reason="provider_error",
+                retryable=True,
+            ),
+        ],
+        [
+            CoverageGap(
+                start_seconds=10,
+                end_seconds=20,
+                reason="timeout",
+                retryable=True,
+            ),
+            CoverageGap(
+                start_seconds=19,
+                end_seconds=25,
+                reason="provider_error",
+                retryable=True,
+            ),
+        ],
+    ],
+)
+def test_partial_pipeline_rejects_unsorted_or_overlapping_coverage_gaps(
+    gaps: list[CoverageGap],
+) -> None:
+    with pytest.raises(ValueError):
+        PipelineOutput(
+            coverage_status=CoverageStatus.PARTIAL,
+            processed_seconds=30,
+            coverage_gaps=gaps,
+        )
+
+
+@pytest.mark.asyncio
+async def test_inconsistent_partial_coverage_fails_closed_as_a_schema_error(tmp_path: Path) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=InconsistentPartialCoveragePipeline(),
+        access=make_test_access(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout"},
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["error"] == {
+        "code": "schema_error",
+        "message": "这次没有分析成功，请重试",
+        "retryable": True,
+    }
+    assert failed["coverage_status"] is None
+    assert failed["coverage_gaps"] == []
+
+
+@pytest.mark.asyncio
+async def test_completed_full_range_branch_updates_real_provisional_get_and_sse_progress(
+    tmp_path: Path,
+) -> None:
+    pipeline = ProvisionalProgressPipeline()
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=pipeline,
+        access=make_test_access(),
+    )
+    manager = app.state.run_manager
+    source = app.state.source_catalog.get("legacy-arm-workout")
+    created = await manager.create(source, None)
+    await pipeline.emitted.wait()
+
+    running = manager.get(created.id)
+    assert running.status == "running"
+    assert running.processed_seconds == 54.0
+    assert running.discovered_candidate_count == 2
+
+    async def connected() -> bool:
+        return False
+
+    stream = stream_run_events(manager, created.id, connected)
+    for _ in range(10):
+        event = await anext(stream)
+        if "event: branch.completed" in event:
+            payload = json.loads(event.split("data: ", maxsplit=1)[1])
+            break
+    else:
+        raise AssertionError("branch.completed event not replayed")
+    assert payload["data"]["processed_seconds"] == 54.0
+    assert payload["data"]["discovered_candidate_count"] == 2
+    await stream.aclose()
+
+    pipeline.release.set()
+    for _ in range(100):
+        if manager.get(created.id).status == "completed":
+            break
+        await asyncio.sleep(0.01)
+    assert manager.get(created.id).discovered_candidate_count == 0
+    await manager.close()
 
 
 @pytest.mark.asyncio
@@ -261,7 +528,9 @@ async def test_run_timeout_is_an_explicit_failure(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_closing_sse_stream_cancels_an_in_flight_run(tmp_path: Path) -> None:
+async def test_closing_and_reconnecting_sse_does_not_cancel_an_in_flight_run(
+    tmp_path: Path,
+) -> None:
     app = create_app(
         catalog=source_catalog(tmp_path), pipeline=SlowPipeline(), access=make_test_access()
     )
@@ -277,7 +546,15 @@ async def test_closing_sse_stream_cancels_an_in_flight_run(tmp_path: Path) -> No
     assert "event: run.started" in first_event
     await stream.aclose()
 
-    assert manager.get(created.id).status == "cancelled"
+    assert manager.get(created.id).status == "running"
+
+    reconnected = stream_run_events(manager, created.id, still_connected)
+    replayed_event = await anext(reconnected)
+    assert "event: run.started" in replayed_event
+    await reconnected.aclose()
+
+    assert manager.get(created.id).status == "running"
+    await manager.cancel(created.id)
     await manager.close()
 
 

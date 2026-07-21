@@ -76,6 +76,9 @@
           "segment": {
             "$ref": "#/components/schemas/Segment"
           },
+          "segment_role": {
+            "$ref": "#/components/schemas/SegmentRole"
+          },
           "source_id": {
             "title": "Source Id",
             "type": "string"
@@ -88,6 +91,7 @@
           "segment",
           "parameters",
           "evidence",
+          "segment_role",
           "needs_confirmation"
         ],
         "title": "AnalysisCandidate",
@@ -126,10 +130,34 @@
             "title": "Candidates",
             "type": "array"
           },
+          "coverage_gaps": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageGap"
+            },
+            "title": "Coverage Gaps",
+            "type": "array"
+          },
+          "coverage_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
+          },
+          "discovered_candidate_count": {
+            "default": 0,
+            "description": "While running, the conservative maximum evidence count from completed branches; at terminal completion, the exact fused candidate count.",
+            "minimum": 0.0,
+            "title": "Discovered Candidate Count",
+            "type": "integer"
           },
           "empty_reason": {
             "anyOf": [
@@ -156,6 +184,17 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "processed_seconds": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Processed Seconds",
+            "type": "number"
+          },
+          "source_duration_seconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "Source Duration Seconds",
+            "type": "number"
           },
           "source_id": {
             "title": "Source Id",
@@ -196,7 +235,8 @@
           "source_id",
           "trigger_seconds",
           "status",
-          "stage"
+          "stage",
+          "source_duration_seconds"
         ],
         "title": "AnalysisRunView",
         "type": "object"
@@ -236,6 +276,49 @@
           "detail"
         ],
         "title": "ApiErrorResponse",
+        "type": "object"
+      },
+      "Body_create_local_run_api_v1_analysis_runs_local_post": {
+        "properties": {
+          "local_source_id": {
+            "title": "Local Source Id",
+            "type": "string"
+          },
+          "media": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Media",
+            "type": "string"
+          },
+          "range_end_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range End Seconds"
+          },
+          "range_start_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Start Seconds"
+          }
+        },
+        "required": [
+          "media",
+          "local_source_id"
+        ],
+        "title": "Body_create_local_run_api_v1_analysis_runs_local_post",
         "type": "object"
       },
       "CandidateParameters": {
@@ -302,6 +385,81 @@
         },
         "title": "CandidateParameters",
         "type": "object"
+      },
+      "CapabilitiesView": {
+        "additionalProperties": false,
+        "properties": {
+          "local_analysis_max_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 600.0,
+            "title": "Local Analysis Max Seconds",
+            "type": "number"
+          },
+          "local_upload_enabled": {
+            "title": "Local Upload Enabled",
+            "type": "boolean"
+          },
+          "local_upload_max_bytes": {
+            "minimum": 1.0,
+            "title": "Local Upload Max Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "local_upload_enabled",
+          "local_analysis_max_seconds",
+          "local_upload_max_bytes"
+        ],
+        "title": "CapabilitiesView",
+        "type": "object"
+      },
+      "CoverageGap": {
+        "additionalProperties": false,
+        "properties": {
+          "end_seconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "End Seconds",
+            "type": "number"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/CoverageGapReason"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "start_seconds": {
+            "minimum": 0.0,
+            "title": "Start Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_seconds",
+          "end_seconds",
+          "reason",
+          "retryable"
+        ],
+        "title": "CoverageGap",
+        "type": "object"
+      },
+      "CoverageGapReason": {
+        "enum": [
+          "provider_error",
+          "timeout",
+          "media_error",
+          "unknown"
+        ],
+        "title": "CoverageGapReason",
+        "type": "string"
+      },
+      "CoverageStatus": {
+        "enum": [
+          "complete",
+          "partial"
+        ],
+        "title": "CoverageStatus",
+        "type": "string"
       },
       "CreateAnalysisRunRequest": {
         "additionalProperties": false,
@@ -472,6 +630,15 @@
         ],
         "title": "Segment",
         "type": "object"
+      },
+      "SegmentRole": {
+        "enum": [
+          "follow_along",
+          "teaching_demo",
+          "unknown"
+        ],
+        "title": "SegmentRole",
+        "type": "string"
       },
       "SourceSummary": {
         "additionalProperties": false,
@@ -727,6 +894,122 @@
         "summary": "Create Run"
       }
     },
+    "/api/v1/analysis-runs/local": {
+      "post": {
+        "operationId": "create_local_run_api_v1_analysis_runs_local_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_local_run_api_v1_analysis_runs_local_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "可信代理提供的客户端地址无效。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "本地视频导入未启用。"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "上传媒体超过大小限制。"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "上传媒体类型不受支持。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "媒体或分析范围无效。"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "分析容量或调用频率已达到限制。",
+            "headers": {
+              "Retry-After": {
+                "description": "再次尝试前需要等待的秒数。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "生产分析服务尚未就绪。"
+          }
+        },
+        "summary": "Create Local Run"
+      }
+    },
     "/api/v1/analysis-runs/{run_id}": {
       "delete": {
         "operationId": "cancel_run_api_v1_analysis_runs__run_id__delete",
@@ -880,6 +1163,24 @@
           }
         },
         "summary": "Run Events"
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities"
       }
     },
     "/api/v1/health": {

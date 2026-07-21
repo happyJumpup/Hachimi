@@ -1,5 +1,5 @@
 from hakimi_analysis.fusion import fuse_candidates
-from hakimi_analysis.models import SpeechSignal, VisualSegment
+from hakimi_analysis.models import SegmentRole, SpeechSignal, VisualSegment
 
 
 def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
@@ -15,6 +15,7 @@ def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
                 start_seconds=42,
                 end_seconds=49,
                 evidence_text="接下来做 drag curl",
+                segment_role=SegmentRole.FOLLOW_ALONG,
             )
         ],
         visual_segments=[
@@ -23,6 +24,7 @@ def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
                 start_seconds=41,
                 end_seconds=51,
                 visual_cue="双臂沿躯干向后拖动哑铃",
+                segment_role=SegmentRole.FOLLOW_ALONG,
             )
         ],
     )
@@ -36,6 +38,7 @@ def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
     assert candidate.parameters.sets == 3
     assert candidate.parameters.reps == 10
     assert [item.type for item in candidate.evidence] == ["speech", "visual"]
+    assert candidate.segment_role == SegmentRole.FOLLOW_ALONG
     assert candidate.needs_confirmation is False
 
 
@@ -128,3 +131,111 @@ def test_overlapping_different_actions_remain_separate_candidates() -> None:
 
 def test_no_evidence_produces_no_candidates() -> None:
     assert fuse_candidates(source_id="source-a", speech_signals=[], visual_segments=[]) == []
+
+
+def test_conflicting_segment_roles_remain_unknown_and_need_confirmation() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="深蹲",
+                sets=None,
+                reps=None,
+                duration_seconds=None,
+                rest_seconds=None,
+                start_seconds=5,
+                end_seconds=10,
+                evidence_text="跟我做深蹲",
+                segment_role=SegmentRole.FOLLOW_ALONG,
+            )
+        ],
+        visual_segments=[
+            VisualSegment(
+                action_name="深蹲",
+                start_seconds=5,
+                end_seconds=10,
+                visual_cue="讲解站姿并示范一次",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].segment_role == SegmentRole.UNKNOWN
+    assert candidates[0].needs_confirmation is True
+
+
+def test_teaching_demo_length_does_not_become_a_training_duration() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="深蹲",
+                sets=None,
+                reps=None,
+                duration_seconds=None,
+                rest_seconds=None,
+                start_seconds=5,
+                end_seconds=25,
+                evidence_text="下面示范深蹲动作",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+        visual_segments=[
+            VisualSegment(
+                action_name="深蹲",
+                start_seconds=5,
+                end_seconds=25,
+                visual_cue="连续示范深蹲",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].segment_role == SegmentRole.TEACHING_DEMO
+    assert candidates[0].parameters.mode is None
+    assert candidates[0].parameters.duration_seconds is None
+    assert candidates[0].needs_confirmation is False
+
+
+def test_speech_only_explicit_segment_role_is_preserved_but_needs_confirmation() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="深蹲",
+                sets=3,
+                reps=10,
+                duration_seconds=None,
+                rest_seconds=None,
+                start_seconds=5,
+                end_seconds=10,
+                evidence_text="跟我一起做深蹲",
+                segment_role=SegmentRole.FOLLOW_ALONG,
+            )
+        ],
+        visual_segments=[],
+    )
+
+    assert candidates[0].segment_role == SegmentRole.FOLLOW_ALONG
+    assert candidates[0].needs_confirmation is True
+
+
+def test_visual_only_explicit_segment_role_is_preserved_but_needs_confirmation() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[],
+        visual_segments=[
+            VisualSegment(
+                action_name="深蹲",
+                start_seconds=5,
+                end_seconds=10,
+                visual_cue="面对镜头逐步讲解动作",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+    )
+
+    assert candidates[0].segment_role == SegmentRole.TEACHING_DEMO
+    assert candidates[0].needs_confirmation is True

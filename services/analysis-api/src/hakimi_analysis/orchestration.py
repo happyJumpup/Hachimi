@@ -31,6 +31,8 @@ class MediaProcessor(Protocol):
         self,
         source_path: Path,
         duration_seconds: float,
+        *,
+        start_seconds: float = 0,
     ) -> AbstractAsyncContextManager[PreparedMedia]: ...
 
 
@@ -150,9 +152,15 @@ class OrchestratedAnalysisPipeline:
             {"analysis_scope": "full_source"},
         )
         try:
+            prepare_kwargs = (
+                {"start_seconds": source.analysis_start_seconds}
+                if source.analysis_start_seconds > 0
+                else {}
+            )
             async with self._media.prepare_source(
                 source.path,
-                source.duration_seconds,
+                source.analysis_duration_seconds,
+                **prepare_kwargs,
             ) as prepared:
                 results = await self._analyze_branches(prepared, emit)
         except MediaProcessingError as error:
@@ -192,6 +200,8 @@ class OrchestratedAnalysisPipeline:
                     visual_segments=visual_segments,
                 ),
                 warnings=warnings,
+                # This single-pass provider path cannot localize skipped spans reliably.
+                # It therefore keeps the complete default instead of inventing partial gaps.
             )
 
         if results.both_successful:

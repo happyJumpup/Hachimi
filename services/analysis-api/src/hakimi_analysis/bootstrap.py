@@ -13,6 +13,7 @@ from hakimi_analysis.models import (
     EvidenceType,
     RunStage,
     Segment,
+    SegmentRole,
 )
 from hakimi_analysis.orchestration import OrchestratedAnalysisPipeline, SkillRepository
 from hakimi_analysis.pipeline import AnalysisPipeline, EmitCallback, PipelineFailure, PipelineOutput
@@ -74,6 +75,7 @@ class DeterministicTestPipeline:
                             end_seconds=end,
                         ),
                     ],
+                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=False,
                 )
             ]
@@ -138,7 +140,10 @@ def build_pipeline(
     if settings.ark_api_key is None or settings.volc_asr_api_key is None:
         return UnconfiguredPipeline()
 
-    media = LocalMediaProcessor(temp_root=temp_root or PROJECT_ROOT / "tmp" / "analysis-runs")
+    media = LocalMediaProcessor(
+        temp_root=temp_root or PROJECT_ROOT / "tmp" / "analysis-runs",
+        max_source_duration_seconds=settings.local_analysis_max_seconds,
+    )
     asr = VolcAsrClient(
         api_key=settings.volc_asr_api_key.get_secret_value(),
         resource_id=settings.volc_asr_resource_id,
@@ -221,4 +226,8 @@ def build_default_app() -> FastAPI:
         readiness=readiness,
         web_static_root=settings.web_static_root,
         trusted_proxy_cidrs=settings.trusted_proxy_cidr_list,
+        local_upload_enabled=settings.local_upload_enabled,
+        local_analysis_max_seconds=settings.local_analysis_max_seconds,
+        local_upload_max_bytes=settings.local_upload_max_bytes,
+        local_upload_temp_root=temp_root,
     )

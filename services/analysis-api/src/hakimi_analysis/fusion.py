@@ -7,6 +7,7 @@ from hakimi_analysis.models import (
     EvidenceSpan,
     EvidenceType,
     Segment,
+    SegmentRole,
     SpeechSignal,
     VisualSegment,
 )
@@ -91,6 +92,20 @@ def _parameters(signal: SpeechSignal | None) -> CandidateParameters:
     )
 
 
+def _segment_role(
+    speech: SpeechSignal | None,
+    visual: VisualSegment | None,
+) -> SegmentRole:
+    roles = {
+        item.segment_role
+        for item in (speech, visual)
+        if item is not None and item.segment_role != SegmentRole.UNKNOWN
+    }
+    if len(roles) == 1:
+        return next(iter(roles))
+    return SegmentRole.UNKNOWN
+
+
 def fuse_candidates(
     *,
     source_id: str,
@@ -153,6 +168,7 @@ def fuse_candidates(
                     end_seconds=visual.end_seconds,
                 )
             )
+        segment_role = _segment_role(speech, visual)
         candidates.append(
             AnalysisCandidate(
                 id="pending",
@@ -161,7 +177,12 @@ def fuse_candidates(
                 segment=Segment(start_seconds=start_seconds, end_seconds=end_seconds),
                 parameters=_parameters(speech),
                 evidence=evidence,
-                needs_confirmation=visual is None or visual.action_name is None,
+                segment_role=segment_role,
+                needs_confirmation=(
+                    visual is None
+                    or visual.action_name is None
+                    or segment_role == SegmentRole.UNKNOWN
+                ),
             )
         )
 
@@ -185,6 +206,7 @@ def fuse_candidates(
                         end_seconds=visual.end_seconds,
                     )
                 ],
+                segment_role=_segment_role(None, visual),
                 needs_confirmation=True,
             )
         )

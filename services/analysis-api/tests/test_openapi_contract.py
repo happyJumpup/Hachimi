@@ -16,6 +16,7 @@ def test_analysis_candidate_requires_an_absolute_segment() -> None:
                 "segment": None,
                 "parameters": {},
                 "evidence": [],
+                "segment_role": "unknown",
                 "needs_confirmation": True,
             }
         )
@@ -59,3 +60,27 @@ def test_openapi_documents_actual_readiness_and_analysis_errors() -> None:
     assert event_responses["200"]["content"] == {
         "text/event-stream": {"schema": {"type": "string"}}
     }
+
+    capabilities_response = paths["/api/v1/capabilities"]["get"]["responses"]["200"]
+    assert capabilities_response["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CapabilitiesView"
+    }
+
+    local_create = paths["/api/v1/analysis-runs/local"]["post"]
+    assert set(local_create["requestBody"]["content"]) == {"multipart/form-data"}
+    assert local_create["responses"]["202"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/AnalysisRunView"
+    }
+    for status_code in ("400", "403", "404", "413", "415", "422", "429", "503"):
+        assert local_create["responses"][status_code]["content"]["application/json"][
+            "schema"
+        ] == {"$ref": "#/components/schemas/ApiErrorResponse"}
+
+    candidate_schema = schema["components"]["schemas"]["AnalysisCandidate"]
+    assert "segment_role" in candidate_schema["required"]
+    run_schema = schema["components"]["schemas"]["AnalysisRunView"]
+    progress_description = run_schema["properties"]["discovered_candidate_count"][
+        "description"
+    ]
+    assert "completed branches" in progress_description
+    assert "exact fused candidate count" in progress_description

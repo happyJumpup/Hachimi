@@ -22,6 +22,12 @@ class NotReadyResponse(StrictModel):
     code: str = Field(min_length=1)
 
 
+class CapabilitiesView(StrictModel):
+    local_upload_enabled: bool
+    local_analysis_max_seconds: float = Field(gt=0, le=600)
+    local_upload_max_bytes: int = Field(ge=1)
+
+
 class ActionMode(StrEnum):
     REPS = "reps"
     DURATION = "duration"
@@ -32,12 +38,30 @@ class EvidenceType(StrEnum):
     VISUAL = "visual"
 
 
+class SegmentRole(StrEnum):
+    FOLLOW_ALONG = "follow_along"
+    TEACHING_DEMO = "teaching_demo"
+    UNKNOWN = "unknown"
+
+
 class RunStatus(StrEnum):
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class CoverageStatus(StrEnum):
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+
+
+class CoverageGapReason(StrEnum):
+    PROVIDER_ERROR = "provider_error"
+    TIMEOUT = "timeout"
+    MEDIA_ERROR = "media_error"
+    UNKNOWN = "unknown"
 
 
 class AccessTier(StrEnum):
@@ -88,6 +112,11 @@ class EvidenceSpan(Segment):
     type: EvidenceType
 
 
+class CoverageGap(Segment):
+    reason: CoverageGapReason
+    retryable: bool
+
+
 class CandidateParameters(StrictModel):
     mode: ActionMode | None = None
     sets: int | None = Field(default=None, ge=1)
@@ -111,6 +140,7 @@ class AnalysisCandidate(StrictModel):
     segment: Segment
     parameters: CandidateParameters
     evidence: list[EvidenceSpan]
+    segment_role: SegmentRole
     needs_confirmation: bool
 
 
@@ -123,6 +153,7 @@ class SpeechSignal(StrictModel):
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
     evidence_text: str = Field(min_length=1)
+    segment_role: SegmentRole = SegmentRole.UNKNOWN
 
 
 class SpeechUnderstandingResult(StrictModel):
@@ -134,6 +165,7 @@ class VisualSegment(StrictModel):
     start_seconds: float = Field(ge=0)
     end_seconds: float = Field(gt=0)
     visual_cue: str = Field(min_length=1)
+    segment_role: SegmentRole = SegmentRole.UNKNOWN
 
 
 class VisualLocalizationResult(StrictModel):
@@ -200,6 +232,18 @@ class AnalysisRunView(StrictModel):
     warnings: list[AnalysisWarning] = Field(default_factory=list)
     empty_reason: Literal["no_evidence"] | None = None
     error: AnalysisError | None = None
+    source_duration_seconds: float = Field(gt=0)
+    processed_seconds: float = Field(default=0, ge=0)
+    discovered_candidate_count: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "While running, the conservative maximum evidence count from completed branches; "
+            "at terminal completion, the exact fused candidate count."
+        ),
+    )
+    coverage_status: CoverageStatus | None = None
+    coverage_gaps: list[CoverageGap] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -21,6 +22,30 @@ class VideoSource:
     public_media_url: str | None = None
     origin_url: str | None = None
     expected_sha256: str | None = None
+    analysis_start_seconds: float = 0
+    analysis_end_seconds: float | None = None
+
+    def __post_init__(self) -> None:
+        end_seconds = self.analysis_end_seconds
+        if end_seconds is None:
+            end_seconds = self.duration_seconds
+        if (
+            not math.isfinite(self.duration_seconds)
+            or not math.isfinite(self.analysis_start_seconds)
+            or not math.isfinite(end_seconds)
+            or self.duration_seconds <= 0
+            or self.analysis_start_seconds < 0
+            or end_seconds <= self.analysis_start_seconds
+            or end_seconds > self.duration_seconds
+        ):
+            raise ValueError("source analysis range is outside the source duration")
+
+    @property
+    def analysis_duration_seconds(self) -> float:
+        end_seconds = self.analysis_end_seconds
+        if end_seconds is None:
+            end_seconds = self.duration_seconds
+        return end_seconds - self.analysis_start_seconds
 
     def summary(self) -> SourceSummary:
         return SourceSummary(

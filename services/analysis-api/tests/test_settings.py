@@ -34,6 +34,19 @@ def test_analysis_evidence_budget_has_a_bounded_positive_default() -> None:
         Settings(_env_file=None, analysis_latency_target_max_seconds_per_video_minute=0)
 
 
+def test_local_analysis_defaults_to_60_seconds_and_has_a_600_second_hard_cap() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.local_upload_enabled is True
+    assert settings.local_analysis_max_seconds == 60
+    assert settings.local_upload_max_bytes == 256 * 1024 * 1024
+
+    configured = Settings(_env_file=None, local_analysis_max_seconds=600)
+    assert configured.local_analysis_max_seconds == 600
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, local_analysis_max_seconds=600.1)
+
+
 def test_web_static_root_is_an_optional_backend_path(tmp_path: Path) -> None:
     without_static = Settings(_env_file=None)
     with_static = Settings(_env_file=None, web_static_root=tmp_path / "dist")

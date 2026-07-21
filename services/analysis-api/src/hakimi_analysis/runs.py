@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import math
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
@@ -9,15 +10,18 @@ from typing import cast
 from uuid import uuid4
 
 from hakimi_analysis.models import (
+    AnalysisCandidate,
     AnalysisError,
     AnalysisEvent,
     AnalysisRunView,
+    CoverageGap,
+    CoverageStatus,
     ErrorCode,
     RunStage,
     RunStatus,
 )
 from hakimi_analysis.observability import log_safe_fields
-from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure
+from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure, PipelineOutput
 from hakimi_analysis.sources import VideoSource
 
 TERMINAL_STATUSES = {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
@@ -67,6 +71,7 @@ class AnalysisRunManager:
                 trigger_seconds=trigger_seconds,
                 status=RunStatus.QUEUED,
                 stage=RunStage.QUEUED,
+                source_duration_seconds=source.duration_seconds,
             ),
             owner_session_id=owner_session_id,
             on_terminal=on_terminal,
@@ -97,6 +102,7 @@ class AnalysisRunManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await record.task
         if record.view.status not in TERMINAL_STATUSES:
+            await self._notify_terminal(record)
             record.view.status = RunStatus.CANCELLED
             record.view.stage = RunStage.CANCELLED
             record.terminal_at = datetime.now(UTC)
@@ -128,6 +134,7 @@ class AnalysisRunManager:
                         sequence=index,
                         type="heartbeat",
                         run_id=run_id,
+                        data=_progress_data(record.view),
                     )
 
     async def _execute(self, record: RunRecord, source: VideoSource) -> None:
@@ -141,6 +148,18 @@ class AnalysisRunManager:
             data: dict[str, object],
         ) -> None:
             record.view.stage = stage
+            if event_type == "branch.completed":
+                evidence_count = data.get("evidence_count")
+                if (
+                    isinstance(evidence_count, int)
+                    and not isinstance(evidence_count, bool)
+                    and evidence_count >= 0
+                ):
+                    record.view.processed_seconds = source.analysis_duration_seconds
+                    record.view.discovered_candidate_count = max(
+                        record.view.discovered_candidate_count,
+                        evidence_count,
+                    )
             record.view.updated_at = datetime.now(UTC)
             await self._event(record, event_type, {"stage": stage.value, **data})
 
@@ -151,20 +170,28 @@ class AnalysisRunManager:
                     None,
                     emit,
                 )
+            candidates = _offset_candidates(output.candidates, source.analysis_start_seconds)
+            processed_seconds, coverage_gaps = _coverage_for_source(output, source)
+            await self._notify_terminal(record)
             record.view.status = RunStatus.COMPLETED
             record.view.stage = RunStage.COMPLETED
-            record.view.candidates = output.candidates
+            record.view.candidates = candidates
             record.view.warnings = output.warnings
             record.view.empty_reason = output.empty_reason
+            record.view.processed_seconds = processed_seconds
+            record.view.discovered_candidate_count = len(candidates)
+            record.view.coverage_status = output.coverage_status
+            record.view.coverage_gaps = coverage_gaps
             await self._event(
                 record,
                 "run.completed",
                 {
                     "stage": RunStage.COMPLETED.value,
-                    "candidate_count": len(output.candidates),
+                    "candidate_count": len(candidates),
                 },
             )
         except asyncio.CancelledError:
+            await self._notify_terminal(record)
             record.view.status = RunStatus.CANCELLED
             record.view.stage = RunStage.CANCELLED
             await self._event(record, "run.cancelled", {"stage": RunStage.CANCELLED.value})
@@ -210,6 +237,7 @@ class AnalysisRunManager:
         *,
         retryable: bool,
     ) -> None:
+        await self._notify_terminal(record)
         record.view.status = RunStatus.FAILED
         record.view.stage = RunStage.FAILED
         record.view.error = AnalysisError(code=code, message=message, retryable=retryable)
@@ -229,7 +257,7 @@ class AnalysisRunManager:
             sequence=len(record.events) + 1,
             type=event_type,
             run_id=record.view.id,
-            data=data,
+            data={**data, **_progress_data(record.view)},
         )
         record.events.append(event)
         log_safe_fields(
@@ -305,3 +333,92 @@ def _public_failure_message(code: ErrorCode) -> str:
         ErrorCode.TIMEOUT: "动作分析超时，请重试",
         ErrorCode.CANCELLED: "动作分析已取消",
     }[code]
+
+
+def _progress_data(view: AnalysisRunView) -> dict[str, object]:
+    return {
+        "source_duration_seconds": view.source_duration_seconds,
+        "processed_seconds": view.processed_seconds,
+        "discovered_candidate_count": view.discovered_candidate_count,
+        "coverage_status": view.coverage_status.value if view.coverage_status is not None else None,
+        "coverage_gaps": [gap.model_dump(mode="json") for gap in view.coverage_gaps],
+    }
+
+
+def _offset_candidates(
+    candidates: list[AnalysisCandidate],
+    offset_seconds: float,
+) -> list[AnalysisCandidate]:
+    if offset_seconds == 0:
+        return candidates
+    return [
+        candidate.model_copy(
+            update={
+                "segment": candidate.segment.model_copy(
+                    update={
+                        "start_seconds": candidate.segment.start_seconds + offset_seconds,
+                        "end_seconds": candidate.segment.end_seconds + offset_seconds,
+                    }
+                ),
+                "evidence": [
+                    span.model_copy(
+                        update={
+                            "start_seconds": span.start_seconds + offset_seconds,
+                            "end_seconds": span.end_seconds + offset_seconds,
+                        }
+                    )
+                    for span in candidate.evidence
+                ],
+            }
+        )
+        for candidate in candidates
+    ]
+
+
+def _coverage_for_source(
+    output: PipelineOutput,
+    source: VideoSource,
+) -> tuple[float, list[CoverageGap]]:
+    duration_seconds = source.analysis_duration_seconds
+    if output.coverage_status == CoverageStatus.COMPLETE:
+        return duration_seconds, []
+    if output.processed_seconds is None or output.processed_seconds > duration_seconds:
+        raise PipelineFailure(
+            "schema_error",
+            "partial analysis coverage is outside the requested range",
+            retryable=True,
+        )
+    for gap in output.coverage_gaps:
+        if gap.end_seconds > duration_seconds:
+            raise PipelineFailure(
+                "schema_error",
+                "partial analysis gap is outside the requested range",
+                retryable=True,
+            )
+    gap_seconds = sum(gap.end_seconds - gap.start_seconds for gap in output.coverage_gaps)
+    if not math.isclose(
+        output.processed_seconds + gap_seconds,
+        duration_seconds,
+        rel_tol=0,
+        abs_tol=0.01,
+    ):
+        raise PipelineFailure(
+            "schema_error",
+            "partial analysis coverage does not match the requested range",
+            retryable=True,
+        )
+    offset_seconds = source.analysis_start_seconds
+    if offset_seconds == 0:
+        return output.processed_seconds, output.coverage_gaps
+    return (
+        output.processed_seconds,
+        [
+            gap.model_copy(
+                update={
+                    "start_seconds": gap.start_seconds + offset_seconds,
+                    "end_seconds": gap.end_seconds + offset_seconds,
+                }
+            )
+            for gap in output.coverage_gaps
+        ],
+    )

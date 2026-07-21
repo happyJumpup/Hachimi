@@ -1,13 +1,28 @@
 import asyncio
 import json
+import math
+import re
 import secrets
+import shutil
+import tempfile
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from ipaddress import IPv4Network, IPv6Network, ip_address, ip_network
 from pathlib import Path
+from typing import Annotated
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
@@ -19,10 +34,12 @@ from hakimi_analysis.access import (
     AccessSession,
     AdmissionDenied,
 )
+from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.models import (
     AccessSessionView,
     AnalysisRunView,
     ApiErrorResponse,
+    CapabilitiesView,
     CreateAnalysisRunRequest,
     NotReadyResponse,
     ReadyResponse,
@@ -31,8 +48,17 @@ from hakimi_analysis.models import (
 )
 from hakimi_analysis.pipeline import AnalysisPipeline
 from hakimi_analysis.readiness import ReadinessProbe, StaticReadiness
-from hakimi_analysis.runs import TERMINAL_STATUSES, AnalysisRunManager, as_pipeline
-from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog
+from hakimi_analysis.runs import AnalysisRunManager, as_pipeline
+from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog, VideoSource
+
+LOCAL_SOURCE_ID_PATTERN = re.compile(
+    r"^local:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+LOCAL_MEDIA_TYPES = {
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
+}
 
 
 async def stream_run_events(
@@ -42,21 +68,11 @@ async def stream_run_events(
     *,
     owner_session_id: str | None = None,
 ) -> AsyncGenerator[str, None]:
-    try:
-        async for event in manager.events(run_id, owner_session_id=owner_session_id):
-            if await is_disconnected():
-                return
-            data = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
-            yield f"event: {event.type}\ndata: {data}\n\n"
-    finally:
-        view: AnalysisRunView | None
-        try:
-            view = manager.get(run_id, owner_session_id=owner_session_id)
-        except KeyError:
-            view = None
-        if view is not None and view.status not in TERMINAL_STATUSES:
-            with suppress(KeyError):
-                await asyncio.shield(manager.cancel(run_id, owner_session_id=owner_session_id))
+    async for event in manager.events(run_id, owner_session_id=owner_session_id):
+        if await is_disconnected():
+            return
+        data = json.dumps(event.model_dump(mode="json"), ensure_ascii=False)
+        yield f"event: {event.type}\ndata: {data}\n\n"
 
 
 def create_app(
@@ -72,7 +88,21 @@ def create_app(
     readiness: ReadinessProbe | None = None,
     web_static_root: Path | None = None,
     trusted_proxy_cidrs: list[str] | None = None,
+    local_upload_enabled: bool = True,
+    local_analysis_max_seconds: float = 60,
+    local_upload_max_bytes: int = 256 * 1024 * 1024,
+    local_upload_temp_root: Path | None = None,
+    local_duration_probe: Callable[[Path], float] | None = None,
 ) -> FastAPI:
+    if (
+        not math.isfinite(local_analysis_max_seconds)
+        or local_analysis_max_seconds <= 0
+        or local_analysis_max_seconds > 600
+    ):
+        raise ValueError("local analysis limit must be between 0 and 600 seconds")
+    if local_upload_max_bytes < 1:
+        raise ValueError("local upload byte limit must be positive")
+    duration_probe = local_duration_probe or probe_duration_sync
     source_catalog = catalog or EmptySourceCatalog()
     resolved_pipeline: AnalysisPipeline
     if pipeline is None:
@@ -129,6 +159,15 @@ def create_app(
     @app.get("/api/v1/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/v1/capabilities", response_model=CapabilitiesView)
+    async def capabilities(response: Response) -> CapabilitiesView:
+        response.headers["Cache-Control"] = "no-store"
+        return CapabilitiesView(
+            local_upload_enabled=local_upload_enabled,
+            local_analysis_max_seconds=local_analysis_max_seconds,
+            local_upload_max_bytes=local_upload_max_bytes,
+        )
 
     @app.get(
         "/api/v1/ready",
@@ -301,6 +340,150 @@ def create_app(
         _set_access_cookie(response, access_manager, session)
         return created
 
+    local_upload_routes = app if local_upload_enabled else APIRouter()
+
+    @local_upload_routes.post(
+        "/api/v1/analysis-runs/local",
+        response_model=AnalysisRunView,
+        status_code=status.HTTP_202_ACCEPTED,
+        responses={
+            400: {
+                "model": ApiErrorResponse,
+                "description": "可信代理提供的客户端地址无效。",
+            },
+            403: {
+                "model": ApiErrorResponse,
+                "description": "请求未通过同源校验。",
+            },
+            404: {"model": ApiErrorResponse, "description": "本地视频导入未启用。"},
+            413: {"model": ApiErrorResponse, "description": "上传媒体超过大小限制。"},
+            415: {"model": ApiErrorResponse, "description": "上传媒体类型不受支持。"},
+            422: {"model": ApiErrorResponse, "description": "媒体或分析范围无效。"},
+            429: {
+                "model": ApiErrorResponse,
+                "description": "分析容量或调用频率已达到限制。",
+                "headers": {
+                    "Retry-After": {
+                        "description": "再次尝试前需要等待的秒数。",
+                        "schema": {"type": "string"},
+                    }
+                },
+            },
+            503: {"model": ApiErrorResponse, "description": "生产分析服务尚未就绪。"},
+        },
+    )
+    async def create_local_run(
+        request: Request,
+        response: Response,
+        media: Annotated[UploadFile, File()],
+        local_source_id: Annotated[str, Form()],
+        range_start_seconds: Annotated[float | None, Form(ge=0)] = None,
+        range_end_seconds: Annotated[float | None, Form(gt=0)] = None,
+    ) -> AnalysisRunView:
+        _require_same_origin(
+            request,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
+        if not local_upload_enabled:
+            raise HTTPException(status_code=404, detail="本地视频导入未启用")
+        if app_env == "production":
+            failure_code = await asyncio.to_thread(readiness_probe.check)
+            if failure_code is not None:
+                raise HTTPException(status_code=503, detail="动作分析服务尚未就绪")
+        if LOCAL_SOURCE_ID_PATTERN.fullmatch(local_source_id) is None:
+            raise HTTPException(status_code=422, detail="本地来源标识无效")
+        if (range_start_seconds is None) != (range_end_seconds is None):
+            await media.close()
+            raise HTTPException(
+                status_code=422,
+                detail="分析范围必须同时包含开始和结束时间",
+            )
+        suffix = LOCAL_MEDIA_TYPES.get(media.content_type or "")
+        if suffix is None:
+            await media.close()
+            raise HTTPException(status_code=415, detail="暂不支持这种视频格式")
+
+        upload_directory = await asyncio.to_thread(_make_upload_directory, local_upload_temp_root)
+        source_path = upload_directory / f"source{suffix}"
+        try:
+            await _write_upload(media, source_path, max_bytes=local_upload_max_bytes)
+            try:
+                duration_seconds = await asyncio.to_thread(duration_probe, source_path)
+            except Exception as error:
+                raise HTTPException(status_code=422, detail="无法读取视频时长") from error
+            if not math.isfinite(duration_seconds) or duration_seconds <= 0:
+                raise HTTPException(status_code=422, detail="无法读取视频时长")
+            if duration_seconds > local_analysis_max_seconds:
+                raise HTTPException(status_code=422, detail="视频时长超过当前分析上限")
+
+            analysis_start = 0.0 if range_start_seconds is None else range_start_seconds
+            analysis_end = duration_seconds if range_end_seconds is None else range_end_seconds
+            if (
+                not math.isfinite(analysis_start)
+                or not math.isfinite(analysis_end)
+                or analysis_start >= analysis_end
+                or analysis_end > duration_seconds
+            ):
+                raise HTTPException(status_code=422, detail="分析范围超出视频时长")
+            source = VideoSource(
+                id=local_source_id,
+                title="本地导入视频",
+                path=source_path,
+                duration_seconds=duration_seconds,
+                analysis_start_seconds=analysis_start,
+                analysis_end_seconds=analysis_end,
+            )
+
+            session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
+            active = await access_manager.active_run(session.id)
+            if active is not None and active.source_id != source.id and active.run_id is not None:
+                with suppress(KeyError):
+                    await manager.cancel(active.run_id, owner_session_id=session.id)
+            try:
+                lease = await access_manager.reserve(
+                    session,
+                    source_id=source.id,
+                    client_ip=_client_ip(request, trusted_proxy_networks),
+                )
+            except AdmissionDenied as error:
+                raise HTTPException(
+                    status_code=429,
+                    detail="真实动作分析暂时繁忙，请稍后重试",
+                    headers={"Retry-After": str(error.retry_after_seconds)},
+                ) from error
+
+            async def finalize_local_run() -> None:
+                try:
+                    await _remove_upload_directory(upload_directory)
+                finally:
+                    await lease.release()
+
+            try:
+                created = await manager.create(
+                    source,
+                    None,
+                    owner_session_id=session.id,
+                    on_terminal=finalize_local_run,
+                )
+            except Exception:
+                await lease.release()
+                raise
+            await lease.bind(created.id)
+            _set_access_cookie(response, access_manager, session)
+            return created
+        except Exception:
+            await _remove_upload_directory(upload_directory)
+            raise
+        finally:
+            await media.close()
+
+    if not local_upload_enabled:
+
+        @app.post("/api/v1/analysis-runs/local", include_in_schema=False)
+        async def reject_disabled_local_upload() -> None:
+            raise HTTPException(status_code=404, detail="本地视频导入未启用")
+
     @app.get(
         "/api/v1/analysis-runs/{run_id}",
         response_model=AnalysisRunView,
@@ -410,6 +593,31 @@ def _usable_web_root(web_static_root: Path | None) -> Path | None:
     if not resolved.is_dir() or not (resolved / "index.html").is_file():
         return None
     return resolved
+
+
+def _make_upload_directory(root: Path | None) -> Path:
+    if root is not None:
+        root.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="hachimi-local-run-", dir=str(root) if root else None))
+
+
+async def _write_upload(media: UploadFile, destination: Path, *, max_bytes: int) -> None:
+    written = 0
+    try:
+        with destination.open("xb") as output:
+            while chunk := await media.read(1024 * 1024):
+                written += len(chunk)
+                if written > max_bytes:
+                    raise HTTPException(status_code=413, detail="视频文件超过上传大小限制")
+                output.write(chunk)
+    except OSError as error:
+        raise HTTPException(status_code=422, detail="无法接收视频文件") from error
+    if written == 0:
+        raise HTTPException(status_code=422, detail="视频文件为空")
+
+
+async def _remove_upload_directory(directory: Path) -> None:
+    await asyncio.to_thread(shutil.rmtree, directory, True)
 
 
 def _validate_production_cors_origins(origins: list[str]) -> None:

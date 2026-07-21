@@ -87,6 +87,8 @@ class LocalMediaProcessor:
         self,
         source_path: Path,
         duration_seconds: float,
+        *,
+        start_seconds: float = 0,
     ) -> AsyncIterator[PreparedMedia]:
         if not source_path.is_file():
             raise MediaProcessingError("configured source video is unavailable")
@@ -95,9 +97,16 @@ class LocalMediaProcessor:
         if duration_seconds > self._max_source_duration_seconds:
             raise MediaProcessingError("source video exceeds the full-source analysis limit")
 
+        if start_seconds < 0:
+            raise MediaProcessingError("source analysis range must not be negative")
         window = AnalysisWindow(
             start_seconds=0,
             end_seconds=duration_seconds,
+            expanded=False,
+        )
+        extraction_window = AnalysisWindow(
+            start_seconds=start_seconds,
+            end_seconds=start_seconds + duration_seconds,
             expanded=False,
         )
         root = str(self._temp_root) if self._temp_root is not None else None
@@ -113,13 +122,20 @@ class LocalMediaProcessor:
             timestamps = tuple(
                 round(index * frame_interval_seconds, 3) for index in range(frame_count)
             )
-            audio_task = asyncio.create_task(self._extract_audio(source_path, audio_path, window))
+            audio_task = asyncio.create_task(
+                self._extract_audio(source_path, audio_path, extraction_window)
+            )
+            contact_sheet_kwargs: dict[str, Any] = {
+                "frame_interval_seconds": frame_interval_seconds,
+                "frame_count": frame_count,
+            }
+            if start_seconds > 0:
+                contact_sheet_kwargs["window"] = extraction_window
             contact_sheet_task = asyncio.create_task(
                 self._extract_contact_sheet(
                     source_path,
                     contact_sheet_path,
-                    frame_interval_seconds=frame_interval_seconds,
-                    frame_count=frame_count,
+                    **contact_sheet_kwargs,
                 )
             )
             extraction_tasks = (audio_task, contact_sheet_task)
@@ -231,13 +247,24 @@ class LocalMediaProcessor:
         *,
         frame_interval_seconds: float,
         frame_count: int,
+        window: AnalysisWindow | None = None,
     ) -> None:
+        if window is None:
+            window = AnalysisWindow(
+                start_seconds=0,
+                end_seconds=frame_interval_seconds * frame_count,
+                expanded=False,
+            )
         columns = 4
         rows = math.ceil(frame_count / columns)
         await self._run_ffmpeg(
             "contact sheet",
+            "-ss",
+            f"{window.start_seconds:.3f}",
             "-i",
             str(source_path),
+            "-t",
+            f"{window.duration_seconds:.3f}",
             "-vf",
             (
                 f"fps=1/{frame_interval_seconds:.6f},scale=160:-1,"

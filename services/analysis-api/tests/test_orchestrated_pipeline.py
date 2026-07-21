@@ -7,6 +7,7 @@ import pytest
 
 from hakimi_analysis.media import AnalysisWindow, PreparedMedia
 from hakimi_analysis.models import (
+    CoverageStatus,
     RunStage,
     SpeechSignal,
     SpeechUnderstandingResult,
@@ -25,12 +26,18 @@ class FakeMediaProcessor:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.windows: list[AnalysisWindow] = []
+        self.prepare_calls: list[tuple[Path, float, float]] = []
         self.exited = asyncio.Event()
 
     @asynccontextmanager
     async def prepare_source(
-        self, source_path: Path, duration_seconds: float
+        self,
+        source_path: Path,
+        duration_seconds: float,
+        *,
+        start_seconds: float = 0,
     ) -> AsyncIterator[PreparedMedia]:
+        self.prepare_calls.append((source_path, duration_seconds, start_seconds))
         window = AnalysisWindow(
             start_seconds=0,
             end_seconds=duration_seconds,
@@ -231,9 +238,9 @@ def skills() -> SkillRepository:
 def test_skill_repository_loads_all_three_versioned_contracts() -> None:
     repository = SkillRepository.load(Path(__file__).parents[3] / "skills")
 
-    assert repository.speech_version == "1.3.0"
-    assert repository.visual_version == "1.2.0"
-    assert repository.fusion_version == "1.1.0"
+    assert repository.speech_version == "1.4.0"
+    assert repository.visual_version == "1.3.0"
+    assert repository.fusion_version == "1.2.0"
     assert "Merge temporally overlapping evidence" in repository.fusion_instructions
 
 
@@ -253,11 +260,39 @@ async def test_speech_and_visual_branches_run_in_parallel_and_fuse(tmp_path: Pat
     assert output.candidates[0].name == "拖拽弯举"
     assert len(output.candidates[0].evidence) == 2
     assert output.warnings == []
+    # The current non-chunked provider path never fabricates gap locations.
+    assert output.coverage_status == CoverageStatus.COMPLETE
+    assert output.coverage_gaps == []
 
     assert ark.speech_transcript is not None
     utterances = ark.speech_transcript["utterances"]
     assert isinstance(utterances, list)
     assert all(isinstance(utterance, dict) and "words" not in utterance for utterance in utterances)
+
+
+@pytest.mark.asyncio
+async def test_range_source_prepares_only_the_requested_absolute_media_range(
+    tmp_path: Path,
+) -> None:
+    media = FakeMediaProcessor(tmp_path)
+    pipeline = OrchestratedAnalysisPipeline(
+        media=media,
+        asr=EmptyAsr(),
+        ark=FakeArk(empty=True),
+        skills=skills(),
+    )
+    range_source = VideoSource(
+        id="local:62f31c4b-bd1c-4b6a-8ad8-c6121b56135a",
+        title="本地导入视频",
+        path=tmp_path / "source.mp4",
+        duration_seconds=30,
+        analysis_start_seconds=10,
+        analysis_end_seconds=20,
+    )
+
+    await pipeline.analyze(range_source, None, no_op_emit)
+
+    assert media.prepare_calls == [(range_source.path, 10.0, 10.0)]
 
 
 @pytest.mark.asyncio
