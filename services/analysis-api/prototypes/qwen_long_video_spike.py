@@ -10,6 +10,7 @@ is not copied into the repository. The raw provider response is never persisted.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -127,11 +128,74 @@ def stream_generation(
     return "".join(chunks), final_event
 
 
+def sdk_generation(
+    *,
+    api_key: str,
+    model: str,
+    video_path: Path,
+    fps: float,
+    prompt: str,
+) -> tuple[str, dict[str, Any]]:
+    import dashscope
+
+    video_uri = f"file://{video_path.resolve().as_posix()}"
+    responses = dashscope.MultiModalConversation.call(
+        api_key=api_key,
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "video": video_uri,
+                        "fps": fps,
+                        "min_pixels": 4096,
+                        "max_pixels": 65536,
+                        "total_pixels": 67108864,
+                    },
+                    {"text": prompt},
+                ],
+            }
+        ],
+        stream=True,
+        incremental_output=True,
+        result_format="message",
+        response_format={"type": "json_object"},
+        temperature=0.1,
+        max_tokens=4096,
+    )
+    chunks: list[str] = []
+    final_event: dict[str, Any] = {}
+    for response in responses:
+        event = dict(response)
+        final_event = event
+        status_code = event.get("status_code", 200)
+        if status_code != 200:
+            code = event.get("code", "unknown")
+            message = event.get("message", "provider error")
+            raise RuntimeError(f"DashScope SDK failed: {code}: {message}")
+        choices = event.get("output", {}).get("choices", [])
+        if not choices:
+            continue
+        for part in choices[0].get("message", {}).get("content", []):
+            text = part.get("text") if isinstance(part, dict) else None
+            if isinstance(text, str):
+                chunks.append(text)
+    if not chunks:
+        raise RuntimeError("DashScope SDK stream did not contain text content")
+    return "".join(chunks), final_event
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--transport", choices=("manual", "sdk"), default="manual")
+    args = parser.parse_args()
+
     load_dotenv(ROOT / ".env.local", override=False)
     api_key = required_env("DASHSCOPE_API_KEY")
     model = os.getenv("QWEN_VIDEO_MODEL", "qwen3-vl-flash").strip()
     video_path = Path(required_env("QWEN_SPIKE_VIDEO"))
+    video_label = os.getenv("QWEN_SPIKE_LABEL", "private-video").strip()
     fps = float(os.getenv("QWEN_SPIKE_FPS", "0.5"))
 
     if not video_path.is_file():
@@ -163,24 +227,41 @@ def main() -> int:
 """.strip()
 
     started_at = time.perf_counter()
-    with httpx.Client(timeout=httpx.Timeout(900.0, connect=30.0)) as client:
-        print("stage=upload started", flush=True)
-        upload_started_at = time.perf_counter()
-        temporary_url = upload_temporary_video(
-            client,
+    if args.transport == "sdk":
+        print("stage=sdk-upload-and-inference started", flush=True)
+        inference_started_at = time.perf_counter()
+        response_text, provider_response = sdk_generation(
             api_key=api_key,
             model=model,
             video_path=video_path,
+            fps=fps,
+            prompt=prompt,
         )
-        upload_seconds = time.perf_counter() - upload_started_at
-        print(f"stage=upload completed seconds={upload_seconds:.2f}", flush=True)
+        inference_seconds = time.perf_counter() - inference_started_at
+        upload_seconds = 0.0
+        print(
+            f"stage=sdk-upload-and-inference completed seconds={inference_seconds:.2f}",
+            flush=True,
+        )
+    else:
+        with httpx.Client(timeout=httpx.Timeout(900.0, connect=30.0)) as client:
+            print("stage=upload started", flush=True)
+            upload_started_at = time.perf_counter()
+            temporary_url = upload_temporary_video(
+                client,
+                api_key=api_key,
+                model=model,
+                video_path=video_path,
+            )
+            upload_seconds = time.perf_counter() - upload_started_at
+            print(f"stage=upload completed seconds={upload_seconds:.2f}", flush=True)
 
-        print("stage=inference started", flush=True)
-        inference_started_at = time.perf_counter()
-        response_text, provider_response = stream_generation(
-            client,
-            api_key=api_key,
-            payload={
+            print("stage=inference started", flush=True)
+            inference_started_at = time.perf_counter()
+            response_text, provider_response = stream_generation(
+                client,
+                api_key=api_key,
+                payload={
                 "model": model,
                 "input": {
                     "messages": [
@@ -206,17 +287,17 @@ def main() -> int:
                     "temperature": 0.1,
                     "max_tokens": 4096,
                 },
-            },
-        )
-        inference_seconds = time.perf_counter() - inference_started_at
-        print(f"stage=inference completed seconds={inference_seconds:.2f}", flush=True)
+                },
+            )
+            inference_seconds = time.perf_counter() - inference_started_at
+            print(f"stage=inference completed seconds={inference_seconds:.2f}", flush=True)
 
     parsed = json.loads(response_text)
     actions = parsed.get("actions", [])
     safe_result = {
         "question": "Can direct Qwen3-VL video input replace the fixed contact-sheet path?",
         "model": model,
-        "video_duration_label": "7min",
+        "video_duration_label": video_label,
         "fps": fps,
         "upload_seconds": round(upload_seconds, 2),
         "inference_seconds": round(inference_seconds, 2),

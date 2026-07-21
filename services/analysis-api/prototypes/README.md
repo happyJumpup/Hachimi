@@ -28,3 +28,19 @@ Decision: reject a single whole-video request as the synchronous user path. Keep
 Qwen only as a possible provider behind a later bounded-chunk benchmark with
 progressive results, overlap deduplication, and explicit upload/first-token/final
 timings.
+
+### Short-video confirmation
+
+The same question was retested on 2026-07-21 with the existing 54.87-second,
+13.4 MB controlled demo video at 2.0 FPS:
+
+- Manual temporary-OSS transport disconnected during upload after 62.3 s.
+- The official DashScope SDK local-file transport produced no terminal response
+  within the three-minute stop line and was terminated.
+- No candidate content was returned, so the expected action around 41–51 seconds
+  could not be evaluated.
+
+Final product decision: remove single-request whole-video VLM ingestion from the
+competition path for both short and long videos. A provider may only re-enter
+consideration through a bounded-chunk benchmark that meets the product latency
+and timestamp-quality gates.
