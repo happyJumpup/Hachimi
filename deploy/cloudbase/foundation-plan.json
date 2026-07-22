@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "purpose": "audited CloudBase Run foundation plan; not an importable Tencent Cloud API payload",
+  "environment_id": "bizhao-d8grp8yqd81759fbb",
+  "region": "ap-shanghai",
+  "service_name": "trainpal-demo",
+  "container": {
+    "port": 8000,
+    "command_contract": "one-uvicorn-worker",
+    "serves_web_and_api_same_origin": true,
+    "logs": [
+      "stdout"
+    ]
+  },
+  "capacity": {
+    "cpu_cores": 2,
+    "memory_gib": 4,
+    "minimum_instances_idle": 0,
+    "minimum_instances_judging": 1,
+    "maximum_instances": 1,
+    "request_timeout_seconds": 240
+  },
+  "network": {
+    "public_https": true,
+    "public_https_enabled_only_after_private_gates": true,
+    "public_canary_required_before_link_announcement": true,
+    "public_https_disabled_after_confirmed_demo_end": true,
+    "default_domain_classification": "development-demo-only",
+    "custom_domain_required": false
+  },
+  "runtime": {
+    "app_env": "production",
+    "analysis_provider": "cloud",
+    "judge_analysis_concurrency": 3,
+    "public_analysis_concurrency": 0,
+    "run_timeout_seconds": 180,
+    "local_upload_enabled": true,
+    "local_analysis_max_seconds": 60,
+    "unauthenticated_page_browse": true,
+    "judge_code_required_for_paid_analysis": true,
+    "anonymous_paid_analysis": false,
+    "raw_media_persistence": "forbidden",
+    "active_run_state": "single-process-memory"
+  },
+  "asset_contract": {
+    "source_manifest_path": "/config/media-manifest.json",
+    "source_media_root": "/mnt/trainpal/media",
+    "ffmpeg_path": "/opt/trainpal/bin/ffmpeg",
+    "smoke_annotations_path": "/config/smoke-annotations.json",
+    "must_verify_ffmpeg_sha256": true,
+    "must_verify_ffmpeg_configuration_sha256": true,
+    "assets_deferred_until_content_approval": true
+  },
+  "release_gates": {
+    "private": {
+      "immutable_image_verified": true,
+      "configuration_snapshot_recorded": true,
+      "internal_health_ready": true,
+      "rollback_target_retained": true
+    },
+    "public_canary": {
+      "public_health_ready": true,
+      "judge_analysis_sse_result": true,
+      "second_browser_entry": true,
+      "concurrent_judge_requests": 3,
+      "over_capacity_http_status": 429,
+      "memory_pressure_observed": true,
+      "rollback_smoke": true
+    }
+  },
+  "rollback": {
+    "minimum_previous_versions_retained": 1,
+    "configuration_snapshot_required": true,
+    "switch_target": "previous-immutable-commit-version",
+    "post_switch_ready_probe_required": true
+  },
+  "required_secret_environment_keys": [
+    "ACCESS_COOKIE_SECRET",
+    "ARK_API_KEY",
+    "JUDGE_ACCESS_CODE",
+    "VOLC_ASR_API_KEY"
+  ],
+  "required_nonsecret_environment_keys": [
+    "ANALYSIS_PROVIDER",
+    "APP_ENV",
+    "ARK_BASE_URL",
+    "ARK_MODEL_ID",
+    "ARK_VISUAL_MODEL_ID",
+    "CORS_ORIGINS",
+    "FFMPEG_EXPECTED_CONFIGURATION_SHA256",
+    "FFMPEG_EXPECTED_SHA256",
+    "IMAGEIO_FFMPEG_EXE",
+    "JUDGE_ANALYSIS_CONCURRENCY",
+    "LOCAL_ANALYSIS_MAX_SECONDS",
+    "LOCAL_UPLOAD_ENABLED",
+    "PUBLIC_ANALYSIS_CONCURRENCY",
+    "PUBLIC_MEDIA_BASE_URL",
+    "RUN_TIMEOUT_SECONDS",
+    "RUN_TTL_SECONDS",
+    "SMOKE_ANNOTATIONS_PATH",
+    "SOURCE_MANIFEST_PATH",
+    "SOURCE_MEDIA_ROOT",
+    "TRUSTED_PROXY_CIDRS",
+    "VOLC_ASR_RESOURCE_ID",
+    "VOLC_ASR_URL",
+    "WEB_STATIC_ROOT"
+  ],
+  "budget": {
+    "currency": "CNY",
+    "hard_ceiling": 300,
+    "pricing_source": "https://cloud.tencent.com/document/product/1243/90265",
+    "assumed_ccu_price_cny_per_hour": 0.22,
+    "ccu_per_warm_instance": 2,
+    "maximum_public_window_hours": 18,
+    "maximum_warm_hours": 18,
+    "estimated_compute_ceiling_cny": 7.92,
+    "demo_end_must_be_confirmed_before_public_enable": true,
+    "unpriced_resources_require_console_confirmation": true,
+    "purchase_requires_fresh_confirmation": true
+  },
+  "submission_deadline": "2026-07-23T11:00:00+08:00"
+}
