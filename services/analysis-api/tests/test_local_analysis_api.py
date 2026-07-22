@@ -546,6 +546,36 @@ async def test_default_local_upload_accepts_300_seconds_and_rejects_longer_befor
 
 
 @pytest.mark.asyncio
+async def test_private_canary_can_exercise_code_limit_before_capability_is_published(
+    tmp_path: Path,
+) -> None:
+    pipeline = RelativeCandidatePipeline()
+    app = create_app(
+        pipeline=pipeline,
+        access=make_test_access(),
+        local_analysis_max_seconds=60,
+        accepted_local_analysis_max_seconds=300,
+        local_upload_temp_root=tmp_path,
+        local_duration_probe=lambda _: 300.0,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        capabilities = await client.get("/api/v1/capabilities")
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("source.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+
+    assert capabilities.json()["local_analysis_max_seconds"] == 60.0
+    assert completed["source_duration_seconds"] == 300.0
+    assert pipeline.source is not None
+
+
+@pytest.mark.asyncio
 async def test_disabled_local_upload_is_fail_closed_without_writing_media(tmp_path: Path) -> None:
     upload_root = tmp_path / "uploads"
     app = create_app(

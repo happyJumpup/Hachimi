@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "manifest_version": "provider-conformance-v1",
+  "prompt_contract_sha256": "5ff0322bfdcf1ed5fe592801c0e21b61fd744ebf5ff28eb558cf20d70838afee",
+  "repetitions": 3,
+  "visual_chunk_seconds": 60,
+  "visual_overlap_seconds": 10,
+  "routes": {
+    "seed-mini": "doubao-seed-2-0-mini-260428",
+    "seed-lite": "doubao-seed-2-0-lite-260428",
+    "qwen-vl": "qwen3-vl-flash-2026-01-22"
+  },
+  "samples": [
+    {"id":"video-54s","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":54.87,"gold":[]},
+    {"id":"video-68s","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":67.83,"gold":[]},
+    {"id":"video-100s","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":100.43,"gold":[]},
+    {"id":"video-108s","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":108.72,"gold":[]},
+    {"id":"video-208s","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":207.77,"gold":[]},
+    {"id":"video-300s","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":300,"gold":[]},
+    {"id":"silent-action","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":60,"gold":[]},
+    {"id":"no-action","path":"REPLACE_LOCAL_PATH","sha256":"REPLACE_SHA256","duration_seconds":60,"gold":[]}
+  ]
+}

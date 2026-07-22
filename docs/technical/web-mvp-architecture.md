@@ -13,9 +13,9 @@ TrainPal 将用户已经保存且有权使用的健身视频转成一场可编�
 - 本地视频导入是主入口，受控视频源是明确标注的快速体验兜底。客户端不能提交任意服务器路径、远程 URL、平台 Cookie 或登录态。
 - 原视频只在当前设备浏览器长期保存。服务端上传副本和分析材料只属于单次运行，并在所有终态清理。
 - 分析只由用户显式创建。页面切换、刷新或 SSE 断线不取消；显式取消、更换来源、运行安全边界或进程丢失才结束运行。
-- 当前竞赛能力为完整覆盖不超过 5 分钟的源文件，`GET /api/v1/capabilities` 返回 300 秒和 256 MiB 的真实边界。7／19 分钟原片必须先在应用外裁成不超过 5 分钟，不能用首次请求的内部区间冒充完整分析。
+- Provider Profile 和私有验收入口最多接受 5 分钟、256 MiB；用户界面只按 `GET /api/v1/capabilities` 返回的已发布边界开放，默认仍为 60 秒。只有真实五分钟 Canary 收据与当前部署 commit 匹配后，该接口才返回 300 秒。7／19 分钟原片仍须先在应用外裁成已发布上限内的新源文件。
 - 过程反馈来自真实处理位置和暂时发现的动作线索数。部分结果必须明确覆盖缺口并允许逐段重试，不能把系统错误伪装成没有动作。
-- 当前 production Provider 保持火山 ASR、Ark Seed 和确定性融合，但视觉改为连续 MP4 的 60 秒分块、10 秒重叠、单并发顺序处理，不以稀疏截图冒充完整窗口。内部视觉块以有界码率转码后直接作为 Ark Responses API 的 Base64 视频输入，不创建方舟 Files API 托管文件；超过 45,000,000 bytes 的块明确成为 `media_error` 覆盖缺口。语音与视觉共享 170 秒证据截止时间，并为 180 秒外层上限预留 10 秒终态和清理余量。目标 CloudBase 上的真实短视频、五分钟样本、三并发和清理仍须通过 Canary 才能宣称交付。生产环境不使用测试 Provider 或预置候选回退。
+- 内容理解 Provider 使用完整豆包 ASR、连续静音 MP4 的 60 秒视觉块、10 秒重叠和确定性 EvidenceReconciler。Ark 主路线直接内联视频；只有可降级错误才让当前及剩余失败块顺序切到 Qwen，Qwen 通过 10 分钟只读签名 URL 读取私有 COS 临时对象。成功块不重跑，有效空结果不降级，COS 清理失败会关闭后续备用分析。语音与视觉共享 170 秒证据截止时间，并为 180 秒外层上限预留 10 秒终态和清理余量。生产环境不使用测试 Provider、预置候选回退、双路竞速或原生音画路线。
 - 用户只看到一个 TrainPal Agent。内容理解 Provider、三个领域 Skill 和确定性训练引擎是内部能力层，不形成额外用户角色。
 - 训练计时、休息、进度、记录和卡路里由确定性代码负责，不进入开放式 Agent 循环。
 
@@ -37,7 +37,7 @@ flowchart LR
     PER -->|"用户确认差异"| ENG
 ```
 
-当前内容理解 Provider 继续使用已经接入的真实 Ark、豆包流式语音识别 2.0 与确定性媒体处理／融合路径。原生音视频 benchmark 尚未选出通过全部硬门槛的新方案，因此不切换 Provider。竞赛基线已实现一次 ASR 与 60／10 秒顺序视觉分块，并能保留可靠分块及定位 `partial` 缺口；目标 CloudBase 的真实短视频、五分钟样本与逐段重试仍须通过 Canary。
+当前内容理解 Provider 继续使用豆包流式语音识别 2.0；视觉主备顺序必须由 Seed Mini、Seed Lite、Qwen3-VL 的生产同构评测确定。竞赛基线已实现一次 ASR、60／10 秒顺序视觉分块、失败块降级和 `partial` 缺口；在真实 A/B/C 与 CloudBase Canary 前，默认仍只启用 Ark 主路线并发布 60 秒。
 
 ## 3. 页面与移动端边界
 
@@ -173,7 +173,7 @@ interface AnalysisRunView {
 
 Provider 输出结构化内容理解结果，至少包含来源、时长、覆盖状态、按来源顺序排列的动作、来源片段、视频明确参数、只读来源证据快照、不确定标记和可选来源节奏。它不包含原始媒体、完整转录、模型响应、GYMTI、个人信息或训练历史。
 
-服务端流程保持“确定性媒体处理 + 动作分析 Agent 协调 Skills”。全范围只抽取一次音频并执行一次 ASR；视觉块分别受 20 秒限制，语音与视觉共享运行内证据截止时间，整次运行受 180 秒限制。视觉块使用连续 MP4 的 Base64 内联请求，并显式路由到视觉模型；不允许在取消竞态下改用会遗留未知远端 ID 的临时上传。既有或在途 benchmark 未通过全部硬门槛前不切换 Provider，也不沿用旧单样本延迟作为五分钟承诺；真实缺口定位与重试仍须完成目标部署验收。
+服务端流程保持“确定性媒体处理 + 深内容理解 Provider”。全范围只抽取一次音频并执行一次 ASR；视觉块分别受 20 秒单 Provider 尝试限制，语音与视觉共享运行内证据截止时间，整次运行受 180 秒限制。Ark 使用连续 MP4 的 Base64 内联请求；Qwen 只在顺序降级时通过私有 COS 临时对象读取同一静音块。Prompt Contract、局部时钟和 Schema 在本地先校验，TrainPal Agent 不参与 Provider 路由。既有或在途 benchmark 未通过全部硬门槛前不切换 Provider，也不沿用旧单样本延迟作为五分钟承诺。
 
 公开合同不再包含片段用途分类。没有可靠来源节奏时，片段只作参考；有可靠节奏时，Provider 输出时间线级动作、休息和切换块，由训练编译展开。
 
@@ -257,7 +257,7 @@ interface SourcedValue<T> {
 截至 2026-07-23：
 
 - 本地导入、受控来源、Analysis Run、SSE、浏览器训练数据和真实云 Provider 已有工程基线；五分钟分块后端提交与 TrainPal Vue design v1 提交正在同一发布分支集成。
-- 生产配置已经声明 300 秒，并以 OA、0% 流量提交 CloudBase 私有灰度版本 A；在私有 `/ready`、真实 Provider、恢复与清理验收完成前，不得把配置存在表述为能力已上线。
+- 代码 Profile 已具备 300 秒分块路径，公开能力默认仍是 60 秒；私有评委链路可以在不改变 `/capabilities` 的情况下验收 300 秒。仓库没有可审计的真实 A/B/C、CloudBase 五分钟、COS 清理和回滚收据，因此不得表述为已上线。
 - 新的公开内容理解结果、三个 TrainPal Skill、四态字段来源和个性化提案时效是冻结后的生产合同，仍需按切片接入并生成／核对 OpenAPI 与前端类型。
 - 签名 FFmpeg 镜像已完成本地构建、收据与唯一二进制审计；CloudBase 云端构建、私有门禁、公网 Canary、真实并发和回滚 smoke 尚未全部通过，不得表述为已上线。
 
@@ -273,6 +273,7 @@ interface SourcedValue<T> {
 - [ADR-0018：三个领域 Skill](../adr/0018-trainpal-orchestrates-base-compilation-and-optional-personalization.md)
 - [ADR-0019：个性化提案时效](../adr/0019-plan-changes-invalidate-personalization-proposals.md)
 - [ADR-0023：Skill 任务幂等](../adr/0023-skill-tasks-are-idempotent-and-version-bound.md)
+- [ADR-0031：深内容理解 Provider 与顺序视觉降级](../adr/0031-deep-content-provider-and-sequential-visual-fallback.md)
 - [ADR-0025：覆盖状态](../adr/0025-provider-declares-complete-partial-or-insufficient-coverage.md)
 - [ADR-0026：旅程页面与移动端](../adr/0026-journey-pages-replace-the-douyin-style-single-stage.md)
 - [ADR-0029：CloudBase Run 竞赛入口](../adr/0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md)

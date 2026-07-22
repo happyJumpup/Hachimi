@@ -211,6 +211,7 @@ def create_app(
     trusted_proxy_cidrs: list[str] | None = None,
     local_upload_enabled: bool = True,
     local_analysis_max_seconds: float = 300,
+    accepted_local_analysis_max_seconds: float | None = None,
     local_upload_max_bytes: int = 256 * 1024 * 1024,
     local_upload_temp_root: Path | None = None,
     local_duration_probe: Callable[[Path], float] | None = None,
@@ -221,6 +222,21 @@ def create_app(
         or local_analysis_max_seconds > 300
     ):
         raise ValueError("local analysis limit must be between 0 and 300 seconds")
+    accepted_duration_limit = (
+        local_analysis_max_seconds
+        if accepted_local_analysis_max_seconds is None
+        else accepted_local_analysis_max_seconds
+    )
+    if (
+        not math.isfinite(accepted_duration_limit)
+        or accepted_duration_limit <= 0
+        or accepted_duration_limit > 300
+        or local_analysis_max_seconds > accepted_duration_limit
+    ):
+        raise ValueError(
+            "accepted local analysis limit must cover the published limit "
+            "and stay within 300 seconds"
+        )
     if local_upload_max_bytes < 1:
         raise ValueError("local upload byte limit must be positive")
     duration_probe = local_duration_probe or probe_duration_sync
@@ -568,7 +584,7 @@ def create_app(
                 raise HTTPException(status_code=422, detail="无法读取视频时长") from error
             if not math.isfinite(duration_seconds) or duration_seconds <= 0:
                 raise HTTPException(status_code=422, detail="无法读取视频时长")
-            if duration_seconds > local_analysis_max_seconds:
+            if duration_seconds > accepted_duration_limit:
                 raise HTTPException(status_code=422, detail="视频时长超过当前分析上限")
 
             analysis_start = 0.0 if range_start_seconds is None else range_start_seconds

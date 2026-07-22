@@ -2,7 +2,7 @@
 
 状态：已接受（2026-07-21）
 
-> 冲突部分已由 [ADR-0013](0013-local-video-import-and-recoverable-analysis.md) 取代：60 秒改为当前部署默认上限而非产品上限，离页与 SSE 短暂断线不取消运行，Provider 时延预算不作为下一轮未验证能力的承诺。显式触发、完整覆盖和临时材料边界继续有效。
+> 冲突部分先后由 [ADR-0013](0013-local-video-import-and-recoverable-analysis.md) 与 [ADR-0031](0031-deep-content-provider-and-sequential-visual-fallback.md) 取代。联系表、11.5 秒证据预算、局部触发窗口和 SSE 断开即取消均为历史实现；显式触发、完整覆盖和临时材料边界继续有效。
 
 ## 背景
 

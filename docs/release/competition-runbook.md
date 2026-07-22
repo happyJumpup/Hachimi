@@ -2,7 +2,7 @@
 
 > 状态：CloudBase Run 基础合同已审计；服务创建、素材接入、公网 canary 与发布验收尚未留有通过记录
 >
-> 更新日期：2026-07-22
+> 更新日期：2026-07-23
 >
 > 适用范围：独立 Web、本地视频上传、受控快速体验、真实 Provider 与腾讯云 CloudBase Run 临时竞赛入口
 
@@ -31,12 +31,12 @@
 - 当前产品是 TrainPal 独立 Web；本地视频导入是主入口，受控视频是明确标注的快速体验兜底。
 - Vue SPA 与 `/api/v1/*` 从同一个容器和域名提供；浏览器不接触 Ark、ASR、对象存储写权限或服务器秘密。
 - CloudBase Run 只运行一个 `trainpal-demo` 服务、一个实例上限和一个 Uvicorn worker。Analysis Run、SSE、取消句柄和容量均在单进程内存中。
-- 原始上传、音频、帧、联系表、转录、提示词和模型响应只在独立临时目录或内存中存在，所有终态都清理。
+- 原始上传、派生音频、连续静音视觉块、转录、提示词和模型响应只在独立临时目录或内存中存在，所有终态都清理。Qwen 备用路线只使用私有 COS 中转失败块，并在 `finally` 主动删除。
 - 训练档案、个性化上下文、方案、场次、记录和本地视频 Blob 留在浏览器 IndexedDB，不上传为账户数据。
 - Provider-backed 分析必须使用评委体验码；`PUBLIC_ANALYSIS_CONCURRENCY=0`，匿名访客不能消耗付费分析额度。
 - 测试 Provider 只允许 `APP_ENV=test`；生产环境配置测试 Provider 必须拒绝启动。
 - 快速体验方案必须明确标注为示例，不能伪装成真实 AI 结果、缓存回退或用户记录。
-- 当前真实 Provider 仍是已接入的 Ark + 豆包流式语音识别 2.0 路线；未完成新的质量选型前不得临时切换模型并宣称升级。
+- 当前生产候选由豆包流式语音识别 2.0、Ark Seed 主视觉和确定性 EvidenceReconciler 组成；Seed Mini、Seed Lite 与 Qwen3-VL 的同构评测未完成前，主模型不视为冻结，跨厂商备用保持关闭。
 - 仓库名、镜像路径或兼容字段中的历史工程标识不构成产品品牌；用户界面和答辩统一使用 TrainPal。
 
 ## 3. CloudBase Run 拓扑
@@ -106,11 +106,19 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `ARK_MODEL_ID` / `ARK_VISUAL_MODEL_ID` / `ARK_BASE_URL` | 使用候选版本实际验证值，发布记录只记模型 ID 与地址，不记 Key |
 | `VOLC_ASR_RESOURCE_ID` / `VOLC_ASR_URL` | 与现有豆包流式语音识别 2.0 权益一致 |
 | `LOCAL_UPLOAD_ENABLED` | `true`，但就绪和能力接口仍可失败关闭 |
-| `LOCAL_ANALYSIS_MAX_SECONDS` | 当前 CloudBase 基础计划值 `60`；后端冻结合同上限为 `300`，只能在对应切片合并并通过真实 Provider、恢复与清理门禁后提高 |
+| `LOCAL_ANALYSIS_MAX_SECONDS` | 代码和私有验收上限 `300`，不直接对用户公布 |
+| `PUBLISHED_ANALYSIS_MAX_SECONDS` | 默认 `60`；五分钟 Canary 收据与当前部署 commit 匹配后才设为 `300` |
+| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入脱敏收据 JSON 并绑定完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH`，60 秒时收据可为空 |
 | `LOCAL_UPLOAD_MAX_BYTES` | 与 CloudBase 和应用请求体上限协调，不能无界 |
 | `RUN_TIMEOUT_SECONDS` | `180` |
 | `RUN_TTL_SECONDS` | `600` |
-| `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | 当前基线 `11.5`，变更需真实 smoke |
+| `ANALYSIS_SPEECH_TIMEOUT_SECONDS` | `45` |
+| `ANALYSIS_EVIDENCE_DEADLINE_SECONDS` / `ANALYSIS_CLEANUP_RESERVE_SECONDS` | `170` / `10`，两者之和不得超过 180 秒 |
+| `ANALYSIS_CHUNK_TIMEOUT_SECONDS` | 单 Provider 单视觉块 `20` 秒 |
+| `ANALYSIS_MAX_VISUAL_CHUNKS` / `ANALYSIS_MAX_VISUAL_CALLS` | `6` / `12` |
+| `VISUAL_FALLBACK_ENABLED` | 版本 B 为 `false`；Qwen、私有 COS 与真实预检全部通过后的版本 C 才设为 `true` |
+| `QWEN_VISUAL_MODEL_ID` | 固定 `qwen3-vl-flash-2026-01-22`，禁止滚动别名 |
+| `COS_SIGNED_URL_TTL_SECONDS` / `COS_LIFECYCLE_DAYS` | `600` / `1`；Bucket 必须私有、服务端加密并验证生命周期 |
 | `ANALYSIS_LATENCY_TARGET_MAX_SECONDS_PER_VIDEO_MINUTE` | 当前 smoke 门禁 `15`，不是公网 SLA |
 | `JUDGE_ANALYSIS_CONCURRENCY` | 计划 `3`，必须通过三路真实并发后才开放 |
 | `PUBLIC_ANALYSIS_CONCURRENCY` | `0` |
@@ -272,7 +280,7 @@ MP4 保存在演示电脑和团队受控云盘各一份，记录 SHA-256 与时�
 ## 15. 已知限制
 
 - 当前是独立 Web 与本地上传入口，不是平台分享直达；不得暗示已调用未开放的平台内容理解接口。
-- 当前 CloudBase 基础计划只声明最多 60 秒本地分析；后端冻结合同的 300 秒上限尚未进入本发布基线，提高能力前必须合并对应切片并通过分块、恢复、清理和真实 Provider 验证。
+- 代码与私有验收路径最多接受 300 秒，但 `/capabilities` 默认只发布 60 秒；必须通过同构 A/B/C、真实五分钟、三路并发、取消、熔断、COS 清理及 `B→C→B→C` 回滚，并让脱敏收据绑定当前部署 commit，才能发布 300 秒。
 - 现有 Provider 对静音纯动作、多动作召回和可定位部分覆盖仍缺少充分生产证据；测试 Provider 通过不能替代真实验收。
 - Analysis Run 留在单进程内存；实例替换会丢失进行中任务，用户只能重新发起。
 - 训练和个性化数据只在当前浏览器设备保存，无账号、服务器备份或跨设备同步。

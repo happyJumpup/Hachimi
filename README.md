@@ -10,7 +10,7 @@ TrainPal 同时是产品名、用户可见的唯一 Agent 和小猫教练身份�
 
 当前 Web MVP 已串起完整的本机训练闭环：
 
-1. 用户在独立首页选择本地视频，并在明确点击后启动真实整段分析；语音与视觉并行，TrainPal 只提出可校正候选。
+1. 用户在独立首页选择本地视频，并在明确点击后启动真实整段分析；内容理解 Provider 并行取得语音与分块视觉证据，TrainPal 再把结构化结果编译为可编辑方案。
 2. 跨视频选择动作，或创建没有参考视频的动作；当前方案自动保存，可排序、复制和编辑参数。
 3. 将当前方案另存为本机方案，执行次数型或时长型训练，并在休息、离页或刷新后恢复。
 4. TrainPal 以五种状态陪练，可随时隐藏；训练档案只在本机用于卡路里约值和个性策略弱参考。
@@ -41,12 +41,15 @@ pnpm dev
 
 测试 Provider 仅允许 `APP_ENV=test`，不能作为开发或生产回退。真实云配置缺失时，后端会明确失败。
 
+后端代码和私有验收路径最多接受 300 秒；公开 `/api/v1/capabilities` 默认只返回 60 秒。只有生产同构 Provider 评测、真实五分钟、三路并发、取消、熔断、私有 COS 清理与 `B→C→B→C` 回滚全部形成绑定当前部署 commit 的脱敏收据，才允许发布 300 秒。
+
 ## 验证
 
 ```powershell
 pnpm check
 pnpm test:e2e
 pnpm api:generate
+pnpm benchmark:provider-conformance -- prepare --manifest <private-manifest-path>
 ```
 
 `pnpm test:e2e` 使用独立 loopback 端口、合成媒体和测试专用适配器，不复用本机已启动的开发服务。真实 Ark + 豆包流式语音识别 2.0 联调需在本地显式运行 `pnpm smoke:cloud`；CI 不注入云密钥。
@@ -61,6 +64,8 @@ pnpm api:generate
 - [本地视频优先与可恢复覆盖分析 ADR](docs/adr/0013-local-video-import-and-recoverable-analysis.md)
 - [Web 体验规范历史入口](docs/design/web-experience-guidelines.md)
 - [完整 Web 架构](docs/technical/web-mvp-architecture.md)
+- [内容理解 Provider 生产设计](docs/technical/content-understanding-provider-production.md)
+- [深 Provider 与顺序视觉降级 ADR](docs/adr/0031-deep-content-provider-and-sequential-visual-fallback.md)
 - [训练场次、本地媒体与本地数据合同](docs/technical/training-session-contract.md)
 - [竞赛部署与演示 Runbook](docs/release/competition-runbook.md)
 - [架构决策](docs/adr)

@@ -222,7 +222,7 @@ class OrchestratedAnalysisPipeline:
             ) from error
 
         speech_signals = speech_result if isinstance(speech_result, list) else []
-        visual_segments = _deduplicate_visual_segments(visual_results.segments)
+        visual_segments = deduplicate_visual_segments(visual_results.segments)
         coverage_gaps = _coverage_gaps(
             source.analysis_duration_seconds,
             visual_results.successful_windows,
@@ -545,7 +545,7 @@ def _offset_visual_segments(
     ]
 
 
-def _deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSegment]:
+def deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSegment]:
     grouped: dict[str, list[VisualSegment]] = {}
     ungrouped: list[VisualSegment] = []
     for segment in sorted(segments, key=lambda item: (item.start_seconds, item.end_seconds)):
@@ -586,4 +586,5 @@ __all__ = [
     "LocalMediaProcessor",
     "OrchestratedAnalysisPipeline",
     "build_visual_chunks",
+    "deduplicate_visual_segments",
 ]

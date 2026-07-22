@@ -14,6 +14,10 @@ from uuid import uuid4
 from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.provider_contracts import PromptContractError, PromptContractRegistry
 from hakimi_analysis.provider_profile import ProviderProfile
+from hakimi_analysis.release_gates import (
+    validate_five_minute_canary_receipt,
+    validate_five_minute_canary_receipt_json,
+)
 from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import SourceCatalog
 
@@ -279,6 +283,26 @@ class ProductionReadiness:
             and profile.judge_concurrency == 3
             and profile.public_concurrency == 0
             and not self._settings.trusted_proxy_cidr_list
+            and self._published_capability_valid()
+        )
+
+    def _published_capability_valid(self) -> bool:
+        published = self._settings.published_analysis_max_seconds
+        if published == 60:
+            return True
+        if published != 300 or not self._settings.visual_fallback_enabled:
+            return False
+        receipt_json = self._settings.provider_canary_receipt_json.strip()
+        return (
+            validate_five_minute_canary_receipt_json(
+                receipt_json,
+                expected_commit_sha=self._settings.deployment_commit_sha,
+            )
+            if receipt_json
+            else validate_five_minute_canary_receipt(
+                self._settings.provider_canary_receipt_path,
+                expected_commit_sha=self._settings.deployment_commit_sha,
+            )
         )
 
     def _temp_storage_available(self) -> bool:

@@ -286,7 +286,8 @@ def build_default_app() -> FastAPI:
         web_static_root=settings.web_static_root,
         trusted_proxy_cidrs=settings.trusted_proxy_cidr_list,
         local_upload_enabled=settings.local_upload_enabled,
-        local_analysis_max_seconds=settings.local_analysis_max_seconds,
+        local_analysis_max_seconds=settings.published_analysis_max_seconds,
+        accepted_local_analysis_max_seconds=settings.local_analysis_max_seconds,
         local_upload_max_bytes=settings.local_upload_max_bytes,
         local_upload_temp_root=temp_root,
     )

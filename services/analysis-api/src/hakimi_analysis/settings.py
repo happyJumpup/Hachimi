@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     run_timeout_seconds: int = Field(default=180, ge=1)
     local_upload_enabled: bool = True
     local_analysis_max_seconds: float = Field(default=300, gt=0, le=300)
+    published_analysis_max_seconds: float = Field(default=60, gt=0, le=300)
+    provider_canary_receipt_path: Path | None = None
+    provider_canary_receipt_json: str = ""
+    deployment_commit_sha: str = ""
     local_upload_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
     analysis_speech_timeout_seconds: float = Field(default=45.0, gt=0)
     analysis_evidence_deadline_seconds: float = Field(default=170.0, gt=0)
@@ -77,6 +81,8 @@ class Settings(BaseSettings):
             raise ValueError("visual chunk overlap must be shorter than the chunk")
         if self.visual_fallback_enabled and not self._fallback_fields_present():
             raise ValueError("visual fallback requires Qwen and private COS configuration")
+        if self.published_analysis_max_seconds > self.local_analysis_max_seconds:
+            raise ValueError("published analysis duration cannot exceed the code capability")
         return self
 
     def _fallback_fields_present(self) -> bool:

@@ -15,13 +15,21 @@ LATEST_ALLOWED_DEMO_END = datetime.fromisoformat("2026-07-25T00:00:00+08:00")
 EXPECTED_SECRET_KEYS = [
     "ACCESS_COOKIE_SECRET",
     "ARK_API_KEY",
+    "COS_SECRET_ID",
+    "COS_SECRET_KEY",
     "JUDGE_ACCESS_CODE",
+    "QWEN_API_KEY",
     "VOLC_ASR_API_KEY",
 ]
 EXPECTED_NONSECRET_KEYS = [
     "ANALYSIS_CHUNK_TIMEOUT_SECONDS",
-    "ANALYSIS_EVIDENCE_TIMEOUT_SECONDS",
+    "ANALYSIS_CLEANUP_RESERVE_SECONDS",
+    "ANALYSIS_EVIDENCE_DEADLINE_SECONDS",
+    "ANALYSIS_MAX_ATTEMPTS_PER_VISUAL_PROVIDER",
+    "ANALYSIS_MAX_VISUAL_CALLS",
+    "ANALYSIS_MAX_VISUAL_CHUNKS",
     "ANALYSIS_PROVIDER",
+    "ANALYSIS_SPEECH_TIMEOUT_SECONDS",
     "ANALYSIS_VISUAL_CHUNK_SECONDS",
     "ANALYSIS_VISUAL_OVERLAP_SECONDS",
     "APP_ENV",
@@ -29,16 +37,27 @@ EXPECTED_NONSECRET_KEYS = [
     "ARK_MODEL_ID",
     "ARK_VISUAL_MODEL_ID",
     "CORS_ORIGINS",
+    "COS_BUCKET",
+    "COS_LIFECYCLE_DAYS",
+    "COS_OBJECT_PREFIX",
+    "COS_REGION",
+    "COS_SIGNED_URL_TTL_SECONDS",
+    "DEPLOYMENT_COMMIT_SHA",
     "FFMPEG_BUILD_RECEIPT_PATH",
     "IMAGEIO_FFMPEG_EXE",
     "JUDGE_ANALYSIS_CONCURRENCY",
     "LOCAL_ANALYSIS_MAX_SECONDS",
     "LOCAL_UPLOAD_ENABLED",
     "LOCAL_UPLOAD_MAX_BYTES",
+    "PROVIDER_CANARY_RECEIPT_JSON",
+    "PUBLISHED_ANALYSIS_MAX_SECONDS",
     "PUBLIC_ANALYSIS_CONCURRENCY",
+    "QWEN_BASE_URL",
+    "QWEN_VISUAL_MODEL_ID",
     "RUN_TIMEOUT_SECONDS",
     "RUN_TTL_SECONDS",
     "TRUSTED_PROXY_CIDRS",
+    "VISUAL_FALLBACK_ENABLED",
     "VOLC_ASR_RESOURCE_ID",
     "VOLC_ASR_URL",
     "WEB_STATIC_ROOT",
@@ -152,10 +171,18 @@ def validate(plan: dict[str, Any]) -> None:
             "run_timeout_seconds",
             "local_upload_enabled",
             "local_analysis_max_seconds",
+            "published_analysis_max_seconds",
             "local_upload_max_bytes",
+            "analysis_speech_timeout_seconds",
+            "analysis_evidence_deadline_seconds",
+            "analysis_cleanup_reserve_seconds",
             "analysis_chunk_timeout_seconds",
             "analysis_visual_chunk_seconds",
             "analysis_visual_overlap_seconds",
+            "analysis_max_visual_chunks",
+            "analysis_max_attempts_per_visual_provider",
+            "analysis_max_visual_calls",
+            "visual_fallback_enabled",
             "unauthenticated_page_browse",
             "judge_code_required_for_paid_analysis",
             "anonymous_paid_analysis",
@@ -174,6 +201,10 @@ def validate(plan: dict[str, Any]) -> None:
             "ffmpeg_receipt_path",
             "smoke_annotations_path",
             "must_verify_ffmpeg_receipt",
+            "private_cos_required_for_fallback",
+            "cos_signed_url_ttl_seconds",
+            "cos_lifecycle_days",
+            "cos_server_side_encryption_required",
             "assets_deferred_until_content_approval",
         },
         "asset_contract",
@@ -200,7 +231,9 @@ def validate(plan: dict[str, Any]) -> None:
             "concurrent_judge_requests",
             "over_capacity_http_status",
             "memory_pressure_observed",
-            "rollback_smoke",
+            "fallback_and_circuit_smoke",
+            "cos_active_cleanup_verified",
+            "rollback_sequence",
         },
         "release_gates.public_canary",
     )
@@ -291,14 +324,30 @@ def validate(plan: dict[str, Any]) -> None:
         fail("local upload must remain enabled")
     if runtime.get("local_analysis_max_seconds") != 300:
         fail("local analysis must remain capped at 300 seconds")
+    if runtime.get("published_analysis_max_seconds") != 60:
+        fail("the foundation must publish only 60 seconds before canary receipt")
     if runtime.get("local_upload_max_bytes") != 268435456:
         fail("local upload must remain capped at 256 MiB")
     if runtime.get("analysis_chunk_timeout_seconds") != 20:
         fail("visual chunk timeout must remain 20 seconds")
+    if runtime.get("analysis_speech_timeout_seconds") != 45:
+        fail("speech timeout must remain 45 seconds")
+    if runtime.get("analysis_evidence_deadline_seconds") != 170:
+        fail("evidence deadline must remain 170 seconds")
+    if runtime.get("analysis_cleanup_reserve_seconds") != 10:
+        fail("cleanup reserve must remain 10 seconds")
     if runtime.get("analysis_visual_chunk_seconds") != 60:
         fail("visual chunks must remain 60 seconds")
     if runtime.get("analysis_visual_overlap_seconds") != 10:
         fail("visual chunk overlap must remain 10 seconds")
+    if runtime.get("analysis_max_visual_chunks") != 6:
+        fail("visual chunk count must remain capped at six")
+    if runtime.get("analysis_max_attempts_per_visual_provider") != 2:
+        fail("visual provider attempts must remain capped at two")
+    if runtime.get("analysis_max_visual_calls") != 12:
+        fail("visual calls must remain capped at twelve")
+    if runtime.get("visual_fallback_enabled") is not True:
+        fail("deployment C must enable the verified cross-provider fallback")
     if runtime.get("active_run_state") != "single-process-memory":
         fail("run-state contract changed without an architecture decision")
     if runtime.get("raw_media_persistence") != "forbidden":
@@ -317,6 +366,14 @@ def validate(plan: dict[str, Any]) -> None:
         fail("content assets must remain deferred")
     if assets.get("must_verify_ffmpeg_receipt") is not True:
         fail("FFmpeg build receipt verification must remain enabled")
+    if assets.get("private_cos_required_for_fallback") is not True:
+        fail("visual fallback must require private COS")
+    if assets.get("cos_signed_url_ttl_seconds") != 600:
+        fail("COS signed URLs must expire after 600 seconds")
+    if assets.get("cos_lifecycle_days") != 1:
+        fail("COS lifecycle must remain one day")
+    if assets.get("cos_server_side_encryption_required") is not True:
+        fail("COS server-side encryption must be required")
 
     if private_gates != {
         "immutable_image_verified": True,
@@ -332,7 +389,9 @@ def validate(plan: dict[str, Any]) -> None:
         "concurrent_judge_requests": 3,
         "over_capacity_http_status": 429,
         "memory_pressure_observed": True,
-        "rollback_smoke": True,
+        "fallback_and_circuit_smoke": True,
+        "cos_active_cleanup_verified": True,
+        "rollback_sequence": "B-C-B-C",
     }:
         fail("release gates must include public, capacity, and rollback evidence")
     if rollback != {

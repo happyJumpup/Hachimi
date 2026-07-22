@@ -435,6 +435,57 @@ def test_production_ready_verifies_enabled_qwen_cos_fallback(tmp_path: Path) -> 
     assert ready.check() is None
 
 
+def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
+    tmp_path: Path,
+) -> None:
+    commit_sha = "a" * 40
+    receipt = tmp_path / "provider-canary.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "profile_version": "five-minute-production-v1",
+                "commit_sha": commit_sha,
+                "completed_at": "2026-07-22T01:00:00Z",
+                "private_smoke_passed": True,
+                "three_way_concurrency_passed": True,
+                "cancellation_cleanup_passed": True,
+                "circuit_breaker_passed": True,
+                "cos_cleanup_passed": True,
+                "rollback_sequence": "B-C-B-C",
+                "published_max_seconds": 300,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fallback_settings = {
+        "visual_fallback_enabled": True,
+        "qwen_api_key": "qwen-key",
+        "cos_secret_id": "cos-id",
+        "cos_secret_key": "cos-key",
+        "cos_region": "ap-guangzhou",
+        "cos_bucket": "private-bucket-123",
+        "published_analysis_max_seconds": 300,
+        "deployment_commit_sha": commit_sha,
+    }
+    blocked, _ = configured_readiness(
+        tmp_path / "blocked",
+        settings_overrides=fallback_settings,
+        fallback_probe=lambda: True,
+    )
+    released, _ = configured_readiness(
+        tmp_path / "released",
+        settings_overrides={
+            **fallback_settings,
+            "provider_canary_receipt_path": receipt,
+        },
+        fallback_probe=lambda: True,
+    )
+
+    assert blocked.check() == "competition_configuration_invalid"
+    assert released.check() is None
+
+
 @pytest.mark.asyncio
 async def test_production_ready_requires_built_web_entrypoint(tmp_path: Path) -> None:
     readiness, _ = configured_readiness(tmp_path, include_web_root=False)

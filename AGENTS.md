@@ -39,18 +39,20 @@
 - Do not copy source code or components from the GPL-3.0 historical demo.
 - Analysis starts only after an explicit user action and covers the complete
   selected source or an explicit coverage-gap retry range. The product target
-  is at most 10 minutes, but each deployment must expose and enforce its
-  measured capability; the prototype default remains 60 seconds until longer
-  inputs pass benchmark and recovery verification. Page load, playback, and
-  seeking must not auto-create a run.
+  for this release is at most 5 minutes. The code Profile may accept 300
+  seconds while a deployment still publishes 60 seconds; `/capabilities` must
+  expose the smaller, Canary-verified value. Only a receipt bound to the
+  deployed commit may unlock 300 seconds. Page load, playback, and seeking must
+  not auto-create a run.
 - Progress uses real processed source time and read-only intermediate discovery.
   Reliable partial results must expose coverage gaps and a per-gap retry; a
   provider or system failure must never be presented as “no action evidence.”
 - Source loops use an 展开式执行时间线 such as `A1 → B1 → A2 → B2`.
   Do not introduce nested loop state or use sets as a substitute for rounds.
-- Keep the current production Provider. The completed native audio/video
-  benchmark did not select a Seed/Qwen quality winner or validate the long-video
-  production route; a switch requires new reviewed evidence and an ADR.
+- Keep visual model selection evidence-driven. Seed Mini, Seed Lite, and Qwen3-VL
+  are candidates in the isolated production-conformance runner; code support is
+  not a winner. Cross-vendor fallback must remain disabled until Qwen, private
+  COS cleanup, the frozen quality gates, and CloudBase Canary all pass.
 - TrainPal is the frozen product, Agent, and cat-coach identity. GYMTI question
   wording and final cat assets remain pending, but the current product contract,
   four-value field provenance (`video | rule | personalized | user`),
@@ -81,7 +83,9 @@
   transcripts, prompts, and model responses are transient; delete them on
   success, partial completion, cancellation, and failure.
 - Logs may contain run/source IDs, stages, timing, version identifiers, provider
-  request IDs, and redacted error codes only.
+  request IDs, redacted error codes, provider/adapter identifiers, chunk/attempt
+  counters, input byte counts, and phase durations only. Never log a COS object
+  key or signed URL.
 
 ## Verification
 

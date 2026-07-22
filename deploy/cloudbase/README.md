@@ -12,7 +12,7 @@
 | CPU / 内存 | 2 vCPU / 4 GiB |
 | 实例数 | 非评审时 0；评审时 1；最大 1 |
 | 应用 / 平台超时 | 180 秒 / 至少 240 秒 |
-| 本地上传 | 完整文件不超过 300 秒、256 MiB |
+| 本地上传 | 代码与私有验收不超过 300 秒、256 MiB；公开默认 60 秒 |
 | 视觉策略 | 60 秒分块、10 秒重叠、单块 20 秒、顺序执行 |
 | 真实分析 | 匿名 0 并发；评委码 3 并发 |
 | 总预算 | 300 元人民币硬上限 |
@@ -26,6 +26,8 @@
 
 - `ARK_API_KEY`
 - `VOLC_ASR_API_KEY`
+- `QWEN_API_KEY`
+- 私有 COS 的 `COS_SECRET_ID` 与 `COS_SECRET_KEY`
 - 新生成且彼此独立的 `JUDGE_ACCESS_CODE`
 - 新生成的 `ACCESS_COOKIE_SECRET`
 
@@ -36,10 +38,21 @@ APP_ENV=production
 ANALYSIS_PROVIDER=cloud
 LOCAL_UPLOAD_ENABLED=true
 LOCAL_ANALYSIS_MAX_SECONDS=300
+PUBLISHED_ANALYSIS_MAX_SECONDS=60
 LOCAL_UPLOAD_MAX_BYTES=268435456
+ANALYSIS_SPEECH_TIMEOUT_SECONDS=45
+ANALYSIS_EVIDENCE_DEADLINE_SECONDS=170
+ANALYSIS_CLEANUP_RESERVE_SECONDS=10
 ANALYSIS_VISUAL_CHUNK_SECONDS=60
 ANALYSIS_VISUAL_OVERLAP_SECONDS=10
 ANALYSIS_CHUNK_TIMEOUT_SECONDS=20
+ANALYSIS_MAX_VISUAL_CHUNKS=6
+ANALYSIS_MAX_ATTEMPTS_PER_VISUAL_PROVIDER=2
+ANALYSIS_MAX_VISUAL_CALLS=12
+VISUAL_FALLBACK_ENABLED=true
+QWEN_VISUAL_MODEL_ID=qwen3-vl-flash-2026-01-22
+COS_SIGNED_URL_TTL_SECONDS=600
+COS_LIFECYCLE_DAYS=1
 RUN_TIMEOUT_SECONDS=180
 PUBLIC_ANALYSIS_CONCURRENCY=0
 JUDGE_ANALYSIS_CONCURRENCY=3
@@ -68,7 +81,11 @@ docker build --tag trainpal-five-minute:local .
 
 随后在 Bash 环境执行 `deploy/verify-competition-image.sh trainpal-five-minute:local`。通过项包括逐层无秘密/媒体扫描、唯一 FFmpeg 与收据、非 root 用户、容器启动、`/health`、SPA 根路由和 history fallback。
 
-## A / B 发布顺序
+`LOCAL_ANALYSIS_MAX_SECONDS` 是代码和私有验收上限；`GET /api/v1/capabilities` 只返回 `PUBLISHED_ANALYSIS_MAX_SECONDS`。私有评委会话可以在公开值保持 60 秒时验收五分钟，避免“必须先公开 300 才能验证 300”的循环依赖。最终发布 300 秒时，向 `PROVIDER_CANARY_RECEIPT_JSON` 注入严格脱敏收据，并让 `DEPLOYMENT_COMMIT_SHA` 等于被验收镜像的完整提交 SHA；收据与 commit 不匹配时 `/ready` 失败关闭。
+
+Qwen 备用路线要求 Bucket 私有、服务端加密、1 天生命周期和 10 分钟只读签名 URL。应用只为失败视觉块创建随机对象，重试复用同一对象，所有终态主动删除；清理失败后停止开放新的备用分析。
+
+## B / C 发布顺序
 
 1. 发布人先把真实环境 ID放入当前 PowerShell 进程的专用变量，不能写入仓库或回执：
 
@@ -76,7 +93,7 @@ docker build --tag trainpal-five-minute:local .
    $env:TRAINPAL_CLOUDBASE_ENV_ID = '<operator-supplied>'
    ```
 
-2. 在私有/OA 访问状态下，以交互确认方式部署后端基建版本 A：
+2. 在私有/OA 访问状态下，以交互确认方式部署 Ark-only 版本 B：
 
    ```powershell
    npx --yes --package @cloudbase/cli@3.6.4 tcb `
@@ -88,13 +105,15 @@ docker build --tag trainpal-five-minute:local .
      --source .
    ```
 
-   不使用 `--force`。交互页必须再次核对目标服务、访问方式和价格影响。源码构建日志通过后，先验证容器、签名 FFmpeg、`/health`、`/ready`、SSE 和一条真实短视频；版本 A 及其兼容环境配置必须保留。
+   不使用 `--force`。交互页必须再次核对目标服务、访问方式和价格影响。源码构建日志通过后，先验证容器、签名 FFmpeg、`/health`、`/ready`、SSE、一条真实短视频和一条私有五分钟素材；版本 B 及其兼容环境配置必须保留。
 
-3. 两个前端任务提交后，重新生成 OpenAPI 类型、跑完整前端/E2E 和窄屏检查，使用 `--traffic` 部署版本 B。公共入口仍保持未宣布状态。
+3. Provider conformance 证明主路线和 Qwen 备用路线都越过质量门槛后，部署启用顺序降级的版本 C。验证可降级错误、有效空结果不降级、熔断、取消以及私有 COS 主动删除。公共入口仍保持未宣布状态，`PUBLISHED_ANALYSIS_MAX_SECONDS` 仍为 60。
 
-4. 全部私有门槛通过后才打开短时公网 Canary：第二浏览器可浏览；评委码真实分析成功；三个并发成功、第四个稳定 429；终态无媒体残留；实际完成 B→A→B 回滚。任一门槛失败就关闭入口，不发布评委链接。
+4. 全部私有门槛通过后执行短时未公布 Canary：第二浏览器可浏览；评委码真实五分钟分析成功；三个并发成功、第四个稳定 429；取消、熔断、COS 清理全部通过；实际完成 `B→C→B→C`。任一门槛失败就关闭入口，不发布 300 秒能力。
 
-5. 仅在评委使用时把最小实例数设为 1，其余时间恢复 0。费用接近 300 元时先把真实分析并发归零；到最晚关闭时间禁用公共入口并缩容。
+5. 把上述结果写成只含布尔门禁、时间和 commit 的收据，重新部署同一个版本 C 镜像，只更新 `PROVIDER_CANARY_RECEIPT_JSON`、`DEPLOYMENT_COMMIT_SHA` 与 `PUBLISHED_ANALYSIS_MAX_SECONDS=300`。确认 `/ready` 和 `/capabilities` 后才向队友宣布五分钟能力。
+
+6. 仅在评委使用时把最小实例数设为 1，其余时间恢复 0。费用接近 300 元时先把真实分析并发归零；到最晚关闭时间禁用公共入口并缩容。
 
 ## 脱敏回执
 

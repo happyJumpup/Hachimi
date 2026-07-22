@@ -1,5 +1,7 @@
 # 竞赛版脱敏 Smoke 记录
 
+> 历史记录：本文的 60 秒联系表与 11.5 秒预算只描述 2026-07-21 的旧链路，不是当前生产合同。当前合同见 [ADR-0031](../adr/0031-deep-content-provider-and-sequential-visual-fallback.md) 和[内容理解 Provider 生产设计](../technical/content-understanding-provider-production.md)。
+
 本文件只记录发布可复核的结论和耗时，不保存视频、帧、音频、转录、候选内容、模型原始响应、请求 Trace 或访问凭据。
 
 ## 2026-07-21：本地单来源真实双云

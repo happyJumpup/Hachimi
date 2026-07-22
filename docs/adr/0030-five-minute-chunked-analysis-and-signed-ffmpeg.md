@@ -1,5 +1,7 @@
 # ADR-0030：竞赛版使用五分钟分块分析与签名源码构建 FFmpeg
 
+> Provider 内部 Prompt Contract、证据时钟、顺序视觉降级以及“代码 300 秒／公开默认 60 秒”的发布闸门已由 [ADR-0031](0031-deep-content-provider-and-sequential-visual-fallback.md) 进一步收敛；本 ADR 的连续分块与签名 FFmpeg 决策继续有效。
+
 状态：已接受（2026-07-23）
 
 ## 背景
