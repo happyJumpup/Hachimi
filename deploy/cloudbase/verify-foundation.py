@@ -12,6 +12,7 @@ from typing import Any
 EXPECTED_ENVIRONMENT = "bizhao-d8grp8yqd81759fbb"
 EXPECTED_REGION = "ap-shanghai"
 EXPECTED_SERVICE = "trainpal-demo"
+LATEST_ALLOWED_DEMO_END = datetime.fromisoformat("2026-07-25T00:00:00+08:00")
 EXPECTED_SECRET_KEYS = [
     "ACCESS_COOKIE_SECRET",
     "ARK_API_KEY",
@@ -71,6 +72,10 @@ def expect_keys(value: Any, expected: set[str], path: str) -> dict[str, Any]:
         unknown = sorted(actual - expected)
         fail(f"{path} schema mismatch; missing={missing}, unknown={unknown}")
     return value
+
+
+def is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def validate(plan: dict[str, Any]) -> None:
@@ -235,7 +240,7 @@ def validate(plan: dict[str, Any]) -> None:
 
     cpu = capacity.get("cpu_cores")
     memory = capacity.get("memory_gib")
-    if not isinstance(cpu, (int, float)) or not isinstance(memory, (int, float)):
+    if not is_number(cpu) or not is_number(memory):
         fail("CPU and memory must be numeric")
     if cpu != 2 or memory != 4:
         fail("judging capacity must remain 2 vCPU and 4 GiB")
@@ -354,13 +359,13 @@ def validate(plan: dict[str, Any]) -> None:
     ccu_per_instance = budget.get("ccu_per_warm_instance")
     warm_hours = budget.get("maximum_warm_hours")
     public_hours = budget.get("maximum_public_window_hours")
-    if not isinstance(price, (int, float)) or not 0 < price <= 1:
+    if not is_number(price) or not 0 < price <= 1:
         fail("CCU price assumption must be positive and conservatively bounded")
     if ccu_per_instance != capacity["cpu_cores"]:
         fail("warm instance CCU must match the configured CPU cores")
-    if not isinstance(warm_hours, (int, float)) or warm_hours <= 0:
+    if not is_number(warm_hours) or warm_hours <= 0:
         fail("warm window must be positive")
-    if not isinstance(public_hours, (int, float)) or public_hours < warm_hours:
+    if not is_number(public_hours) or public_hours < warm_hours:
         fail("public window must be at least as long as the warm window")
     calculated_compute_ceiling = (
         budget.get("assumed_ccu_price_cny_per_hour", 0)
@@ -397,6 +402,8 @@ def validate(plan: dict[str, Any]) -> None:
         fail("competition timestamps must include UTC offsets")
     if confirmed_demo_end <= submission_deadline:
         fail("confirmed demo end must be later than the submission deadline")
+    if confirmed_demo_end > LATEST_ALLOWED_DEMO_END:
+        fail("confirmed demo end exceeds the user-authorized latest access time")
 
     serialized = json.dumps(plan, ensure_ascii=False).lower()
     for marker in SECRET_VALUE_MARKERS:
