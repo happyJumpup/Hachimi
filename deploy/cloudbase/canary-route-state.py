@@ -11,10 +11,29 @@ class RouteStateError(ValueError):
     pass
 
 
+ACTIVE_VERSION_STATUSES = {"normal", "running"}
+
+
 def _required_object(payload: dict[str, Any], key: str) -> dict[str, Any]:
     value = payload.get(key)
     if not isinstance(value, dict):
         raise RouteStateError("release order is missing required state")
+    return value
+
+
+def _required_list(payload: dict[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        raise RouteStateError("release state is missing a required list")
+    return value
+
+
+def _optional_list(payload: dict[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise RouteStateError("release state has an invalid optional list")
     return value
 
 
@@ -38,6 +57,33 @@ def _required_ratio(payload: dict[str, Any], key: str) -> int:
     return ratio
 
 
+def _verify_percentage_routes(
+    online_versions: list[Any],
+    *,
+    stable_version: str,
+    candidate_version: str,
+    require_stable_route: bool,
+) -> None:
+    ratios: dict[str, int] = {}
+    for item in online_versions:
+        if not isinstance(item, dict):
+            raise RouteStateError("online route state is invalid")
+        version_name = _required_string(item, "VersionName")
+        if version_name in ratios:
+            raise RouteStateError("online route state contains duplicate versions")
+        ratio = _required_ratio(item, "FlowRatio")
+        ratios[version_name] = ratio
+        if version_name == candidate_version and ratio != 0:
+            raise RouteStateError("candidate unexpectedly received percentage traffic")
+        if version_name not in {stable_version, candidate_version} and ratio != 0:
+            raise RouteStateError("an unknown version received percentage traffic")
+    if require_stable_route:
+        if ratios.get(stable_version) != 100:
+            raise RouteStateError("online traffic is not stable 100 and candidate 0")
+        if ratios.get(candidate_version, 0) != 0:
+            raise RouteStateError("online traffic is not stable 100 and candidate 0")
+
+
 def verify_route_state(payload: Any) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise RouteStateError("route verification input must be a JSON object")
@@ -57,46 +103,76 @@ def verify_route_state(payload: Any) -> dict[str, object]:
         raise RouteStateError("stable release identity is not verified")
     if candidate_version == stable_version:
         raise RouteStateError("candidate release identity is not distinct")
-    if stable.get("Status") != "running":
+    if stable.get("Status") not in ACTIVE_VERSION_STATUSES:
         raise RouteStateError("stable release is not running")
-    if mode == "enable" and candidate.get("Status") != "running":
+    if mode == "enable" and candidate.get("Status") not in ACTIVE_VERSION_STATUSES:
         raise RouteStateError("candidate release is not running")
-    if candidate.get("Remark") != f"git:{candidate_commit_sha[:12]}":
+    if mode == "enable" and payload.get("candidate_identity_verified") is not True:
         raise RouteStateError("candidate release identity is not verified")
-    if stable.get("IsDefaultPriority") is not True:
-        raise RouteStateError("stable release is not the default route")
-    if candidate.get("IsDefaultPriority") is not False:
-        raise RouteStateError("candidate release unexpectedly became the default route")
-
-    stable_ratio = _required_ratio(stable, "FlowRatio")
-    candidate_ratio = _required_ratio(candidate, "FlowRatio")
-    if stable_ratio != 100 or candidate_ratio != 0:
-        raise RouteStateError("release traffic is not stable 100 and candidate 0")
-
+    candidate_remark = candidate.get("Remark")
+    if (
+        isinstance(candidate_remark, str)
+        and candidate_remark
+        and not candidate_remark.startswith(f"git:{candidate_commit_sha[:12]}")
+    ):
+        raise RouteStateError("candidate release identity is inconsistent")
     expected_traffic_type = "HEADERS" if mode == "enable" else "FLOW"
     if order.get("TrafficType") != expected_traffic_type:
         raise RouteStateError("release traffic type is not in the requested state")
+
+    online_versions = _required_list(payload, "online_versions")
+    if mode == "enable":
+        if payload.get("stable_route_verified_before_mutation") is not True:
+            raise RouteStateError("stable traffic was not verified before mutation")
+        # CloudBase currently omits OnlineVersionInfos while HEADERS routing is
+        # active. If it returns entries, they must still be percentage-safe.
+        _verify_percentage_routes(
+            online_versions,
+            stable_version=stable_version,
+            candidate_version=candidate_version,
+            require_stable_route=bool(online_versions),
+        )
+        if _required_ratio(stable, "FlowRatio") != 0:
+            raise RouteStateError("stable version has unexpected header-mode traffic")
+        if _required_ratio(candidate, "FlowRatio") != 0:
+            raise RouteStateError("candidate unexpectedly received percentage traffic")
+    else:
+        _verify_percentage_routes(
+            online_versions,
+            stable_version=stable_version,
+            candidate_version=candidate_version,
+            require_stable_route=True,
+        )
+        if _required_ratio(candidate, "FlowRatio") != 0:
+            raise RouteStateError("candidate still has percentage traffic")
 
     result: dict[str, object] = {
         "mode": mode,
         "traffic_type": expected_traffic_type,
         "stable_version": stable_version,
         "candidate_version": candidate_version,
-        "stable_flow_ratio": stable_ratio,
-        "candidate_flow_ratio": candidate_ratio,
+        "stable_flow_ratio": 100,
+        "candidate_flow_ratio": 0,
         "routing_header_name": None,
         "routing_header_value_sha256": None,
     }
     if mode == "enable":
         header_name = _required_string(payload, "routing_header_name")
         header_value = _required_string(payload, "routing_header_value")
-        route = _required_object(candidate, "UrlParam")
+        traffic_values = _required_list(order, "TrafficTypeValues")
+        if len(traffic_values) != 1 or not isinstance(traffic_values[0], dict):
+            raise RouteStateError("candidate header route is not uniquely active")
+        route = traffic_values[0]
         if route.get("Key") != header_name or route.get("Value") != header_value:
             raise RouteStateError("candidate header route is not active")
         result["routing_header_name"] = header_name
         result["routing_header_value_sha256"] = hashlib.sha256(
             header_value.encode("utf-8")
         ).hexdigest()
+    else:
+        traffic_values = _optional_list(order, "TrafficTypeValues")
+        if traffic_values:
+            raise RouteStateError("candidate header route is still active")
     return result
 
 

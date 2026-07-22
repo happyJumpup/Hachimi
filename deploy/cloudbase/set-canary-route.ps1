@@ -170,23 +170,69 @@ if ($stableVersion -ne $ExpectedStableVersion) {
 if (-not $candidateVersion -or $candidateVersion -eq $stableVersion) {
     throw 'CloudBase does not expose a distinct gray candidate version.'
 }
-$expectedRemark = "git:$($ExpectedCandidateCommitSha.Substring(0, 12))"
-if ([string](Get-PropertyValue $candidate 'Remark') -ne $expectedRemark) {
-    throw 'The gray candidate does not match the expected Git commit.'
+$candidateIdentityVerified = $Mode -eq 'restore'
+if ($Mode -eq 'enable') {
+    $candidateDetail = Invoke-TencentApi `
+        -Service 'tcbr' `
+        -Version '2022-02-17' `
+        -Action 'DescribeVersionDetail' `
+        -Payload @{
+            EnvId = $EnvironmentId
+            ServerName = $ServiceName
+            VersionName = $candidateVersion
+        } `
+        -Credential $credential
+    $candidateEnvironment = Get-PropertyValue $candidateDetail 'EnvParams'
+    if ($candidateEnvironment -is [string]) {
+        try {
+            $candidateEnvironment = $candidateEnvironment | ConvertFrom-Json
+        } catch {
+            throw 'The gray candidate environment is not valid JSON.'
+        }
+    }
+    if (
+        [string](Get-PropertyValue $candidateDetail 'Name') -ne $candidateVersion -or
+        [string](Get-PropertyValue $candidateEnvironment 'APP_RELEASE_SHA') -ne
+            $ExpectedCandidateCommitSha
+    ) {
+        throw 'The gray candidate does not match the expected Git commit.'
+    }
+    $candidateIdentityVerified = $true
 }
 if (
     $Mode -eq 'enable' -and
-    [string](Get-PropertyValue $candidate 'Status') -ne 'running'
+    @('normal', 'running') -notcontains [string](Get-PropertyValue $candidate 'Status')
 ) {
     throw 'The gray candidate is not running.'
 }
+$serviceDetail = $null
+$stableRouteVerifiedBeforeMutation = $false
 if ($Mode -eq 'enable') {
+    $serviceDetail = Invoke-TencentApi `
+        -Service 'tcbr' `
+        -Version '2022-02-17' `
+        -Action 'DescribeCloudRunServerDetail' `
+        -Payload @{ EnvId = $EnvironmentId; ServerName = $ServiceName } `
+        -Credential $credential
+    $onlineVersions = @(Get-PropertyValue $serviceDetail 'OnlineVersionInfos')
+    $positiveRoutes = @(
+        $onlineVersions | Where-Object {
+            [int](Get-PropertyValue $_ 'FlowRatio') -gt 0
+        }
+    )
+    $stableRoutes = @(
+        $positiveRoutes | Where-Object {
+            [string](Get-PropertyValue $_ 'VersionName') -eq $ExpectedStableVersion
+        }
+    )
     if (
-        [int](Get-PropertyValue $stable 'FlowRatio') -ne 100 -or
-        [int](Get-PropertyValue $candidate 'FlowRatio') -ne 0
+        $positiveRoutes.Count -ne 1 -or
+        $stableRoutes.Count -ne 1 -or
+        [int](Get-PropertyValue $stableRoutes[0] 'FlowRatio') -ne 100
     ) {
         throw 'Private header routing can only start from stable 100 and candidate 0.'
     }
+    $stableRouteVerifiedBeforeMutation = $true
 }
 
 $policyInput = [ordered]@{
@@ -252,20 +298,44 @@ for ($attempt = 1; $attempt -le 30; $attempt++) {
         -Payload @{ EnvId = $EnvironmentId; ServerName = $ServiceName } `
         -Credential $credential
     $observedOrder = Get-PropertyValue $observedResponse 'ReleaseOrderInfo'
+    $observedDetail = Invoke-TencentApi `
+        -Service 'tcbr' `
+        -Version '2022-02-17' `
+        -Action 'DescribeCloudRunServerDetail' `
+        -Payload @{ EnvId = $EnvironmentId; ServerName = $ServiceName } `
+        -Credential $credential
+    $observedOnlineVersions = @(
+        foreach ($version in @(Get-PropertyValue $observedDetail 'OnlineVersionInfos')) {
+            [ordered]@{
+                VersionName = [string](Get-PropertyValue $version 'VersionName')
+                FlowRatio = [int](Get-PropertyValue $version 'FlowRatio')
+            }
+        }
+    )
     $stateInput = [ordered]@{
         mode = $Mode
         stable_version = $ExpectedStableVersion
         candidate_commit_sha = $ExpectedCandidateCommitSha
+        candidate_identity_verified = $candidateIdentityVerified
+        stable_route_verified_before_mutation = $stableRouteVerifiedBeforeMutation
+        online_versions = $observedOnlineVersions
         release_order = $observedOrder
     }
     if ($Mode -eq 'enable') {
         $stateInput['routing_header_name'] = $RoutingHeaderName
         $stateInput['routing_header_value'] = $RoutingHeaderValue
     }
-    $stateJson = (
-        $stateInput | ConvertTo-Json -Compress -Depth 30
-    ) | & python (Join-Path $PSScriptRoot 'canary-route-state.py') 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $stateJson = (
+            $stateInput | ConvertTo-Json -Compress -Depth 30
+        ) | & python (Join-Path $PSScriptRoot 'canary-route-state.py') 2>$null
+        $stateExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($stateExitCode -eq 0) {
         try {
             $verifiedState = $stateJson | ConvertFrom-Json
         } catch {
