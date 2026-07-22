@@ -4,6 +4,7 @@ import {
   AnalysisApiError,
   accessClient,
   analysisClient,
+  gymtiClient,
 } from '@/api/client'
 
 describe('API client', () => {
@@ -123,5 +124,75 @@ describe('API client', () => {
       credentials: 'same-origin',
       body: JSON.stringify({ access_code: 'review-code' }),
     }))
+  })
+
+  it('asks for a legal next question using stable ids only', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      question_id: 'q06_correction_tone',
+      source: 'llm',
+      model: 'deepseek-chat',
+      version: 'gymti-questionnaire.v1',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(gymtiClient.chooseNextQuestion({
+      questionnaireVersion: 'gymti-questionnaire.v1',
+      scoringVersion: 'gymti-questionnaire.v1',
+      answers: [{ questionId: 'q01_energy_after_work', optionId: 'q01_b_small_win' }],
+      candidateQuestionIds: ['q06_correction_tone', 'q07_intensity_view'],
+    })).resolves.toMatchObject({
+      questionId: 'q06_correction_tone',
+      source: 'llm',
+    })
+
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+    expect(payload).toEqual({
+      questionnaire_version: 'gymti-questionnaire.v1',
+      scoring_version: 'gymti-questionnaire.v1',
+      answered: [{
+        question_id: 'q01_energy_after_work',
+        option_id: 'q01_b_small_win',
+      }],
+      candidate_question_ids: ['q06_correction_tone', 'q07_intensity_view'],
+    })
+    expect(JSON.stringify(payload)).not.toMatch(/profile|height|weight|prompt|label/i)
+  })
+
+  it('maps a bounded result narrative into the persisted snapshot vocabulary', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      source: 'template',
+      model: null,
+      version: 'gymti-narrative.v1',
+      generated_at: '2026-07-23T00:08:00Z',
+      text: '你更适合把训练放进稳定的生活节奏里。',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(gymtiClient.createNarrative({
+      questionnaireVersion: 'gymti-questionnaire.v1',
+      scoringVersion: 'gymti-questionnaire.v1',
+      answers: [{ questionId: 'q01_energy_after_work', optionId: 'q01_b_small_win' }],
+      formalResultId: 'LIFE',
+      secondaryResultId: null,
+      coachStyleId: 'gentle',
+      reasonCodes: ['goal_vitality', 'preference_gentle'],
+    })).resolves.toEqual({
+      source: 'template',
+      model: null,
+      version: 'gymti-narrative.v1',
+      generatedAt: '2026-07-23T00:08:00Z',
+      text: '你更适合把训练放进稳定的生活节奏里。',
+    })
+
+    const fetchMock = vi.mocked(fetch)
+    const payload = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>
+    expect(payload).toMatchObject({
+      answered: [{
+        question_id: 'q01_energy_after_work',
+        option_id: 'q01_b_small_win',
+      }],
+    })
+    expect(payload).not.toHaveProperty('gymti_scores')
+    expect(payload).not.toHaveProperty('coach_style_scores')
+    expect(payload).not.toHaveProperty('excluded_coach_style_ids')
   })
 })

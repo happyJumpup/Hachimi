@@ -4,7 +4,7 @@ import { expect, test, type Page } from '@playwright/test'
 const widths = [320, 390, 768, 1440] as const
 const staticJourneyPages = [
   { path: '/train', heading: '训练' },
-  { path: '/personalize', heading: /调整这一次/ },
+  { path: '/personalize', heading: /今天本来计划训练/ },
   { path: '/mine', heading: '我的' },
   { path: '/training', heading: '还没有未完成训练' },
   { path: '/result/not-found', heading: '没有找到这条训练记录' },

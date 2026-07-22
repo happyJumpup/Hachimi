@@ -2,6 +2,11 @@ import Dexie, { type Table, type Transaction } from 'dexie'
 
 import type { DraftPlan, LocalMediaRecord } from '@/domain/types'
 import type {
+  CurrentGymtiResult,
+  GymtiAttempt,
+  PendingGymtiResult,
+} from '@/domain/gymti'
+import type {
   Preferences,
   SavedPlan,
   TrainingProfile,
@@ -17,6 +22,9 @@ export class HachimiDatabase extends Dexie {
   profiles!: Table<TrainingProfile, string>
   preferences!: Table<Preferences, string>
   localMedia!: Table<LocalMediaRecord, string>
+  gymtiAttempts!: Table<GymtiAttempt, string>
+  gymtiPendingResults!: Table<PendingGymtiResult, string>
+  gymtiResults!: Table<CurrentGymtiResult, string>
 
   constructor(name = 'hachimi-fitness') {
     super(name)
@@ -67,6 +75,19 @@ export class HachimiDatabase extends Dexie {
         transaction.table('sessions').toCollection().modify(addNullCoachStyle),
         transaction.table('records').toCollection().modify(addNullCoachStyle),
       ])
+    })
+
+    this.version(5).stores({
+      drafts: '&id, updatedAt, linkedPlanId',
+      plans: '&id, updatedAt, createdAt, name',
+      sessions: '&id, sessionId, status, updatedAt',
+      records: '&id, endedAt, outcome',
+      profiles: '&id, updatedAt',
+      preferences: '&id, updatedAt',
+      localMedia: '&sourceId, importedAt, updatedAt',
+      gymtiAttempts: '&id, attemptId, updatedAt',
+      gymtiPendingResults: '&id, resultId, updatedAt',
+      gymtiResults: '&id, resultId, updatedAt',
     })
   }
 }

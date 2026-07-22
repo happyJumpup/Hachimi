@@ -51,8 +51,10 @@
 - Keep the current production Provider. The completed native audio/video
   benchmark did not select a Seed/Qwen quality winner or validate the long-video
   production route; a switch requires new reviewed evidence and an ADR.
-- TrainPal is the frozen product, Agent, and cat-coach identity. GYMTI question
-  wording and final cat assets remain pending, but the current product contract,
+- TrainPal is the frozen product, Agent, and cat-coach identity. GYMTI v1
+  wording and the seven shared cat-coach assets are versioned product inputs;
+  change them through the questionnaire contract or asset pipeline rather than
+  ad hoc page copy. The current product contract,
   four-value field provenance (`video | rule | personalized | user`),
   non-blocking coach role, and five training presentation states are not
   deferred. Keep the current calorie contract until a separate decision changes

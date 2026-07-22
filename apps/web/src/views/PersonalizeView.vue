@@ -1,149 +1,542 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
-import { useDraftStore } from '@/stores/draft'
+import { AnalysisApiError, gymtiClient } from '@/api/client'
+import type { CoachStyleId } from '@/domain/coach'
+import type {
+  GymtiAnswerRef,
+  GymtiNarrativeSnapshot,
+  PendingGymtiResult,
+} from '@/domain/gymti'
+import {
+  deterministicLocalFallback,
+  evaluateGymtiAnswers,
+  GYMTI_QUESTIONNAIRE,
+  legalNextQuestionCandidates,
+  questionById,
+  type GymtiQuestion,
+} from '@/features/gymti'
+import GymtiFlowHeader from '@/features/gymti/GymtiFlowHeader.vue'
+import GymtiProfileStep from '@/features/gymti/GymtiProfileStep.vue'
+import GymtiQuestionStep from '@/features/gymti/GymtiQuestionStep.vue'
+import GymtiResultStep from '@/features/gymti/GymtiResultStep.vue'
+import GymtiStylePicker from '@/features/gymti/GymtiStylePicker.vue'
+import {
+  COACH_STYLE_PRESENTATION,
+  GYMTI_TYPE_PRESENTATION,
+} from '@/features/gymti/presentation'
+import type { GymtiQuestionViewModel } from '@/features/gymti/ui-types'
+import { useGymtiStore } from '@/stores/gymti'
 import { useLibraryStore } from '@/stores/library'
 
-const draft = useDraftStore()
+type FlowScreen = 'question' | 'profile' | 'result' | 'styles'
+
+const route = useRoute()
+const router = useRouter()
+const gymti = useGymtiStore()
 const library = useLibraryStore()
 
-const profileSummary = computed(() => {
-  const profile = library.profile
-  const entries = [
-    profile.age ? `${profile.age} 岁` : null,
-    profile.heightCm ? `${profile.heightCm} cm` : null,
-    profile.weightKg ? `${profile.weightKg} kg` : null,
-  ].filter(Boolean)
-  return entries.length ? entries.join(' · ') : '未填写（不影响使用）'
+const screen = ref<FlowScreen>('question')
+const initialized = ref(false)
+const busy = ref(false)
+const selectionFailure = ref(false)
+const profileSaveFailed = ref(false)
+const resultFailure = ref(false)
+const notice = ref('')
+const transitionLocked = ref(false)
+const resultActivationPending = ref(false)
+const failedSelectionAnswers = ref<GymtiAnswerRef[] | null>(null)
+let selectionRevision = 0
+let activeSelectionRevision: number | null = null
+
+const contract = GYMTI_QUESTIONNAIRE
+const originPath = computed(() => route.query.from === '/mine' ? '/mine' : '/plan')
+const currentQuestion = computed<GymtiQuestion | null>(() => {
+  const questionId = gymti.attempt?.currentQuestionId
+  return questionId ? questionById(contract, questionId) : null
+})
+const questionViewModel = computed<GymtiQuestionViewModel | null>(() => {
+  const question = currentQuestion.value
+  return question ? {
+    id: question.id,
+    prompt: question.prompt,
+    context: question.phase === 'terminal'
+      ? '这题没有“都不像”；选一个更接近你的方向，答完就会得到结果。'
+      : '选择更接近真实反应的一项，点击后会自动进入下一题。',
+    options: question.options.map((option) => ({
+      id: option.id,
+      label: option.label,
+    })),
+  } : null
+})
+const answeredOptionId = computed(() => {
+  const questionId = currentQuestion.value?.id
+  return gymti.attempt?.answers.find((answer) => answer.questionId === questionId)?.optionId ?? null
+})
+const questionPosition = computed(() => {
+  if (!gymti.attempt || !currentQuestion.value) return 1
+  const answeredIndex = gymti.attempt.answers.findIndex(
+    (answer) => answer.questionId === currentQuestion.value?.id,
+  )
+  return answeredIndex >= 0 ? answeredIndex + 1 : gymti.attempt.answers.length + 1
+})
+const headerLabel = computed(() => {
+  if (screen.value === 'result') return ''
+  if (screen.value === 'styles') return '修改风格'
+  if (screen.value === 'profile') return '训练档案'
+  return currentQuestion.value?.phase === 'terminal'
+    ? '最后一题'
+    : `第 ${questionPosition.value} 题`
+})
+const headerTitle = computed(() => screen.value === 'result' ? 'GYMTI · 测评结果' : 'GYMTI')
+const resultForDisplay = computed(() => {
+  const pending = gymti.pending
+  if (pending?.narrative) {
+    return {
+      ...pending,
+      narrative: pending.narrative,
+    }
+  }
+  return gymti.current
+})
+
+const invalidateActiveSelection = (): void => {
+  selectionRevision += 1
+  if (activeSelectionRevision !== null) {
+    activeSelectionRevision = null
+    busy.value = false
+  }
+}
+
+const settleSelection = (revision: number): void => {
+  if (activeSelectionRevision !== revision) return
+  activeSelectionRevision = null
+  busy.value = false
+  transitionLocked.value = false
+}
+
+const startAttempt = async (): Promise<void> => {
+  if (transitionLocked.value) return
+  invalidateActiveSelection()
+  failedSelectionAnswers.value = null
+  selectionFailure.value = false
+  profileSaveFailed.value = false
+  resultFailure.value = false
+  notice.value = ''
+  const firstQuestionId = contract.rules.foundationQuestionIds[0]
+  if (!firstQuestionId) throw new Error('GYMTI contract does not define a first question')
+  transitionLocked.value = true
+  busy.value = true
+  try {
+    await gymti.beginAttempt({
+      questionnaireVersion: contract.version,
+      scoringVersion: contract.version,
+      firstQuestionId,
+      originPath: originPath.value,
+    })
+    screen.value = 'question'
+  } finally {
+    transitionLocked.value = false
+    busy.value = false
+  }
+}
+
+const exitFlow = async (): Promise<void> => {
+  invalidateActiveSelection()
+  failedSelectionAnswers.value = null
+  await router.push(originPath.value)
+}
+
+const chooseNextQuestion = async (
+  answers: GymtiAnswerRef[],
+  revision: number,
+): Promise<string | null> => {
+  const candidates = legalNextQuestionCandidates(contract, answers)
+  const candidateIds = candidates.map((question) => question.id)
+  if (candidateIds.length === 0) return null
+  if (candidateIds.length === 1) return candidateIds[0] ?? null
+
+  try {
+    const selected = await gymtiClient.chooseNextQuestion({
+      questionnaireVersion: contract.version,
+      scoringVersion: contract.version,
+      answers,
+      candidateQuestionIds: candidateIds,
+    })
+    if (revision !== selectionRevision) return null
+    return candidateIds.includes(selected.questionId)
+      ? selected.questionId
+      : deterministicLocalFallback(candidateIds)
+  } catch (error) {
+    if (revision !== selectionRevision) return null
+    if (error instanceof AnalysisApiError && error.status === 422) throw error
+    return deterministicLocalFallback(candidateIds)
+  }
+}
+
+const finishOrAdvance = async (
+  answers: GymtiAnswerRef[],
+  revision: number,
+): Promise<void> => {
+  const evaluation = evaluateGymtiAnswers(contract, answers)
+  const terminalAnswered = answers.some(
+    (answer) => questionById(contract, answer.questionId)?.phase === 'terminal',
+  )
+
+  if ((evaluation.earlyCompletion || terminalAnswered) && evaluation.formalResult) {
+    if (revision !== selectionRevision) return
+    transitionLocked.value = true
+    await gymti.completeAttempt(evaluation.formalResult, answers)
+    screen.value = 'profile'
+    return
+  }
+  if (terminalAnswered) throw new Error('terminal GYMTI answer did not produce a result')
+
+  const nextQuestionId = await chooseNextQuestion(
+    answers,
+    revision,
+  )
+  if (revision !== selectionRevision) return
+  if (!nextQuestionId) throw new Error('GYMTI contract did not provide a legal next question')
+  transitionLocked.value = true
+  await gymti.updateProgress({ answers, currentQuestionId: nextQuestionId })
+}
+
+const selectOption = async (optionId: string): Promise<void> => {
+  if (busy.value || !gymti.attempt || !currentQuestion.value) return
+  const revision = ++selectionRevision
+  activeSelectionRevision = revision
+  busy.value = true
+  selectionFailure.value = false
+  transitionLocked.value = false
+  const questionId = currentQuestion.value.id
+  const existingIndex = gymti.attempt.answers.findIndex(
+    (answer) => answer.questionId === questionId,
+  )
+  const prefix = existingIndex >= 0
+    ? gymti.attempt.answers.slice(0, existingIndex)
+    : gymti.attempt.answers
+  const answers = [...prefix, { questionId, optionId }]
+  failedSelectionAnswers.value = answers
+
+  try {
+    await finishOrAdvance(answers, revision)
+    if (revision === selectionRevision) failedSelectionAnswers.value = null
+  } catch {
+    if (revision === selectionRevision) selectionFailure.value = true
+  } finally {
+    settleSelection(revision)
+  }
+}
+
+const retrySelection = async (): Promise<void> => {
+  if (busy.value || !gymti.attempt || !failedSelectionAnswers.value) return
+  const revision = ++selectionRevision
+  activeSelectionRevision = revision
+  busy.value = true
+  selectionFailure.value = false
+  transitionLocked.value = false
+  try {
+    await finishOrAdvance([...failedSelectionAnswers.value], revision)
+    if (revision === selectionRevision) failedSelectionAnswers.value = null
+  } catch {
+    if (revision === selectionRevision) selectionFailure.value = true
+  } finally {
+    settleSelection(revision)
+  }
+}
+
+const backFromQuestion = async (): Promise<void> => {
+  const attempt = gymti.attempt
+  const question = currentQuestion.value
+  if (!attempt || !question) return exitFlow()
+  const currentIndex = attempt.answers.findIndex((answer) => answer.questionId === question.id)
+  const previous = currentIndex >= 0
+    ? attempt.answers[currentIndex - 1]
+    : attempt.answers[attempt.answers.length - 1]
+  if (!previous) return exitFlow()
+
+  invalidateActiveSelection()
+  failedSelectionAnswers.value = null
+  selectionFailure.value = false
+  transitionLocked.value = true
+  busy.value = true
+  try {
+    await gymti.updateProgress({
+      answers: [...attempt.answers],
+      currentQuestionId: previous.questionId,
+    })
+  } finally {
+    transitionLocked.value = false
+    busy.value = false
+  }
+}
+
+const handleBack = async (): Promise<void> => {
+  if (transitionLocked.value) return
+  if (screen.value === 'styles') {
+    screen.value = 'result'
+    return
+  }
+  if (screen.value === 'result') return exitFlow()
+  if (screen.value === 'profile') {
+    const lastAnswer = gymti.attempt?.answers.at(-1)
+    if (!lastAnswer) return exitFlow()
+    transitionLocked.value = true
+    busy.value = true
+    try {
+      await gymti.reopenQuestionnaire(lastAnswer.questionId)
+      failedSelectionAnswers.value = null
+      screen.value = 'question'
+      profileSaveFailed.value = false
+      resultFailure.value = false
+    } finally {
+      transitionLocked.value = false
+      busy.value = false
+    }
+    return
+  }
+  return backFromQuestion()
+}
+
+const localNarrative = (pending: PendingGymtiResult): GymtiNarrativeSnapshot => {
+  const type = GYMTI_TYPE_PRESENTATION[pending.result.gymtiType]
+  const style = COACH_STYLE_PRESENTATION[pending.result.recommendedCoachStyleId]
+  return {
+    text: `${type.shortDescription}${style.matchReason}`,
+    source: 'template',
+    version: 'gymti-narrative.v1',
+    model: null,
+    generatedAt: new Date().toISOString(),
+  }
+}
+
+const openResult = async (): Promise<void> => {
+  if (busy.value || !gymti.pending) return
+  busy.value = true
+  transitionLocked.value = true
+  resultFailure.value = false
+  try {
+    await gymti.ensureNarrative(async (pending) => {
+      try {
+        return await gymtiClient.createNarrative({
+          questionnaireVersion: pending.questionnaireVersion,
+          scoringVersion: pending.scoringVersion,
+          answers: pending.answers,
+          formalResultId: pending.result.gymtiType,
+          secondaryResultId: pending.result.secondaryGymtiType,
+          coachStyleId: pending.result.recommendedCoachStyleId,
+          reasonCodes: pending.result.reasonCodes.slice(0, 3),
+        })
+      } catch {
+        return localNarrative(pending)
+      }
+    })
+    screen.value = 'result'
+  } catch {
+    resultFailure.value = true
+  } finally {
+    busy.value = false
+    transitionLocked.value = false
+  }
+}
+
+const activateRenderedResult = async (): Promise<void> => {
+  const pendingResultId = gymti.pending?.narrative ? gymti.pending.resultId : null
+  if (!pendingResultId || screen.value !== 'result' || resultActivationPending.value) return
+
+  resultActivationPending.value = true
+  transitionLocked.value = true
+  busy.value = true
+  try {
+    if (gymti.pending?.resultId !== pendingResultId || screen.value !== 'result') return
+    await gymti.presentPendingResult()
+    resultFailure.value = false
+  } catch {
+    if (gymti.pending?.resultId === pendingResultId) {
+      resultFailure.value = true
+      screen.value = 'profile'
+    }
+  } finally {
+    resultActivationPending.value = false
+    transitionLocked.value = false
+    busy.value = false
+  }
+}
+
+const saveProfile = async (profile: Parameters<typeof library.saveProfile>[0]): Promise<void> => {
+  if (busy.value) return
+  busy.value = true
+  transitionLocked.value = true
+  profileSaveFailed.value = false
+  try {
+    await library.saveProfile(profile)
+  } catch {
+    profileSaveFailed.value = true
+    busy.value = false
+    transitionLocked.value = false
+    return
+  }
+  busy.value = false
+  transitionLocked.value = false
+  await openResult()
+}
+
+const clearProfile = async (): Promise<void> => {
+  if (!window.confirm('清除当前设备上已有的训练档案？')) return
+  busy.value = true
+  transitionLocked.value = true
+  try {
+    await library.clearProfile()
+    profileSaveFailed.value = false
+  } catch {
+    profileSaveFailed.value = true
+  } finally {
+    busy.value = false
+    transitionLocked.value = false
+  }
+}
+
+const confirmStyle = async (styleId: CoachStyleId): Promise<void> => {
+  if (busy.value) return
+  busy.value = true
+  notice.value = ''
+  try {
+    await library.confirmCoachStyle(styleId)
+    await router.push(originPath.value)
+  } catch {
+    notice.value = '教练风格没有保存成功，请重试。'
+  } finally {
+    busy.value = false
+  }
+}
+
+const confirmRecommendation = async (): Promise<void> => {
+  const styleId = gymti.current?.result.recommendedCoachStyleId
+  if (styleId) await confirmStyle(styleId)
+}
+
+watch(
+  [initialized, screen, () => currentQuestion.value?.id],
+  async () => {
+    if (!initialized.value) return
+    await nextTick()
+    const heading = document.querySelector<HTMLElement>('.gymti-page h1')
+    if (!heading) return
+    heading.tabIndex = -1
+    heading.focus({ preventScroll: true })
+  },
+  { flush: 'post' },
+)
+
+onMounted(async () => {
+  try {
+    if (route.query.retest === '1') {
+      await startAttempt()
+    } else if (gymti.pending && gymti.attempt?.phase === 'profile') {
+      screen.value = 'profile'
+    } else if (gymti.attempt) {
+      screen.value = gymti.attempt.phase === 'profile' ? 'profile' : 'question'
+    } else if (route.query.view === 'styles' && gymti.current) {
+      screen.value = 'styles'
+    } else if (gymti.current) {
+      screen.value = 'result'
+    } else {
+      await startAttempt()
+    }
+  } catch {
+    notice.value = 'GYMTI 暂时无法在当前设备上开始，请返回后重试。'
+  } finally {
+    initialized.value = true
+  }
 })
 </script>
 
 <template>
-  <main class="personalize-page tp-page tp-page--immersive">
-    <header class="flow-header">
-      <RouterLink to="/plan" aria-label="返回训练方案">←</RouterLink>
-      <span>让 TrainPal 了解你</span>
-      <span aria-hidden="true" />
-    </header>
+  <main class="gymti-page tp-page tp-page--immersive">
+    <GymtiFlowHeader
+      :title="headerTitle"
+      :label="headerLabel"
+      :back-label="screen === 'question' && questionPosition === 1 ? '退出测评' : '返回上一步'"
+      :locked="transitionLocked"
+      @back="handleBack"
+    />
 
-    <section class="intro">
-      <p class="tp-kicker">PERSONALIZE · PREVIEW</p>
-      <h1 class="tp-title">调整这一次，<br />不是替你做决定。</h1>
-      <p class="tp-lead">
-        个性化会在保留视频动作的前提下，给组数、次数、时长和休息提供参考。你的手动调整始终优先。
-      </p>
+    <p v-if="notice" class="flow-notice" role="alert">{{ notice }}</p>
+
+    <section v-if="!initialized" class="flow-loading" aria-live="polite">
+      <p class="tp-kicker">GYMTI · LOCAL FIRST</p>
+      <h1>正在翻到第一题</h1>
     </section>
 
-    <section class="pending-note" role="status">
-      <span aria-hidden="true">!</span>
-      <div>
-        <strong>这版不生成假个性化结果</strong>
-        <p>GYMTI 问卷和风格推荐规则仍在定稿；七猫形象只完成技术预备，不生成推荐或保存风格。</p>
+    <GymtiQuestionStep
+      v-else-if="screen === 'question' && questionViewModel"
+      :key="questionViewModel.id"
+      :question="questionViewModel"
+      :answered-option-id="answeredOptionId"
+      :busy="busy"
+      :failure="selectionFailure"
+      @select="selectOption"
+      @retry="retrySelection"
+      @exit="exitFlow"
+    />
+
+    <template v-else-if="screen === 'profile'">
+      <div v-if="resultFailure" class="result-failure" role="alert">
+        <strong>结果暂时没有打开</strong>
+        <p>问卷答案和待展示结果仍保存在当前设备。</p>
+        <button type="button" :disabled="busy" @click="openResult">重试打开结果</button>
       </div>
+      <GymtiProfileStep
+        :profile="library.profile"
+        :busy="busy"
+        :save-failed="profileSaveFailed"
+        @save="saveProfile"
+        @skip="openResult"
+        @clear="clearProfile"
+      />
+    </template>
+
+    <GymtiResultStep
+      v-else-if="screen === 'result' && resultForDisplay"
+      :current="resultForDisplay"
+      :confirmed-style-id="library.preferences.coachStyleId"
+      :busy="busy"
+      @confirm="confirmRecommendation"
+      @modify="screen = 'styles'"
+      @retest="startAttempt"
+      @ready="activateRenderedResult"
+    />
+
+    <GymtiStylePicker
+      v-else-if="screen === 'styles' && gymti.current"
+      :recommended-style-id="gymti.current.result.recommendedCoachStyleId"
+      :confirmed-style-id="library.preferences.coachStyleId"
+      :busy="busy"
+      @confirm="confirmStyle"
+    />
+
+    <section v-else class="flow-unavailable" role="alert">
+      <h1>这一页暂时没有准备好</h1>
+      <p>已保存的数据没有被清除，可以返回后重新进入。</p>
+      <button type="button" @click="exitFlow">返回</button>
     </section>
-
-    <ol class="context-steps" aria-label="TrainPal 个性化上下文">
-      <li class="step-card tp-card">
-        <span class="step-number">01</span>
-        <div>
-          <small>GYMTI 健身目标</small>
-          <h2>你更想从训练中获得什么</h2>
-          <p>目标导向问卷正在定稿，将同时采集训练经验，不会把身体信息推断为健身人格。</p>
-        </div>
-        <b>待定稿</b>
-      </li>
-      <li class="step-card tp-card">
-        <span class="step-number">02</span>
-        <div>
-          <small>小猫教练风格</small>
-          <h2>确认推荐的陪伴方式</h2>
-          <p>不同品种对应沟通语气、鼓励方式和提示密度，不会改变动作或训练强度。</p>
-        </div>
-        <b>形象制作中</b>
-      </li>
-      <li class="step-card tp-card">
-        <span class="step-number">03</span>
-        <div>
-          <small>可选个人信息</small>
-          <h2>{{ profileSummary }}</h2>
-          <p>年龄、性别、身高和体重主要用于卡路里约值，只能作为个性策略的弱参考。</p>
-          <RouterLink to="/mine">在“我的”中管理</RouterLink>
-        </div>
-        <b>可跳过</b>
-      </li>
-      <li class="step-card signal-card tp-card">
-        <span class="step-number">04</span>
-        <div>
-          <small>用户轻反馈</small>
-          <h2>以后根据真实完成感受更新</h2>
-          <p>“太累、刚好、太轻”等结构化反馈只关联具体动作和场次，不生成黑盒用户画像。</p>
-        </div>
-        <b>训练后积累</b>
-      </li>
-    </ol>
-
-    <section class="policy-card tp-card">
-      <p class="tp-kicker">HOW IT WORKS</p>
-      <h2>个性策略的四部分</h2>
-      <p>GYMTI 健身目标 × 小猫教练风格 × 可选个人信息 × 用户轻反馈</p>
-      <ul>
-        <li>本次视频意图优先，不删除或替换你选中的动作。</li>
-        <li>视频明确值默认保留，调整时必须解释原因。</li>
-        <li>重量只由你填写，所有建议都可再次修改。</li>
-      </ul>
-    </section>
-
-    <footer class="flow-action">
-      <div>
-        <strong>{{ draft.plan.name }}</strong>
-        <small>基础方案仍可直接训练</small>
-      </div>
-      <RouterLink class="tp-primary-action" to="/plan">继续使用基础方案</RouterLink>
-    </footer>
   </main>
 </template>
 
 <style scoped>
-.personalize-page { display: grid; align-content: start; gap: 22px; max-width: 780px; padding-bottom: calc(116px + var(--tp-task-reserve, 0px) + env(safe-area-inset-bottom)); }
-.flow-header { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; }
-.flow-header a { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--tp-line); border-radius: 50%; color: var(--tp-ink); background: var(--tp-surface); font-size: 22px; text-decoration: none; }
-.flow-header > span { color: var(--tp-muted); font-size: 13px; font-weight: 800; text-align: center; }
-.intro { display: grid; gap: 15px; padding: 20px 0 4px; }
-.intro .tp-lead { max-width: 610px; }
-.pending-note { display: flex; gap: 12px; padding: 15px; border: 1px solid rgb(154 91 19 / 22%); border-radius: 16px; color: var(--tp-ink); background: #FBF0DA; }
-.pending-note > span { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border-radius: 50%; color: #FFFDF8; background: var(--tp-warning); font: 800 18px/1 var(--font-display); }
-.pending-note strong { font-size: 13px; }
-.pending-note p { margin: 5px 0 0; color: #565F59; font-size: 12px; line-height: 1.6; }
-
-.context-steps { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.step-card { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 5px 12px; padding: 16px; box-shadow: none; }
-.step-number { grid-row: 1 / span 2; color: var(--tp-primary); font: 700 24px/1 var(--font-display); }
-.step-card small { color: var(--tp-primary-readable); font: 700 11px/1 var(--font-display), var(--font-cn); letter-spacing: .08em; }
-.step-card h2 { margin: 5px 0 4px; font-size: 17px; }
-.step-card p { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.65; }
-.step-card a { display: inline-flex; min-height: 44px; align-items: center; color: var(--tp-primary-readable); font-size: 12px; font-weight: 800; }
-.step-card > b { grid-column: 2; justify-self: start; padding: 5px 8px; border-radius: 999px; color: #535C56; background: #F0ECE2; font-size: 11px; }
-.signal-card { border-style: dashed; background: var(--tp-surface); }
-
-.policy-card { display: grid; gap: 10px; padding: 20px; background: var(--tp-training-surface); }
-.policy-card .tp-kicker { color: var(--tp-secondary); }
-.policy-card h2 { margin: 0; color: var(--tp-training-ink); font-size: 23px; }
-.policy-card > p:not(.tp-kicker) { margin: 0; color: #D0D6D1; font-size: 13px; line-height: 1.6; }
-.policy-card ul { display: grid; gap: 8px; margin: 2px 0 0; padding-left: 18px; color: #B4BDB6; font-size: 12px; line-height: 1.6; }
-
-.flow-action { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); z-index: 20; display: flex; max-width: 750px; align-items: center; justify-content: space-between; gap: 12px; margin: auto; padding: 11px 11px 11px 16px; border: 1px solid rgb(28 40 34 / 14%); border-radius: 22px; background: var(--tp-surface); box-shadow: var(--tp-shadow-float); }
-.flow-action strong,
-.flow-action small { display: block; }
-.flow-action strong { max-width: 220px; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.flow-action small { margin-top: 3px; color: var(--tp-muted); font-size: 11px; }
-.flow-action .tp-primary-action { flex: 0 0 auto; }
-
-@media (min-width: 700px) {
-  .context-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-
-@media (max-width: 379px) {
-  .flow-action > div { display: none; }
-  .flow-action .tp-primary-action { width: 100%; }
-}
+.gymti-page { display: grid; align-content: start; gap: 18px; max-width: 760px; min-height: 100dvh; padding-bottom: calc(32px + var(--tp-task-reserve, 0px)); }
+.gymti-page :deep(h1:focus) { outline: none; }
+.flow-notice { margin: 0; padding: 12px 14px; border-left: 3px solid var(--tp-danger); border-radius: 0 12px 12px 0; color: var(--tp-danger); background: rgb(179 38 30 / 6%); font-size: 12px; line-height: 1.6; }
+.flow-loading,
+.flow-unavailable { display: grid; min-height: 58dvh; place-content: center; justify-items: center; gap: 12px; text-align: center; }
+.flow-loading h1,
+.flow-unavailable h1 { max-width: 420px; margin: 0; font-size: clamp(34px, 11vw, 54px); line-height: 1; }
+.flow-unavailable p { max-width: 340px; margin: 0; color: var(--tp-muted); font-size: 13px; line-height: 1.65; }
+.flow-unavailable button,
+.result-failure button { min-height: 44px; padding: 0 16px; border: 1px solid var(--tp-line); border-radius: 999px; color: var(--tp-ink); background: var(--tp-surface); font-weight: 800; }
+.result-failure { display: grid; justify-items: start; gap: 6px; padding: 14px; border: 1px solid rgb(179 38 30 / 22%); border-radius: 15px; color: var(--tp-danger); background: rgb(179 38 30 / 5%); }
+.result-failure p { margin: 0; color: var(--tp-muted); font-size: 11px; line-height: 1.55; }
+.result-failure button { margin-top: 4px; }
 </style>

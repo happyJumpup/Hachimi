@@ -140,7 +140,7 @@ describe('我的', () => {
     vi.useRealTimers()
   })
 
-  it('keeps unfinished identity work explicit instead of inventing GYMTI or coach content', async () => {
+  it('offers the real GYMTI entry without inventing an unconfirmed coach', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     await useLibraryStore().load(new MemoryLibraryRepository())
@@ -148,8 +148,9 @@ describe('我的', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('GYMTI 健身目标')
-    expect(wrapper.text()).toContain('问卷待定稿')
-    expect(wrapper.text()).toContain('教练形象待定')
+    expect(wrapper.text()).toContain('开始测评')
+    expect(wrapper.text()).toContain('测评后确认小猫')
+    expect(wrapper.text()).toContain('尚未确认')
     expect(wrapper.text()).not.toContain('哈肌咪')
   })
 
@@ -282,7 +283,7 @@ describe('我的', () => {
     await flushPromises()
     expect(repository.clearCalls).toBe(1)
     expect(draft.items).toHaveLength(0)
-    expect(wrapper.get('.notice').text()).toBe('本机视频和训练数据已清除')
+    expect(wrapper.get('.notice').text()).toBe('本机视频、问卷和训练数据已清除')
   })
 
   it('does not claim data was cleared when safe cross-tab coordination is unavailable', async () => {

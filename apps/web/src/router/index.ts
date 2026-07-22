@@ -56,7 +56,7 @@ export const createTrainPalRoutes = (includeDesignGallery: boolean): RouteRecord
       showAnalysisTask: true,
       showTrainingTask: true,
       taskDockAboveAction: true,
-      title: '个性化',
+      title: 'GYMTI 测评',
     },
   },
   {

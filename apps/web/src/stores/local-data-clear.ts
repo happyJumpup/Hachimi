@@ -6,12 +6,14 @@ import type { LocalDataClearCoordinator } from '@/local-data/clear-coordinator'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
+import { useGymtiStore } from '@/stores/gymti'
 import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
 
 export const useLocalDataClearStore = defineStore('local-data-clear', () => {
   const draft = useDraftStore()
   const library = useLibraryStore()
+  const gymti = useGymtiStore()
   const analysis = useAnalysisStore()
   const localMedia = useLocalMediaStore()
   const training = useTrainingStore()
@@ -27,27 +29,32 @@ export const useLocalDataClearStore = defineStore('local-data-clear', () => {
         await Promise.all([
           draft.quiescePersistence(),
           library.quiescePersistence(),
+          gymti.quiescePersistence(),
           training.quiescePersistence(),
         ])
         analysis.disconnect()
         localMedia.resetLocalState()
         draft.resetLocalState(true)
         library.resetLocalState(true)
+        gymti.resetLocalState(true)
         training.resetLocalState(true)
       },
       commit: () => {
         analysis.clearResult()
         draft.resumePersistence()
         library.resumePersistence()
+        gymti.resumePersistence()
         training.resumePersistence()
       },
       abort: async () => {
         draft.resumePersistence()
         library.resumePersistence()
+        gymti.resumePersistence()
         training.resumePersistence()
         await Promise.allSettled([
           draft.reload(),
           library.reload(),
+          gymti.reload(),
           localMedia.restore(),
           analysis.restore({ client: analysisClient, events: browserEventStreamFactory }),
           training.restore(),

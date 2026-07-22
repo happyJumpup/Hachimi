@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import type { LibraryRepository } from '@/db/library-repository'
+import type { CoachStyleId } from '@/domain/coach'
 import type { DraftPlan } from '@/domain/types'
 import type {
   Preferences,
@@ -158,6 +159,15 @@ export const useLibraryStore = defineStore('library', () => {
     })
   }
 
+  async function confirmCoachStyle(coachStyleId: CoachStyleId): Promise<void> {
+    await runOperation(async () => {
+      preferences.value = await requireRepository().savePreferences({
+        petVisible: preferences.value.petVisible,
+        coachStyleId,
+      })
+    })
+  }
+
   async function clearAllLocalData(): Promise<void> {
     await requireRepository().clearAllLocalData()
     resetLocalState(persistenceSuspended.value)
@@ -199,6 +209,7 @@ export const useLibraryStore = defineStore('library', () => {
     saveProfile,
     clearProfile,
     setPetVisible,
+    confirmCoachStyle,
     clearAllLocalData,
     quiescePersistence,
     resumePersistence,

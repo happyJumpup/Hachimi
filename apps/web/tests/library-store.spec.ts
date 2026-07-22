@@ -53,6 +53,21 @@ describe('local training library store', () => {
     })
   })
 
+  it('persists a coach style only after an explicit confirmation', async () => {
+    const persistence = repository()
+    const store = useLibraryStore()
+    await store.load(persistence)
+
+    expect(store.preferences.coachStyleId).toBeNull()
+    await store.confirmCoachStyle('gentle')
+
+    expect(store.preferences.coachStyleId).toBe('gentle')
+    expect(persistence.savePreferences).toHaveBeenCalledWith({
+      petVisible: true,
+      coachStyleId: 'gentle',
+    })
+  })
+
   it('installs the labelled quick experience as an unlinked current draft', async () => {
     const persistence = repository()
     const store = useLibraryStore()

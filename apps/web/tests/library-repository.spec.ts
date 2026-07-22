@@ -105,10 +105,10 @@ describe('training library repository', () => {
     expect(await database.localMedia.count()).toBe(1)
 
     await library.clearAllLocalData()
-    expect(database.tables).toHaveLength(7)
-    expect(await Promise.all(database.tables.map((table) => table.count()))).toEqual([
-      0, 0, 0, 0, 0, 0, 0,
-    ])
+    expect(database.tables).toHaveLength(10)
+    expect(await Promise.all(database.tables.map((table) => table.count()))).toEqual(
+      Array.from({ length: 10 }, () => 0),
+    )
     expect(await database.localMedia.count()).toBe(0)
     database.close()
   })

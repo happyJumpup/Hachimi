@@ -5,6 +5,8 @@ import type {
   Segment,
   SourceSummary,
 } from '@/domain/types'
+import type { CoachStyleId } from '@/domain/coach'
+import type { GymtiAnswerRef, GymtiNarrativeSnapshot, GymtiType } from '@/domain/gymti'
 
 export interface AnalysisClient {
   getCapabilities(): Promise<AnalysisCapabilities>
@@ -22,6 +24,35 @@ export interface AnalysisClient {
 export interface AccessClient {
   getSession(): Promise<AccessSession>
   upgrade(accessCode: string): Promise<AccessSession>
+}
+
+export interface GymtiNextQuestionInput {
+  questionnaireVersion: string
+  scoringVersion: string
+  answers: GymtiAnswerRef[]
+  candidateQuestionIds: string[]
+}
+
+export interface GymtiNextQuestionChoice {
+  questionId: string
+  source: 'llm' | 'local_fallback'
+  model: string | null
+  version: string
+}
+
+export interface GymtiNarrativeInput {
+  questionnaireVersion: string
+  scoringVersion: string
+  answers: GymtiAnswerRef[]
+  formalResultId: GymtiType
+  secondaryResultId: GymtiType | null
+  coachStyleId: CoachStyleId
+  reasonCodes: string[]
+}
+
+export interface GymtiClient {
+  chooseNextQuestion(input: GymtiNextQuestionInput): Promise<GymtiNextQuestionChoice>
+  createNarrative(input: GymtiNarrativeInput): Promise<GymtiNarrativeSnapshot>
 }
 
 export interface AnalysisEventStream {
@@ -109,6 +140,73 @@ export const accessClient: AccessClient = {
     method: 'POST',
     body: JSON.stringify({ access_code: accessCode }),
   }),
+}
+
+interface GymtiNextQuestionResponse {
+  question_id: string
+  source: 'llm' | 'local_fallback'
+  model: string | null
+  version: string
+}
+
+interface GymtiNarrativeResponse {
+  source: 'llm' | 'template'
+  model: string | null
+  version: string
+  generated_at: string
+  text: string
+}
+
+const gymtiRequestSignal = (): AbortSignal => AbortSignal.timeout(10_000)
+
+export const gymtiClient: GymtiClient = {
+  async chooseNextQuestion(input) {
+    const result = await request<GymtiNextQuestionResponse>('/api/v1/gymti/next-question', {
+      method: 'POST',
+      signal: gymtiRequestSignal(),
+      body: JSON.stringify({
+        questionnaire_version: input.questionnaireVersion,
+        scoring_version: input.scoringVersion,
+        answered: input.answers.map((answer) => ({
+          question_id: answer.questionId,
+          option_id: answer.optionId,
+        })),
+        candidate_question_ids: input.candidateQuestionIds,
+      }),
+    })
+    return {
+      questionId: result.question_id,
+      source: result.source,
+      model: result.model,
+      version: result.version,
+    }
+  },
+
+  async createNarrative(input) {
+    const result = await request<GymtiNarrativeResponse>('/api/v1/gymti/result-narrative', {
+      method: 'POST',
+      signal: gymtiRequestSignal(),
+      body: JSON.stringify({
+        questionnaire_version: input.questionnaireVersion,
+        scoring_version: input.scoringVersion,
+        answered: input.answers.map((answer) => ({
+          question_id: answer.questionId,
+          option_id: answer.optionId,
+        })),
+        formal_result_id: input.formalResultId,
+        secondary_result_id: input.secondaryResultId,
+        coach_style_id: input.coachStyleId,
+        reason_codes: input.reasonCodes,
+      }),
+    })
+    return {
+      source: result.source,
+      model: result.model,
+      version: result.version,
+      generatedAt: result.generated_at,
+      text: result.text,
+    }
+  },
 }
 
 const eventNames = [

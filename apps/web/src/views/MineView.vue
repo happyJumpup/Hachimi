@@ -2,15 +2,20 @@
 import { computed, onMounted, ref } from 'vue'
 
 import { useDialogFocus } from '@/composables/useDialogFocus'
+import { COACH_STYLE_LABELS } from '@/domain/coach'
 import type { TrainingProfile } from '@/domain/training'
+import CoachMotion from '@/features/experience/CoachMotion.vue'
 import ProfileForm from '@/features/experience/ProfileForm.vue'
+import { GYMTI_TYPE_PRESENTATION } from '@/features/gymti/presentation'
 import { LocalDataCoordinationUnavailableError } from '@/local-data/clear-coordinator'
 import { useLibraryStore } from '@/stores/library'
+import { useGymtiStore } from '@/stores/gymti'
 import { useLocalDataClearStore } from '@/stores/local-data-clear'
 
 type DetailPanel = 'records' | 'gymti' | 'profile' | 'coach' | 'growth' | 'data' | null
 
 const library = useLibraryStore()
+const gymti = useGymtiStore()
 const localDataClear = useLocalDataClearStore()
 const pending = ref(false)
 const notice = ref('')
@@ -24,6 +29,17 @@ const profileFields = computed(() => [
   library.profile.heightCm,
   library.profile.weightKg,
 ].filter((value) => value !== null).length)
+
+const gymtiLabel = computed(() => gymti.current
+  ? GYMTI_TYPE_PRESENTATION[gymti.current.result.gymtiType].label
+  : null)
+const gymtiInProgress = computed(() => Boolean(gymti.attempt || gymti.pending))
+const gymtiStatus = computed(() => gymtiInProgress.value
+  ? '继续测评'
+  : gymtiLabel.value ?? '开始测评')
+const coachLabel = computed(() => library.preferences.coachStyleId
+  ? COACH_STYLE_LABELS[library.preferences.coachStyleId]
+  : '尚未确认')
 
 const effectiveTrainingDays = computed(() => {
   const days = library.records
@@ -89,11 +105,11 @@ const toggleCoach = async (): Promise<void> => {
 }
 
 const clearEverything = async (): Promise<void> => {
-  if (!window.confirm('将清除本机上的来源视频、分析恢复点、当前方案、已存方案、未完成训练、记录和训练档案。确定继续吗？')) return
+  if (!window.confirm('将清除本机上的来源视频、分析恢复点、方案、训练进度与记录、GYMTI 答案与结果、训练档案和教练偏好。确定继续吗？')) return
   pending.value = true
   try {
     await localDataClear.clearAllLocalData()
-    notice.value = '本机视频和训练数据已清除'
+    notice.value = '本机视频、问卷和训练数据已清除'
     closePanel()
   } catch (error) {
     notice.value = error instanceof LocalDataCoordinationUnavailableError
@@ -121,9 +137,12 @@ onMounted(async () => {
         <h1 class="tp-title">我的</h1>
         <p class="tp-lead">目标、教练和训练资料，只留在当前设备。</p>
       </div>
-      <div class="coach-sticker" aria-label="TrainPal 小猫教练形象待定">
-        <span>TP</span>
-        <small>教练形象待定</small>
+      <div v-if="library.preferences.coachStyleId" class="confirmed-coach">
+        <CoachMotion :style-id="library.preferences.coachStyleId" state="idle" />
+      </div>
+      <div v-else class="coach-status" aria-label="尚未确认小猫教练风格">
+        <strong>GYMTI</strong>
+        <small>测评后确认小猫</small>
       </div>
     </header>
 
@@ -141,12 +160,12 @@ onMounted(async () => {
     <section class="settings-list" aria-label="我的 TrainPal 设置">
       <button type="button" class="setting-row" @click="openPanel('gymti', $event)">
         <span class="row-icon goal-icon" aria-hidden="true">G</span>
-        <span><small>GYMTI 健身目标</small><strong>问卷待定稿</strong></span>
+        <span><small>GYMTI 健身目标</small><strong>{{ gymtiStatus }}</strong></span>
         <b>›</b>
       </button>
       <button type="button" class="setting-row" @click="openPanel('coach', $event)">
         <span class="row-icon coach-icon" aria-hidden="true">C</span>
-        <span><small>小猫教练风格</small><strong>尚未确认</strong></span>
+        <span><small>小猫教练风格</small><strong>{{ coachLabel }}</strong></span>
         <b>›</b>
       </button>
       <button type="button" class="setting-row" @click="openPanel('profile', $event)">
@@ -206,9 +225,9 @@ onMounted(async () => {
 
         <div v-else-if="activePanel === 'gymti'" class="placeholder-panel">
           <span class="big-letter">G</span>
-          <h3>目标导向问卷正在定稿</h3>
+          <h3>{{ gymtiInProgress ? '继续完成 GYMTI' : gymtiLabel ? `你的 GYMTI 是${gymtiLabel}` : '用 5–8 题了解训练取向' }}</h3>
           <p>GYMTI 会表达你的健身目标取向并采集训练经验，但不会根据身体信息推断人格或训练强度。</p>
-          <RouterLink to="/personalize">查看个性化如何工作</RouterLink>
+          <RouterLink to="/personalize?from=/mine">{{ gymtiInProgress ? '继续测评' : gymtiLabel ? '查看测评结果' : '开始测评' }}</RouterLink>
         </div>
 
         <div v-else-if="activePanel === 'profile'" class="profile-panel">
@@ -217,8 +236,10 @@ onMounted(async () => {
         </div>
 
         <div v-else-if="activePanel === 'coach'" class="coach-panel">
-          <h3>完成 GYMTI 后再确认风格</h3>
+          <h3>{{ library.preferences.coachStyleId ? `当前使用${coachLabel}` : '完成 GYMTI 后再确认风格' }}</h3>
           <p>问卷会给出一个推荐；在你明确确认前，正式页面不会展示任何小猫形象。教练风格不会改变动作与训练参数。</p>
+          <RouterLink v-if="gymti.current" class="coach-edit-link" to="/personalize?from=/mine&view=styles">修改教练风格</RouterLink>
+          <RouterLink v-else class="coach-edit-link" to="/personalize?from=/mine">去完成 GYMTI</RouterLink>
           <div class="preference-row">
             <span><strong>训练中显示 TrainPal</strong><small>隐藏不会移除训练控制与安全信息</small></span>
             <button type="button" :aria-pressed="library.preferences.petVisible" :disabled="pending || library.persistenceSuspended" @click="toggleCoach">
@@ -240,7 +261,7 @@ onMounted(async () => {
         <div v-else class="data-panel">
           <section>
             <h3>本机保存</h3>
-            <p>来源视频、当前方案、已存方案、训练进度、记录和个人信息只保存在这台设备。</p>
+            <p>来源视频、方案、训练进度与记录、GYMTI 答案与结果、个人信息和教练偏好只保存在这台设备。</p>
           </section>
           <button type="button" class="clear-data" :disabled="pending" @click="clearEverything">清除本机训练数据</button>
         </div>
@@ -254,9 +275,11 @@ onMounted(async () => {
 .mine-hero { display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 14px 0 4px; }
 .mine-hero .tp-title { margin-top: 7px; }
 .mine-hero .tp-lead { margin-top: 10px; font-size: 13px; }
-.coach-sticker { display: grid; width: 92px; min-height: 100px; flex: 0 0 auto; place-items: center; align-content: center; gap: 7px; border: 1px solid var(--tp-line); border-radius: 34px 34px 34px 9px; background: var(--tp-secondary); box-shadow: var(--tp-shadow-soft); transform: rotate(2deg); }
-.coach-sticker span { font: 800 32px/1 var(--font-display); }
-.coach-sticker small { font-size: 11px; font-weight: 800; }
+.confirmed-coach { display: grid; width: 100px; min-height: 108px; flex: 0 0 auto; place-items: center; }
+.confirmed-coach :deep(.coach-motion__image) { width: 94px; filter: drop-shadow(0 8px 16px rgb(28 40 34 / 20%)); }
+.coach-status { display: grid; width: 104px; min-height: 76px; flex: 0 0 auto; align-content: center; gap: 6px; padding: 12px; border: 1px dashed #B7B2A5; border-radius: 20px 20px 20px 7px; color: var(--tp-muted); background: rgb(255 253 248 / 55%); }
+.coach-status strong { color: var(--tp-primary-readable); font: 700 14px/1 var(--font-display); letter-spacing: .08em; }
+.coach-status small { font-size: 11px; font-weight: 700; line-height: 1.35; }
 .notice { margin: 0; padding: 11px 13px; border-left: 3px solid var(--tp-secondary); border-radius: 0 10px 10px 0; color: var(--tp-success); background: rgb(165 186 99 / 12%); font-size: 12px; }
 
 .growth-overview { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 20px; background: var(--tp-training-surface); }
@@ -309,6 +332,7 @@ onMounted(async () => {
 .profile-panel > p,
 .data-panel p { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.7; }
 .placeholder-panel a { display: inline-flex; min-height: 44px; align-items: center; color: var(--tp-primary-readable); font-size: 12px; font-weight: 800; }
+.coach-edit-link { display: inline-flex; min-height: 44px; align-items: center; color: var(--tp-primary-readable); font-size: 12px; font-weight: 800; }
 .profile-panel { display: grid; gap: 18px; }
 .profile-panel :deep(.profile-form) { padding-top: 4px; }
 .profile-panel :deep(.profile-actions button:not(.quiet)) { color: var(--tp-surface); border-color: var(--tp-primary); background: var(--tp-primary-readable); }
@@ -333,7 +357,7 @@ onMounted(async () => {
 }
 
 @media (max-width: 359px) {
-  .coach-sticker { width: 76px; min-height: 88px; }
+  .coach-status { width: 88px; }
   .preference-row { align-items: stretch; flex-direction: column; }
   .preference-row button { width: 100%; }
 }

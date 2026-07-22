@@ -71,6 +71,9 @@ describe('Dexie local training data', () => {
     })
     expect(database.tables.map((table) => table.name).sort()).toEqual([
       'drafts',
+      'gymtiAttempts',
+      'gymtiPendingResults',
+      'gymtiResults',
       'localMedia',
       'plans',
       'preferences',
@@ -173,6 +176,38 @@ describe('Dexie local training data', () => {
       coachStyleId: null,
     })
 
+    database.close()
+  })
+
+  it('adds the three single-slot GYMTI lifecycle tables without changing v4 data', async () => {
+    const databaseName = uniqueDatabaseName()
+    const legacy = new Dexie(databaseName)
+    legacy.version(4).stores({
+      drafts: '&id, updatedAt, linkedPlanId',
+      plans: '&id, updatedAt, createdAt, name',
+      sessions: '&id, sessionId, status, updatedAt',
+      records: '&id, endedAt, outcome',
+      profiles: '&id, updatedAt',
+      preferences: '&id, updatedAt',
+      localMedia: '&sourceId, importedAt, updatedAt',
+    })
+    await legacy.table('preferences').put({
+      id: 'current',
+      petVisible: true,
+      coachStyleId: 'zen',
+      updatedAt: '2026-07-23T00:00:00.000Z',
+    })
+    legacy.close()
+
+    const database = createHachimiDatabase(databaseName)
+    await database.open()
+
+    expect(await database.preferences.get('current')).toMatchObject({ coachStyleId: 'zen' })
+    expect(await Promise.all([
+      database.gymtiAttempts.count(),
+      database.gymtiPendingResults.count(),
+      database.gymtiResults.count(),
+    ])).toEqual([0, 0, 0])
     database.close()
   })
 })
