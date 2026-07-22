@@ -273,7 +273,8 @@ class SignedGatewayClient:
         )
         event_types: list[str] = []
         terminal = False
-        with self._client.send(request, stream=True) as response:
+        response = self._client.send(request, stream=True)
+        try:
             if response.status_code != 200:
                 return response.status_code, event_types, terminal
             for line in response.iter_lines():
@@ -285,6 +286,8 @@ class SignedGatewayClient:
                 if event_type in {"run.completed", "run.failed", "run.cancelled"}:
                     terminal = True
                     break
+        finally:
+            response.close()
         return 200, event_types, terminal
 
 
