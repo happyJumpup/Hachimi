@@ -5,13 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router'
 
 import type { LibraryRepository } from '@/db/library-repository'
 import type { DraftPlan, DraftRepository } from '@/domain/types'
-import type {
-  Preferences,
-  SavedPlan,
-  TrainingProfile,
-  TrainingRecord,
-  TrainingSession,
-} from '@/domain/training'
+import type { Preferences, SavedPlan, TrainingProfile, TrainingRecord } from '@/domain/training'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
 import {
   LocalDataCoordinationUnavailableError,
@@ -21,108 +15,63 @@ import {
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
 import { useLocalDataClearStore } from '@/stores/local-data-clear'
-import { useTrainingStore } from '@/stores/training'
-import type { TrainingCommand, TrainingEngine, TrainingEngineResult } from '@/training/training-engine'
 import MineView from '@/views/MineView.vue'
 
-const session = (): TrainingSession => {
-  const item = createQuickExperienceDraftItems()[0]!
-  return {
-    id: 'current',
-    sessionId: 'session-1',
-    revision: 1,
-    status: 'paused',
-    pauseReason: 'user',
-    plan: { name: '手臂训练', source: 'draft', sourcePlanId: null, items: [item] },
-    currentItemIndex: 0,
-    currentSetIndex: 0,
-    currentSetActiveMilliseconds: 0,
-    activeStartedAt: null,
-    restStartedAt: null,
-    restEndsAt: null,
-    scheduledRestSeconds: null,
-    creditedRestMilliseconds: 0,
-    progress: [{ itemId: item.id, completedSets: 0, activeMilliseconds: 0, skipped: false }],
-    petId: 'hachimi',
-    startedAt: '2026-07-21T00:00:00.000Z',
-    updatedAt: '2026-07-21T00:01:00.000Z',
-  }
-}
-
-const endedRecord = (): TrainingRecord => ({
-  id: 'session-1',
-  outcome: 'ended_early',
-  plan: session().plan,
-  actions: [],
-  activeSeconds: 0,
-  creditedRestSeconds: 0,
-  trainingDurationSeconds: 0,
-  completedActionCount: 0,
-  calorie: { value: 0, method: 'generic' },
+const trainingRecord = (): TrainingRecord => ({
+  id: 'record-1',
+  outcome: 'completed',
+  plan: {
+    name: '手臂训练',
+    source: 'draft',
+    sourcePlanId: null,
+    items: createQuickExperienceDraftItems(),
+  },
+  actions: [{
+    itemId: 'quick-curl',
+    name: '弯举',
+    targetSets: 3,
+    completedSets: 3,
+    completedReps: 30,
+    completedDurationSeconds: null,
+    activeSeconds: 90,
+    status: 'completed',
+  }],
+  activeSeconds: 90,
+  creditedRestSeconds: 60,
+  trainingDurationSeconds: 150,
+  completedActionCount: 1,
+  calorie: { value: 12, method: 'generic' },
   petId: 'hachimi',
   startedAt: '2026-07-21T00:00:00.000Z',
-  endedAt: '2026-07-21T00:02:00.000Z',
+  endedAt: '2026-07-21T00:03:00.000Z',
 })
 
 class MemoryLibraryRepository implements LibraryRepository {
   plans: SavedPlan[] = []
   records: TrainingRecord[] = []
-  openCalls: string[] = []
-  deleteCalls: string[] = []
+  profile: TrainingProfile | null = null
+  preferences: Preferences | null = null
   clearCalls = 0
   failPreferences = false
 
   async listPlans() { return structuredClone(this.plans) }
   async listRecords() { return structuredClone(this.records) }
-  async loadProfile() { return null }
-  async loadPreferences() { return null }
+  async loadProfile() { return structuredClone(this.profile) }
+  async loadPreferences() { return structuredClone(this.preferences) }
   async saveProfile(profile: Omit<TrainingProfile, 'id' | 'updatedAt'>) {
-    return { ...profile, id: 'current' as const, updatedAt: new Date(0).toISOString() }
+    this.profile = { ...profile, id: 'current', updatedAt: new Date(0).toISOString() }
+    return structuredClone(this.profile)
   }
   async savePreferences(preferences: Omit<Preferences, 'id' | 'updatedAt'>) {
     if (this.failPreferences) throw new Error('indexeddb write failed')
-    return { ...preferences, id: 'current' as const, updatedAt: new Date(0).toISOString() }
+    this.preferences = { ...preferences, id: 'current', updatedAt: new Date(0).toISOString() }
+    return structuredClone(this.preferences)
   }
   async saveCurrentDraftAs(): Promise<never> { throw new Error('not used') }
-  async openPlan(planId: string): Promise<DraftPlan> {
-    const plan = this.plans.find((candidate) => candidate.id === planId)
-    if (!plan) throw new Error('plan not found')
-    this.openCalls.push(planId)
-    return {
-      id: 'current',
-      name: plan.name,
-      linkedPlanId: plan.id,
-      items: structuredClone(plan.items),
-      updatedAt: new Date(0).toISOString(),
-    }
-  }
-  async deletePlan(planId: string): Promise<DraftPlan | null> {
-    this.deleteCalls.push(planId)
-    this.plans = this.plans.filter((plan) => plan.id !== planId)
-    const current = useDraftStore().plan
-    if (current.linkedPlanId !== planId) return null
-    return {
-      ...(JSON.parse(JSON.stringify(current)) as DraftPlan),
-      linkedPlanId: null,
-    }
-  }
+  async openPlan(): Promise<never> { throw new Error('not used') }
+  async deletePlan(): Promise<never> { throw new Error('not used') }
   async replaceCurrentDraft(): Promise<never> { throw new Error('not used') }
   async clearAllLocalData() { this.clearCalls += 1 }
-}
-
-class EndEarlyEngine implements TrainingEngine {
-  constructor(private readonly library: MemoryLibraryRepository) {}
-
-  async restore(): Promise<TrainingEngineResult> {
-    return { ok: true, session: session(), record: null, events: [] }
-  }
-
-  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
-    if (command.type !== 'session.end_early') throw new Error('unexpected command')
-    const record = endedRecord()
-    this.library.records = [record]
-    return { ok: true, session: null, record, events: [{ type: 'session.ended_early', recordId: record.id }] }
-  }
 }
 
 class DeferredDraftRepository implements DraftRepository {
@@ -142,10 +91,7 @@ class InlineClearCoordinator implements LocalDataClearCoordinator {
   readonly supported = true
   private participant: LocalDataClearParticipant | null = null
 
-  connect(participant: LocalDataClearParticipant): void {
-    this.participant = participant
-  }
-
+  connect(participant: LocalDataClearParticipant): void { this.participant = participant }
   async clear(clearDatabase: () => Promise<void>): Promise<void> {
     if (!this.participant) throw new Error('not connected')
     await this.participant.prepare('epoch-2')
@@ -157,246 +103,159 @@ class InlineClearCoordinator implements LocalDataClearCoordinator {
       throw error
     }
   }
-
   close(): void {}
 }
 
 class UnsupportedClearCoordinator implements LocalDataClearCoordinator {
   readonly supported = false
-
   connect(): void {}
-
-  async clear(): Promise<void> {
-    throw new LocalDataCoordinationUnavailableError()
-  }
-
+  async clear(): Promise<void> { throw new LocalDataCoordinationUnavailableError() }
   close(): void {}
 }
 
-const mountMine = async (pinia: ReturnType<typeof createPinia>) => {
+const mountMine = async (pinia: ReturnType<typeof createPinia>, attachTo?: HTMLElement) => {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: '/', component: { template: '<p>home</p>' } },
       { path: '/mine', component: MineView },
-      { path: '/plan', component: { template: '<p>plan</p>' } },
-      { path: '/training', component: { template: '<p>training</p>' } },
+      { path: '/personalize', component: { template: '<p>personalize</p>' } },
       { path: '/result/:recordId', component: { template: '<p>result</p>' } },
     ],
   })
   await router.push('/mine')
   await router.isReady()
-  return { router, wrapper: mount(MineView, { global: { plugins: [pinia, router] } }) }
+  return {
+    router,
+    wrapper: mount(MineView, {
+      ...(attachTo ? { attachTo } : {}),
+      global: { plugins: [pinia, router] },
+    }),
+  }
 }
 
-describe('我的训练', () => {
+describe('我的', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
-  it('confirms ending the current session, refreshes history, and opens its result', async () => {
+  it('keeps unfinished identity work explicit instead of inventing GYMTI or coach content', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const repository = new MemoryLibraryRepository()
-    await useLibraryStore().load(repository)
-    await useTrainingStore().load(new EndEarlyEngine(repository))
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const { router, wrapper } = await mountMine(pinia)
-    await flushPromises()
-
-    await wrapper.get('button[aria-label="结束未完成训练"]').trigger('click')
-    await flushPromises()
-
-    expect(router.currentRoute.value.fullPath).toBe('/result/session-1')
-    expect(useLibraryStore().records[0]?.outcome).toBe('ended_early')
-  })
-
-  it('puts an unfinished training before quick experience', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const repository = new MemoryLibraryRepository()
-    await useLibraryStore().load(repository)
-    await useTrainingStore().load(new EndEarlyEngine(repository))
+    await useLibraryStore().load(new MemoryLibraryRepository())
     const { wrapper } = await mountMine(pinia)
     await flushPromises()
 
-    expect(wrapper.text().indexOf('未完成训练')).toBeLessThan(
-      wrapper.text().indexOf('快速体验方案'),
+    expect(wrapper.text()).toContain('GYMTI 健身目标')
+    expect(wrapper.text()).toContain('问卷待定稿')
+    expect(wrapper.text()).toContain('教练形象待定')
+    expect(wrapper.text()).not.toContain('哈肌咪')
+  })
+
+  it('counts effective training days from records with actual completed sets', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new MemoryLibraryRepository()
+    repository.records = [trainingRecord(), {
+      ...trainingRecord(),
+      id: 'record-empty',
+      actions: [],
+      completedActionCount: 0,
+    }]
+    await useLibraryStore().load(repository)
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    expect(wrapper.get('.growth-overview').text()).toContain('1 个有效训练日')
+  })
+
+  it('opens records on demand and keeps the main page compact', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new MemoryLibraryRepository()
+    repository.records = [trainingRecord()]
+    await useLibraryStore().load(repository)
+    const { wrapper } = await mountMine(pinia)
+    await flushPromises()
+
+    expect(wrapper.find('.detail-sheet').exists()).toBe(false)
+    await wrapper.findAll('.setting-row')[3]!.trigger('click')
+
+    expect(wrapper.get('.detail-sheet').text()).toContain('手臂训练')
+    expect(wrapper.get('.detail-sheet').text()).toContain('约 12 千卡')
+  })
+
+  it('moves, traps, and restores keyboard focus for a detail sheet', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    await useLibraryStore().load(new MemoryLibraryRepository())
+    const host = document.createElement('div')
+    document.body.append(host)
+    const { wrapper } = await mountMine(pinia, host)
+    await flushPromises()
+
+    const trigger = wrapper.findAll('.setting-row')[2]!.element as HTMLButtonElement
+    trigger.focus()
+    await wrapper.findAll('.setting-row')[2]!.trigger('click')
+    await flushPromises()
+
+    const sheet = wrapper.get('.detail-sheet')
+    const close = sheet.get('[data-dialog-initial-focus]').element as HTMLButtonElement
+    expect(document.activeElement).toBe(close)
+
+    const focusable = sheet.element.querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled])',
     )
+    const last = focusable[focusable.length - 1]!
+    last.focus()
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }))
+    expect(document.activeElement).toBe(close)
+
+    close.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.detail-sheet').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+
+    wrapper.unmount()
+    host.remove()
   })
 
-  it('does not replace a non-empty draft with a saved plan without confirmation', async () => {
+  it('saves optional profile fields without presenting them as a required intensity input', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const draft = useDraftStore()
-    await draft.load({
-      load: async () => undefined,
-      save: async () => undefined,
-    })
-    draft.addManualAction({ name: '当前草稿动作', mode: 'reps' })
-    const repository = new MemoryLibraryRepository()
-    repository.plans = [{
-      id: 'plan-a',
-      name: '已存方案',
-      items: createQuickExperienceDraftItems(),
-      createdAt: '2026-07-21T00:00:00.000Z',
-      updatedAt: '2026-07-21T00:00:00.000Z',
-    }]
-    await useLibraryStore().load(repository)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const { router, wrapper } = await mountMine(pinia)
-    await flushPromises()
-
-    await wrapper.findAll('.row-list button')[0]!.trigger('click')
-    await flushPromises()
-
-    expect(confirm).toHaveBeenCalledWith('打开这个方案会替换当前草稿，确定继续吗？')
-    expect(repository.openCalls).toEqual([])
-    expect(draft.items[0]?.name).toBe('当前草稿动作')
-    expect(router.currentRoute.value.path).toBe('/mine')
-
-    confirm.mockReturnValue(true)
-    await wrapper.findAll('.row-list button')[0]!.trigger('click')
-    await flushPromises()
-
-    expect(repository.openCalls).toEqual(['plan-a'])
-    expect(draft.plan.linkedPlanId).toBe('plan-a')
-    expect(router.currentRoute.value.path).toBe('/plan')
-  })
-
-  it('does not replace a non-empty draft with quick experience when confirmation is cancelled', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const draft = useDraftStore()
-    await draft.load({ load: async () => undefined, save: async () => undefined })
-    draft.addManualAction({ name: '当前草稿动作', mode: 'reps' })
     const repository = new MemoryLibraryRepository()
     await useLibraryStore().load(repository)
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const { router, wrapper } = await mountMine(pinia)
-    await flushPromises()
-
-    await wrapper.get('.quick-card button').trigger('click')
-    await flushPromises()
-
-    expect(confirm).toHaveBeenCalledWith('使用快速体验方案会替换当前草稿，确定继续吗？')
-    expect(draft.items[0]?.name).toBe('当前草稿动作')
-    expect(router.currentRoute.value.path).toBe('/mine')
-  })
-
-  it('waits for an in-flight draft save before replacing the current draft', async () => {
-    vi.useFakeTimers()
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const draftRepository = new DeferredDraftRepository()
-    const draft = useDraftStore()
-    await draft.load(draftRepository)
-    draft.addManualAction({ name: '即将被替换的动作', mode: 'reps' })
-    await vi.advanceTimersByTimeAsync(301)
-    await draftRepository.started
-    const repository = new MemoryLibraryRepository()
-    repository.plans = [{
-      id: 'plan-a',
-      name: '已存方案',
-      items: createQuickExperienceDraftItems(),
-      createdAt: '2026-07-21T00:00:00.000Z',
-      updatedAt: '2026-07-21T00:00:00.000Z',
-    }]
-    await useLibraryStore().load(repository)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { wrapper } = await mountMine(pinia)
     await flushPromises()
 
-    await wrapper.findAll('.row-list button')[0]!.trigger('click')
-    await Promise.resolve()
-
-    expect(repository.openCalls).toEqual([])
-    draftRepository.releaseSave()
+    await wrapper.findAll('.setting-row')[2]!.trigger('click')
+    await wrapper.get('input[aria-label="年龄"]').setValue('28')
+    await wrapper.get('.profile-form').trigger('submit')
     await flushPromises()
 
-    expect(repository.openCalls).toEqual(['plan-a'])
-    expect(draft.plan.linkedPlanId).toBe('plan-a')
+    expect(repository.profile?.age).toBe(28)
+    expect(wrapper.get('.notice').text()).toBe('训练档案已保存到本机')
+    expect(wrapper.get('.profile-panel').text()).toContain('全部字段都可跳过')
   })
 
-  it('deletes a linked saved plan without deleting the current draft contents', async () => {
+  it('shows a safe notice when the TrainPal visibility preference cannot be saved', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const draft = useDraftStore()
-    await draft.load({ load: async () => undefined, save: async () => undefined })
-    const items = createQuickExperienceDraftItems()
-    draft.adoptPersistedPlan({
-      id: 'current',
-      name: '已存方案',
-      linkedPlanId: 'plan-a',
-      items,
-      updatedAt: '2026-07-21T00:00:00.000Z',
-    })
     const repository = new MemoryLibraryRepository()
-    repository.plans = [{
-      id: 'plan-a',
-      name: '已存方案',
-      items,
-      createdAt: '2026-07-21T00:00:00.000Z',
-      updatedAt: '2026-07-21T00:00:00.000Z',
-    }]
     await useLibraryStore().load(repository)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
+    repository.failPreferences = true
     const { wrapper } = await mountMine(pinia)
     await flushPromises()
 
-    await wrapper.get('button[aria-label="删除方案 已存方案"]').trigger('click')
+    await wrapper.findAll('.setting-row')[1]!.trigger('click')
+    await wrapper.get('.preference-row button').trigger('click')
     await flushPromises()
 
-    expect(repository.deleteCalls).toEqual(['plan-a'])
-    expect(useLibraryStore().plans).toEqual([])
-    expect(draft.plan.linkedPlanId).toBeNull()
-    expect(draft.items).toHaveLength(items.length)
-    expect(wrapper.get('.notice').text()).toContain('训练记录仍然保留')
+    expect(wrapper.get('.notice').text()).toContain('显示偏好没有保存成功')
+    expect(wrapper.text()).not.toContain('indexeddb write failed')
   })
 
-  it('persists pending linked-draft edits before deleting the saved plan', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const draftRepository = new DeferredDraftRepository()
-    const draft = useDraftStore()
-    await draft.load(draftRepository)
-    const items = createQuickExperienceDraftItems()
-    draft.adoptPersistedPlan({
-      id: 'current',
-      name: '已存方案',
-      linkedPlanId: 'plan-a',
-      items,
-      updatedAt: '2026-07-21T00:00:00.000Z',
-    })
-    draft.updateName(items[0]!.id, '刚刚修改的动作')
-    const repository = new MemoryLibraryRepository()
-    repository.plans = [{
-      id: 'plan-a',
-      name: '已存方案',
-      items,
-      createdAt: '2026-07-21T00:00:00.000Z',
-      updatedAt: '2026-07-21T00:00:00.000Z',
-    }]
-    await useLibraryStore().load(repository)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
-    const { wrapper } = await mountMine(pinia)
-    await flushPromises()
-
-    const deletion = wrapper.get('button[aria-label="删除方案 已存方案"]').trigger('click')
-    await draftRepository.started
-
-    expect(repository.deleteCalls).toEqual([])
-    draftRepository.releaseSave()
-    await deletion
-    await flushPromises()
-
-    expect(repository.deleteCalls).toEqual(['plan-a'])
-    expect(draft.plan.linkedPlanId).toBeNull()
-    expect(draft.items[0]?.name).toBe('刚刚修改的动作')
-  })
-
-  it('waits for draft persistence to quiesce before clearing all local data', async () => {
+  it('waits for pending persistence before clearing all local data', async () => {
     vi.useFakeTimers()
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -406,66 +265,40 @@ describe('我的训练', () => {
     draft.addManualAction({ name: '平板支撑', mode: 'duration' })
     await vi.advanceTimersByTimeAsync(301)
     await draftRepository.started
-    const libraryRepository = new MemoryLibraryRepository()
-    await useLibraryStore().load(libraryRepository)
+    const repository = new MemoryLibraryRepository()
+    await useLibraryStore().load(repository)
     useLocalDataClearStore().initialize(new InlineClearCoordinator())
-    localStorage.setItem('hachimi-fitness:active-analysis', JSON.stringify({
-      version: 1,
-      sourceId: 'local:clear-test',
-      sourceKind: 'local',
-      rootRunId: 'run-clear-test',
-      retries: [],
-      lastSequences: {},
-    }))
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { wrapper } = await mountMine(pinia)
 
-    await wrapper.get('button.clear-data').trigger('click')
+    await wrapper.findAll('.setting-row')[4]!.trigger('click')
+    const clear = wrapper.get('button.clear-data').trigger('click')
     await Promise.resolve()
-    expect(libraryRepository.clearCalls).toBe(0)
+    expect(repository.clearCalls).toBe(0)
 
     draftRepository.releaseSave()
+    await clear
     await flushPromises()
-    expect(libraryRepository.clearCalls).toBe(1)
+    expect(repository.clearCalls).toBe(1)
     expect(draft.items).toHaveLength(0)
-    expect(localStorage.getItem('hachimi-fitness:active-analysis')).toBeNull()
-    expect(confirm).toHaveBeenCalledWith(
-      '将清除本机上的来源视频、分析恢复点、草稿、方案、未完成训练、记录和训练档案。确定继续吗？',
-    )
     expect(wrapper.get('.notice').text()).toBe('本机视频和训练数据已清除')
   })
 
   it('does not claim data was cleared when safe cross-tab coordination is unavailable', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
-    const libraryRepository = new MemoryLibraryRepository()
-    await useLibraryStore().load(libraryRepository)
+    const repository = new MemoryLibraryRepository()
+    await useLibraryStore().load(repository)
     useLocalDataClearStore().initialize(new UnsupportedClearCoordinator())
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     const { wrapper } = await mountMine(pinia)
     await flushPromises()
 
+    await wrapper.findAll('.setting-row')[4]!.trigger('click')
     await wrapper.get('button.clear-data').trigger('click')
     await flushPromises()
 
-    expect(libraryRepository.clearCalls).toBe(0)
+    expect(repository.clearCalls).toBe(0)
     expect(wrapper.get('.notice').text()).toContain('数据没有清除')
-    expect(wrapper.get('.notice').text()).not.toBe('本机训练数据已清除')
-  })
-
-  it('shows a safe notice when the Pet preference cannot be saved', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-    const repository = new MemoryLibraryRepository()
-    await useLibraryStore().load(repository)
-    repository.failPreferences = true
-    const { wrapper } = await mountMine(pinia)
-    await flushPromises()
-
-    await wrapper.get('.preference-row button').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.get('.notice').text()).toContain('显示偏好没有保存成功')
-    expect(wrapper.text()).not.toContain('indexeddb write failed')
   })
 })

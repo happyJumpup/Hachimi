@@ -2,8 +2,10 @@
 import { computed, nextTick, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { toSafeOriginUrl } from '@/domain/source'
+import { useDialogFocus } from '@/composables/useDialogFocus'
 import { fingerprintMatches, probeVideoDuration, SUPPORTED_LOCAL_MEDIA_TYPES } from '@/domain/local-media'
+import { estimatePlanMinutes } from '@/domain/plan'
+import { toSafeOriginUrl } from '@/domain/source'
 import type { ActionMode, DraftItem } from '@/domain/types'
 import { QUICK_EXPERIENCE_PLAN_NAME } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
@@ -21,6 +23,7 @@ const draft = useDraftStore()
 const library = useLibraryStore()
 const localMedia = useLocalMediaStore()
 const training = useTrainingStore()
+
 const manualName = ref('')
 const manualMode = ref<ActionMode>('reps')
 const showManual = ref(false)
@@ -33,17 +36,36 @@ const operationError = ref<OperationError | null>(null)
 const planNameError = ref('')
 const quickPlanPending = ref(false)
 const quickPlanError = ref('')
+const selectedItemId = ref<string | null>(null)
 const previewingItemId = ref<string | null>(null)
 const previewUrl = ref<string | null>(null)
 const previewError = ref('')
+const confirmingItem = ref(false)
+const actionSheet = ref<HTMLElement | null>(null)
+const {
+  activate: activateActionSheet,
+  deactivate: deactivateActionSheet,
+  onKeydown: onActionSheetKeydown,
+} = useDialogFocus(actionSheet)
 let previewGeneration = 0
 
-const totalSets = computed(() =>
-  draft.items.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
+const confirmedItems = computed(() =>
+  draft.items.filter((item) => item.confirmationStatus !== 'pending'),
 )
+const pendingCount = computed(() => draft.items.length - confirmedItems.value.length)
+const totalSets = computed(() =>
+  confirmedItems.value.reduce((sum, item) => sum + (item.sets.value ?? 0), 0),
+)
+const estimatedMinutes = computed(() => estimatePlanMinutes(confirmedItems.value))
+
 const isQuickExperience = computed(() =>
   draft.plan.linkedPlanId === null && draft.plan.name === QUICK_EXPERIENCE_PLAN_NAME,
 )
+
+const selectedItem = computed(() =>
+  draft.items.find((item) => item.id === selectedItemId.value) ?? null,
+)
+
 const globalValidationIssues = computed(() =>
   training.validationIssues.filter((issue) => issue.itemId === null),
 )
@@ -56,20 +78,72 @@ const hasItemIssue = (itemId: string, field: string): boolean =>
 
 const validationId = (itemId: string): string => `validation-${itemId}`
 
-const sourceLabel = (item: DraftItem): string =>
-  item.sourceRef
-    ? `${isLocalSource(item) ? '本地视频动作' : '视频动作'} · ${item.sourceRef.title ?? item.sourceRef.sourceId}`
-    : '自建动作 · 无参考视频'
-
 const isLocalSource = (item: DraftItem): boolean => Boolean(
   item.sourceRef && (item.sourceRef.kind === 'local' || item.sourceRef.sourceId.startsWith('local:')),
 )
 
-const segmentRoleLabel = (item: DraftItem): string | null => {
-  const role = item.segmentRole?.value
-  if (role === 'follow_along') return '跟练执行'
-  if (role === 'teaching_demo') return '教学演示'
-  return null
+const sourceLabel = (item: DraftItem): string =>
+  item.sourceRef
+    ? `${isLocalSource(item) ? '本地视频' : '来源视频'} · ${item.sourceRef.title ?? item.sourceRef.sourceId}`
+    : '自建动作 · 无参考视频'
+
+const originalUrl = (item: DraftItem): string | undefined =>
+  toSafeOriginUrl(item.sourceRef?.originUrl)
+
+const provenance = (source: string | null): string => {
+  if (source === 'video') return '来自视频'
+  if (source === 'rule') return '规则补全'
+  if (source === 'personalized') return 'TrainPal 建议'
+  if (source === 'user') return '你的调整'
+  return '未填写'
+}
+
+const actionTarget = (item: DraftItem): string => {
+  if (item.mode === 'duration') return `${item.durationSeconds.value ?? '—'} 秒`
+  return `${item.reps.value ?? '—'} 次`
+}
+
+const openEditor = async (itemId: string, trigger?: Event): Promise<void> => {
+  selectedItemId.value = itemId
+  await activateActionSheet(trigger?.currentTarget as HTMLElement | null | undefined)
+}
+
+const closeEditor = async (): Promise<void> => {
+  selectedItemId.value = null
+  previewGeneration += 1
+  previewingItemId.value = null
+  previewUrl.value = null
+  previewError.value = ''
+  await deactivateActionSheet()
+}
+
+const handleActionSheetKeydown = (event: KeyboardEvent): void => {
+  onActionSheetKeydown(event, () => { void closeEditor() })
+}
+
+const openEditorWithPreview = async (item: DraftItem, event: Event): Promise<void> => {
+  await openEditor(item.id, event)
+  await openLocalPreview(item)
+}
+
+const removeSelected = (): void => {
+  if (!selectedItem.value) return
+  draft.remove(selectedItem.value.id)
+  void closeEditor()
+}
+
+const confirmSelected = async (): Promise<void> => {
+  if (!selectedItem.value || confirmingItem.value) return
+  confirmingItem.value = true
+  draft.confirmItem(selectedItem.value.id)
+  try {
+    await draft.flushPersist()
+    await closeEditor()
+  } catch {
+    // Keep the sheet open and let the existing save state expose a retry.
+  } finally {
+    confirmingItem.value = false
+  }
 }
 
 const openLocalPreview = async (item: DraftItem): Promise<void> => {
@@ -115,11 +189,7 @@ const reselectLocalMedia = async (item: DraftItem, event: Event): Promise<void> 
         return
       }
     }
-    await localMedia.importFile({
-      file,
-      durationSeconds: duration,
-      sourceId,
-    })
+    await localMedia.importFile({ file, durationSeconds: duration, sourceId })
     if (previewGeneration !== currentGeneration || previewingItemId.value !== item.id) return
     previewUrl.value = localMedia.urlFor(sourceId)
   } catch {
@@ -127,16 +197,6 @@ const reselectLocalMedia = async (item: DraftItem, event: Event): Promise<void> 
       previewError.value = '无法读取这个视频，请重新选择'
     }
   }
-}
-
-const originalUrl = (item: DraftItem): string | undefined =>
-  toSafeOriginUrl(item.sourceRef?.originUrl)
-
-const provenance = (source: DraftItem['sets']['source']): string => {
-  if (source === 'video') return '视频'
-  if (source === 'rule') return '规则'
-  if (source === 'user') return '已改'
-  return '未填'
 }
 
 const addManual = (): void => {
@@ -147,12 +207,16 @@ const addManual = (): void => {
 }
 
 const startTraining = async (): Promise<void> => {
-  if (!draft.items.length || starting.value) return
+  if (!confirmedItems.value.length || starting.value) return
   starting.value = true
   operationError.value = null
   try {
     await draft.flushPersist()
-    const result = await training.createFromDraft(draft.plan)
+    const executablePlan = JSON.parse(JSON.stringify({
+      ...draft.plan,
+      items: confirmedItems.value,
+    })) as typeof draft.plan
+    const result = await training.createFromDraft(executablePlan)
     if (result.ok || (!result.ok && result.code === 'active_session_exists')) {
       await router.push('/training')
     } else if (!result.ok) {
@@ -162,17 +226,11 @@ const startTraining = async (): Promise<void> => {
         invalidCard?.focus()
         invalidCard?.scrollIntoView?.({ block: 'center' })
       } else {
-        operationError.value = {
-          action: 'start_training',
-          message: '这次没有开始训练，请重试',
-        }
+        operationError.value = { action: 'start_training', message: '这次没有开始训练，请重试' }
       }
     }
   } catch {
-    operationError.value = {
-      action: 'start_training',
-      message: '这次没有开始训练，请重试',
-    }
+    operationError.value = { action: 'start_training', message: '这次没有开始训练，请重试' }
   } finally {
     starting.value = false
   }
@@ -222,225 +280,126 @@ const saveAs = async (): Promise<void> => {
     showSaveAs.value = false
     saveMessage.value = '已另存为新方案'
   } catch {
-    operationError.value = {
-      action: 'save_as',
-      message: '另存为没有成功，请重试',
-    }
+    operationError.value = { action: 'save_as', message: '另存为没有成功，请重试' }
   } finally {
     savingPlan.value = false
   }
 }
 
 const retryOperation = async (): Promise<void> => {
-  if (operationError.value?.action === 'save_as') {
-    await saveAs()
-  } else if (operationError.value?.action === 'start_training') {
-    await startTraining()
-  }
+  if (operationError.value?.action === 'save_as') await saveAs()
+  if (operationError.value?.action === 'start_training') await startTraining()
 }
 </script>
 
 <template>
-  <main class="plan-page">
+  <main class="plan-page tp-page tp-page--immersive">
     <header class="plan-header">
-      <RouterLink to="/" class="back-link">← 继续找动作</RouterLink>
-      <RouterLink to="/mine" class="back-link">我的训练</RouterLink>
+      <RouterLink to="/" class="back-link" aria-label="返回首页">←</RouterLink>
+      <span>训练方案</span>
+      <span class="header-spacer" aria-hidden="true" />
     </header>
 
     <section class="plan-hero">
-      <div>
-        <p class="eyebrow">{{ draft.plan.linkedPlanId ? 'SAVED PLAN' : 'CURRENT DRAFT' }}</p>
-        <h1 class="plan-title-heading" aria-label="训练方案草稿">
-          <input
-            class="plan-title-input"
-            :value="draft.plan.name"
-            aria-label="方案名称"
-            :aria-invalid="planNameError ? true : undefined"
-            @change="updatePlanName"
-          />
-        </h1>
-        <p v-if="planNameError" class="plan-name-error" role="alert">{{ planNameError }}</p>
-        <p>来自不同视频的动作，在这里排成一次训练。</p>
-      </div>
-      <div class="plan-metrics">
-        <span><b>{{ draft.items.length }}</b> 动作</span>
+      <p class="tp-kicker">{{ draft.plan.linkedPlanId ? 'SAVED PLAN' : 'CURRENT PLAN' }}</p>
+      <h1 class="plan-title-heading" aria-label="当前训练方案">
+        <input
+          class="plan-title-input"
+          :value="draft.plan.name"
+          aria-label="方案名称"
+          :aria-invalid="planNameError ? true : undefined"
+          @change="updatePlanName"
+        />
+      </h1>
+      <p v-if="planNameError" class="plan-name-error" role="alert">{{ planNameError }}</p>
+      <div class="plan-metrics" aria-label="方案摘要">
+        <span><b>{{ draft.items.length }}</b> 个动作</span>
         <span><b>{{ totalSets }}</b> 组</span>
+        <span><b>{{ estimatedMinutes || '—' }}</b> 分钟约用时</span>
       </div>
     </section>
 
     <p v-if="isQuickExperience" class="quick-notice">快速体验方案 · 这个方案不是 AI 分析结果</p>
+    <p v-if="pendingCount" class="pending-notice" role="status">
+      {{ pendingCount }} 个动作需要确认，确认前不会进入训练。点击动作即可查看并决定。
+    </p>
     <p v-if="saveMessage" class="save-message" role="status">{{ saveMessage }}</p>
+
+    <section v-if="draft.items.length" class="coach-card tp-card" aria-labelledby="coach-card-title">
+      <div class="coach-mark" aria-hidden="true">TP</div>
+      <div>
+        <p class="tp-kicker">TRAINPAL COACH</p>
+        <h2 id="coach-card-title">需要更贴近你的目标？</h2>
+        <p>GYMTI 和教练风格由你主动选择，基础方案随时可以直接训练。</p>
+      </div>
+      <RouterLink to="/personalize">让 TrainPal 调整这次训练</RouterLink>
+    </section>
 
     <section v-if="draft.items.length" class="plan-list" aria-label="动作安排">
       <article
         v-for="(item, index) in draft.items"
         :key="item.id"
         class="plan-card"
-        :class="{ 'has-validation-error': validationIssuesForItem(item.id).length }"
+        :class="{
+          'has-validation-error': validationIssuesForItem(item.id).length,
+          'needs-confirmation': item.confirmationStatus === 'pending',
+        }"
         :aria-describedby="validationIssuesForItem(item.id).length ? validationId(item.id) : undefined"
         tabindex="-1"
       >
-        <div class="order-column">
-          <span>{{ String(index + 1).padStart(2, '0') }}</span>
-          <i />
-          <div>
-            <button type="button" aria-label="上移" :disabled="index === 0" @click="draft.move(item.id, -1)">↑</button>
-            <button type="button" aria-label="下移" :disabled="index === draft.items.length - 1" @click="draft.move(item.id, 1)">↓</button>
-          </div>
+        <span class="action-index">{{ String(index + 1).padStart(2, '0') }}</span>
+        <button type="button" class="action-summary" @click="openEditor(item.id, $event)">
+          <span>
+            <strong>
+              {{ item.name }}
+              <em v-if="item.confirmationStatus === 'pending'" class="pending-badge">待确认</em>
+            </strong>
+            <small>{{ item.sets.value ?? '—' }} 组 · 每组 {{ actionTarget(item) }} · 休息 {{ item.restSeconds.value ?? '—' }} 秒</small>
+          </span>
+          <b aria-hidden="true">›</b>
+        </button>
+        <div class="order-controls" aria-label="调整动作顺序">
+          <button type="button" aria-label="上移" :disabled="index === 0" @click="draft.move(item.id, -1)">↑</button>
+          <button type="button" aria-label="下移" :disabled="index === draft.items.length - 1" @click="draft.move(item.id, 1)">↓</button>
         </div>
 
-        <div class="card-content">
-          <div class="source-row">
-            <div class="source-summary">
-              <p class="source-label">{{ sourceLabel(item) }}</p>
-              <span v-if="segmentRoleLabel(item)" class="segment-role-badge">
-                {{ segmentRoleLabel(item) }}
-              </span>
-            </div>
-            <a
-              v-if="originalUrl(item)"
-              class="original-video-link"
-              :href="originalUrl(item)"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              查看原视频
-            </a>
-            <button
-              v-else-if="isLocalSource(item)"
-              type="button"
-              class="local-preview-button"
-              @click="openLocalPreview(item)"
-            >
-              {{ previewingItemId === item.id ? '重新读取来源视频' : '预览来源视频' }}
-            </button>
-          </div>
-          <div v-if="previewingItemId === item.id" class="local-preview">
-            <video
-              v-if="previewUrl"
-              :src="previewUrl"
-              controls
-              playsinline
-              preload="metadata"
-            />
-            <p v-else role="status">{{ previewError || '正在读取本地视频…' }}</p>
-            <label v-if="!previewUrl" class="reselect-local-media">
-              重新选择原视频
-              <input
-                type="file"
-                :accept="SUPPORTED_LOCAL_MEDIA_TYPES.join(',')"
-                @change="reselectLocalMedia(item, $event)"
-              />
-            </label>
-            <p
-              v-if="localMedia.current?.sourceId === item.sourceRef?.sourceId && localMedia.storageMessage"
-              class="local-storage-message"
-              role="status"
-            >
-              {{ localMedia.storageMessage }}
-            </p>
-          </div>
-          <input
-            class="plan-name"
-            :value="item.name"
-            aria-label="动作名称"
-            :aria-invalid="hasItemIssue(item.id, 'name') || undefined"
-            @change="draft.updateName(item.id, ($event.target as HTMLInputElement).value)"
-          />
-
-          <div class="mode-toggle">
-            <button type="button" :class="{ active: item.mode === 'reps' }" @click="draft.updateMode(item.id, 'reps')">按次数</button>
-            <button type="button" :class="{ active: item.mode === 'duration' }" @click="draft.updateMode(item.id, 'duration')">按时长</button>
-          </div>
-
-          <div class="parameter-grid">
-            <label>
-              <span>组数 <em>{{ provenance(item.sets.source) }}</em></span>
-              <input
-                type="number"
-                min="1"
-                :value="item.sets.value ?? ''"
-                :aria-invalid="hasItemIssue(item.id, 'sets') || undefined"
-                @input="draft.updateValue(item.id, 'sets', Number(($event.target as HTMLInputElement).value) || null)"
-              />
-            </label>
-            <label v-if="item.mode === 'reps'">
-              <span>每组次数 <em>{{ provenance(item.reps.source) }}</em></span>
-              <input
-                type="number"
-                min="1"
-                :value="item.reps.value ?? ''"
-                :aria-invalid="hasItemIssue(item.id, 'reps') || undefined"
-                @input="draft.updateValue(item.id, 'reps', Number(($event.target as HTMLInputElement).value) || null)"
-              />
-            </label>
-            <label v-else>
-              <span>每组秒数 <em>{{ provenance(item.durationSeconds.source) }}</em></span>
-              <input
-                type="number"
-                min="1"
-                :value="item.durationSeconds.value ?? ''"
-                :aria-invalid="hasItemIssue(item.id, 'durationSeconds') || undefined"
-                @input="draft.updateValue(item.id, 'durationSeconds', Number(($event.target as HTMLInputElement).value) || null)"
-              />
-            </label>
-            <label>
-              <span>休息秒数 <em>{{ provenance(item.restSeconds.source) }}</em></span>
-              <input
-                type="number"
-                min="0"
-                :value="item.restSeconds.value ?? ''"
-                :aria-invalid="hasItemIssue(item.id, 'restSeconds') || undefined"
-                @input="draft.updateValue(item.id, 'restSeconds', Number(($event.target as HTMLInputElement).value) || 0)"
-              />
-            </label>
-            <label>
-              <span>重量 kg <em>{{ provenance(item.weightKg.source) }}</em></span>
-              <input
-                type="number"
-                min="0"
-                step="0.5"
-                placeholder="留空"
-                :value="item.weightKg.value ?? ''"
-                :aria-invalid="hasItemIssue(item.id, 'weightKg') || undefined"
-                @input="draft.updateValue(item.id, 'weightKg', Number(($event.target as HTMLInputElement).value) || null)"
-              />
-            </label>
-          </div>
-
-          <div class="segment-line" v-if="item.segment.value">
-            <span>演示片段</span>
-            <b>{{ item.segment.value.start_seconds.toFixed(1) }}s—{{ item.segment.value.end_seconds.toFixed(1) }}s</b>
-            <em>{{ provenance(item.segment.source) }}</em>
-          </div>
-
-          <footer class="card-actions">
-            <button type="button" @click="draft.duplicate(item.id)">复制</button>
-            <button type="button" class="danger" @click="draft.remove(item.id)">删除</button>
-          </footer>
-
-          <div
-            v-if="validationIssuesForItem(item.id).length"
-            :id="validationId(item.id)"
-            class="card-validation"
-            role="alert"
+        <div v-if="item.sourceRef" class="source-shortcut">
+          <span>{{ sourceLabel(item) }}</span>
+          <a
+            v-if="originalUrl(item)"
+            class="original-video-link"
+            :href="originalUrl(item)"
+            target="_blank"
+            rel="noopener noreferrer"
+          >查看原视频</a>
+          <button
+            v-else-if="isLocalSource(item)"
+            type="button"
+            class="local-preview-button"
+            @click="openEditorWithPreview(item, $event)"
           >
-            <strong>请检查这个动作</strong>
-            <p
-              v-for="issue in validationIssuesForItem(item.id)"
-              :key="`${issue.itemId}-${issue.field}`"
-            >
-              {{ issue.message }}
-            </p>
-          </div>
+            预览来源视频
+          </button>
+        </div>
+
+        <div
+          v-if="validationIssuesForItem(item.id).length"
+          :id="validationId(item.id)"
+          class="card-validation"
+          role="alert"
+        >
+          <strong>请检查这个动作</strong>
+          <p v-for="issue in validationIssuesForItem(item.id)" :key="`${issue.itemId}-${issue.field}`">
+            {{ issue.message }}
+          </p>
         </div>
       </article>
     </section>
 
-    <section v-else class="empty-plan">
+    <section v-else class="empty-plan tp-card">
       <span>00</span>
-      <h2>草稿还是空的</h2>
-      <p>可以继续找动作，也可以直接创建一个没有参考视频的自建动作。</p>
+      <h2>还没有训练动作</h2>
+      <p>可以重新选择视频，也可以直接创建一个没有参考视频的动作。</p>
       <button type="button" :disabled="quickPlanPending" @click="useQuickPlan">
         {{ quickPlanPending ? '正在载入…' : '使用快速体验方案' }}
       </button>
@@ -448,14 +407,14 @@ const retryOperation = async (): Promise<void> => {
       <p v-if="quickPlanError" class="empty-plan-error" role="alert">{{ quickPlanError }}</p>
     </section>
 
-    <section class="manual-section">
+    <section class="plan-tools" aria-label="方案次级操作">
       <button v-if="!showManual" type="button" class="manual-trigger" @click="showManual = true">
-        <span>＋</span>
-        <div><strong>创建动作</strong><small>没有参考视频也可以</small></div>
+        <span aria-hidden="true">＋</span>
+        <span><strong>创建动作</strong><small>没有参考视频也可以</small></span>
       </button>
-      <form v-else class="manual-form" @submit.prevent="addManual">
+      <form v-else class="manual-form tp-card" @submit.prevent="addManual">
         <div>
-          <p class="eyebrow">MANUAL ACTION</p>
+          <p class="tp-kicker">MANUAL ACTION</p>
           <h2>创建自建动作</h2>
         </div>
         <label>
@@ -468,42 +427,25 @@ const retryOperation = async (): Promise<void> => {
         </div>
         <div class="manual-actions">
           <button type="button" @click="showManual = false">取消</button>
-          <button type="submit" class="confirm" :disabled="!manualName.trim()">加入草稿</button>
+          <button type="submit" class="confirm" :disabled="!manualName.trim()">加入方案</button>
         </div>
       </form>
-    </section>
 
-    <section v-if="draft.items.length || training.hasCurrent" class="start-training-panel">
-      <div>
-        <strong>{{ training.hasCurrent ? '已有未完成训练' : '方案结构会在开始前检查' }}</strong>
-        <small>{{ training.hasCurrent ? '继续当前进度，不会覆盖原场次' : '不评价动作顺序或训练效果' }}</small>
-        <small class="training-safety-tip">如有不适请停止，并按自身情况调整</small>
-      </div>
-      <button
-        v-if="!training.hasCurrent"
-        type="button"
-        :disabled="starting"
-        @click="startTraining"
-      >
-        {{ starting ? '正在准备…' : '开始训练' }}
-      </button>
-      <RouterLink v-else to="/training">继续训练</RouterLink>
-    </section>
-
-    <section v-if="draft.items.length" class="save-as-panel">
-      <button v-if="!showSaveAs" type="button" @click="beginSaveAs">另存为</button>
-      <form v-else @submit.prevent="saveAs">
-        <label>
-          新方案名称
-          <input v-model="saveAsName" aria-label="新方案名称" autofocus maxlength="40" />
-        </label>
-        <div>
-          <button type="button" @click="showSaveAs = false">取消</button>
-          <button type="submit" class="confirm" :disabled="!saveAsName.trim() || savingPlan">
-            {{ savingPlan ? '保存中…' : '保存副本' }}
-          </button>
-        </div>
-      </form>
+      <section v-if="draft.items.length" class="save-as-panel">
+        <button v-if="!showSaveAs" type="button" @click="beginSaveAs">另存为</button>
+        <form v-else @submit.prevent="saveAs">
+          <label>
+            新方案名称
+            <input v-model="saveAsName" aria-label="新方案名称" autofocus maxlength="40" />
+          </label>
+          <div>
+            <button type="button" @click="showSaveAs = false">取消</button>
+            <button type="submit" class="confirm" :disabled="!saveAsName.trim() || savingPlan">
+              {{ savingPlan ? '保存中…' : '保存副本' }}
+            </button>
+          </div>
+        </form>
+      </section>
     </section>
 
     <section v-if="operationError" class="operation-error" role="alert">
@@ -525,12 +467,7 @@ const retryOperation = async (): Promise<void> => {
       aria-live="polite"
     >
       <i />
-      <button
-        v-if="draft.persistState === 'failed'"
-        type="button"
-        aria-label="重试保存草稿"
-        @click="draft.retryPersist"
-      >
+      <button v-if="draft.persistState === 'failed'" type="button" aria-label="重试保存当前方案" @click="draft.retryPersist">
         {{ draft.persistMessage }}
       </button>
       <template v-else>
@@ -541,196 +478,285 @@ const retryOperation = async (): Promise<void> => {
 
     <section v-if="globalValidationIssues.length" class="plan-error" role="alert">
       <strong>方案还不能开始训练</strong>
-      <p v-for="issue in globalValidationIssues" :key="`${issue.itemId}-${issue.field}`">
-        {{ issue.message }}
-      </p>
+      <p v-for="issue in globalValidationIssues" :key="`${issue.itemId}-${issue.field}`">{{ issue.message }}</p>
     </section>
+
+    <section v-if="draft.items.length || training.hasCurrent" class="start-training-panel">
+      <div>
+        <strong>{{ training.hasCurrent ? '已有未完成训练' : `${confirmedItems.length} 个可训练动作 · 约 ${estimatedMinutes || '—'} 分钟` }}</strong>
+        <small class="training-safety-tip">
+          {{ pendingCount ? `${pendingCount} 个待确认动作暂不执行 · ` : '' }}如有不适请停止，并按自身情况调整
+        </small>
+      </div>
+      <button v-if="!training.hasCurrent" type="button" :disabled="starting || !confirmedItems.length" @click="startTraining">
+        {{ starting ? '正在准备…' : '开始训练' }}
+      </button>
+      <RouterLink v-else to="/training">继续训练</RouterLink>
+    </section>
+
+    <template v-if="selectedItem">
+      <button class="sheet-backdrop" type="button" aria-label="关闭动作编辑" @click="closeEditor" />
+      <section
+        ref="actionSheet"
+        class="action-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="action-sheet-title"
+        tabindex="-1"
+        @keydown="handleActionSheetKeydown"
+      >
+        <header>
+          <div>
+            <p class="tp-kicker">ACTION {{ String(draft.items.findIndex((item) => item.id === selectedItem?.id) + 1).padStart(2, '0') }}</p>
+            <h2 id="action-sheet-title">调整动作</h2>
+          </div>
+          <button type="button" aria-label="关闭动作编辑" @click="closeEditor">×</button>
+        </header>
+
+        <p v-if="selectedItem.confirmationStatus === 'pending'" class="confirmation-note">
+          TrainPal 对这个动作的名称、片段或训练方式还不够确定。请检查后明确确认；在此之前它不会进入训练。
+        </p>
+        <p class="user-priority-note">你的调整优先于视频、规则和 TrainPal 建议，并会自动保存在本机。</p>
+
+        <label class="field-stack">
+          <span>动作名称</span>
+          <input
+            class="plan-name"
+            :value="selectedItem.name"
+            aria-label="动作名称"
+            :aria-invalid="hasItemIssue(selectedItem.id, 'name') || undefined"
+            data-dialog-initial-focus
+            @change="draft.updateName(selectedItem.id, ($event.target as HTMLInputElement).value)"
+          />
+        </label>
+
+        <div class="mode-toggle" aria-label="训练方式">
+          <button type="button" :class="{ active: selectedItem.mode === 'reps' }" @click="draft.updateMode(selectedItem.id, 'reps')">按次数</button>
+          <button type="button" :class="{ active: selectedItem.mode === 'duration' }" @click="draft.updateMode(selectedItem.id, 'duration')">按时长</button>
+        </div>
+
+        <div class="parameter-grid">
+          <label>
+            <span>组数 <em>{{ provenance(selectedItem.sets.source) }}</em></span>
+            <input type="number" min="1" :value="selectedItem.sets.value ?? ''" :aria-invalid="hasItemIssue(selectedItem.id, 'sets') || undefined" @input="draft.updateValue(selectedItem.id, 'sets', Number(($event.target as HTMLInputElement).value) || null)" />
+          </label>
+          <label v-if="selectedItem.mode === 'reps'">
+            <span>每组次数 <em>{{ provenance(selectedItem.reps.source) }}</em></span>
+            <input type="number" min="1" :value="selectedItem.reps.value ?? ''" :aria-invalid="hasItemIssue(selectedItem.id, 'reps') || undefined" @input="draft.updateValue(selectedItem.id, 'reps', Number(($event.target as HTMLInputElement).value) || null)" />
+          </label>
+          <label v-else>
+            <span>每组秒数 <em>{{ provenance(selectedItem.durationSeconds.source) }}</em></span>
+            <input type="number" min="1" :value="selectedItem.durationSeconds.value ?? ''" :aria-invalid="hasItemIssue(selectedItem.id, 'durationSeconds') || undefined" @input="draft.updateValue(selectedItem.id, 'durationSeconds', Number(($event.target as HTMLInputElement).value) || null)" />
+          </label>
+          <label>
+            <span>休息秒数 <em>{{ provenance(selectedItem.restSeconds.source) }}</em></span>
+            <input type="number" min="0" :value="selectedItem.restSeconds.value ?? ''" :aria-invalid="hasItemIssue(selectedItem.id, 'restSeconds') || undefined" @input="draft.updateValue(selectedItem.id, 'restSeconds', Number(($event.target as HTMLInputElement).value) || 0)" />
+          </label>
+          <label>
+            <span>重量 kg <em>{{ provenance(selectedItem.weightKg.source) }}</em></span>
+            <input type="number" min="0" step="0.5" placeholder="留空" :value="selectedItem.weightKg.value ?? ''" :aria-invalid="hasItemIssue(selectedItem.id, 'weightKg') || undefined" @input="draft.updateValue(selectedItem.id, 'weightKg', Number(($event.target as HTMLInputElement).value) || null)" />
+          </label>
+        </div>
+
+        <section class="source-detail">
+          <div>
+            <p class="tp-kicker">SOURCE</p>
+            <strong>{{ sourceLabel(selectedItem) }}</strong>
+          </div>
+          <div v-if="selectedItem.segment.value" class="segment-line">
+            <span>参考时间段</span>
+            <b>{{ selectedItem.segment.value.start_seconds.toFixed(1) }}—{{ selectedItem.segment.value.end_seconds.toFixed(1) }} 秒</b>
+            <em>{{ provenance(selectedItem.segment.source) }}</em>
+          </div>
+          <a v-if="originalUrl(selectedItem)" class="original-video-link" :href="originalUrl(selectedItem)" target="_blank" rel="noopener noreferrer">查看原视频</a>
+          <button v-else-if="isLocalSource(selectedItem)" type="button" class="local-preview-button" @click="openLocalPreview(selectedItem)">
+            {{ previewingItemId === selectedItem.id ? '重新读取来源视频' : '预览来源视频' }}
+          </button>
+          <div v-if="previewingItemId === selectedItem.id" class="local-preview">
+            <video v-if="previewUrl" :src="previewUrl" controls playsinline preload="metadata" />
+            <p v-else role="status">{{ previewError || '正在读取本地视频…' }}</p>
+            <label v-if="!previewUrl" class="reselect-local-media">
+              重新选择原视频
+              <input type="file" :accept="SUPPORTED_LOCAL_MEDIA_TYPES.join(',')" @change="reselectLocalMedia(selectedItem, $event)" />
+            </label>
+            <p v-if="localMedia.current?.sourceId === selectedItem.sourceRef?.sourceId && localMedia.storageMessage" class="local-storage-message" role="status">{{ localMedia.storageMessage }}</p>
+          </div>
+          <p class="source-help">来源片段仅作参考播放；训练次数或计时以你当前设置为准。</p>
+        </section>
+
+        <footer class="sheet-actions">
+          <button type="button" @click="draft.duplicate(selectedItem.id)">复制动作</button>
+          <button type="button" class="danger" @click="removeSelected">删除动作</button>
+          <button
+            v-if="selectedItem.confirmationStatus === 'pending'"
+            type="button"
+            class="done"
+            :disabled="confirmingItem"
+            @click="confirmSelected"
+          >
+            {{ confirmingItem ? '正在确认…' : '确认并加入' }}
+          </button>
+          <button v-else type="button" class="done" @click="closeEditor">完成</button>
+        </footer>
+      </section>
+    </template>
   </main>
 </template>
 
 <style scoped>
-.plan-page {
-  width: min(100%, 880px);
-  min-height: 100dvh;
-  margin: auto;
-  padding: max(18px, env(safe-area-inset-top)) 16px max(36px, env(safe-area-inset-bottom));
-}
+.plan-page { position: relative; max-width: 860px; padding-bottom: calc(132px + var(--tp-task-reserve, 0px) + env(safe-area-inset-bottom)); }
+.plan-header { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; margin-bottom: 34px; }
+.plan-header > span { color: var(--tp-muted); font-size: 13px; font-weight: 800; text-align: center; }
+.back-link { display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--tp-line); border-radius: 50%; color: var(--tp-ink); background: var(--tp-surface); font-size: 22px; text-decoration: none; }
+.header-spacer { width: 44px; }
 
-.plan-header,
-.plan-hero,
-.plan-metrics,
-.save-state,
-.segment-line,
-.card-actions,
-.manual-trigger,
-.manual-actions {
-  display: flex;
-  align-items: center;
-}
-
-.plan-header { justify-content: space-between; margin-bottom: 34px; }
-.back-link { display: inline-grid; min-height: 44px; place-items: center; color: var(--ink); font-size: 12px; font-weight: 700; text-decoration: none; }
-.save-state { gap: 6px; margin-top: 12px; color: var(--muted); font-size: 11px; }
-.save-state i { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
-.save-state small { color: inherit; font-size: inherit; }
-.save-state.failed { color: var(--coral); }
-.save-state.failed i { background: var(--coral); box-shadow: none; }
-.save-state button { min-height: 44px; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-decoration: underline; }
-
-.plan-hero { align-items: end; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
-.eyebrow { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .15em; }
-.plan-title-heading { margin: 8px 0 4px; }
-.plan-title-input { display: block; width: min(100%, 520px); min-height: 44px; margin: 0; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 clamp(38px, 10vw, 64px)/.95 var(--font-display), var(--font-cn); letter-spacing: -.025em; }
-.plan-title-input:focus { text-decoration: underline; text-decoration-color: rgb(38 235 213 / 28%); text-underline-offset: 6px; }
-.plan-name-error { margin: 7px 0 0; color: var(--coral); font-size: 11px; }
-.plan-hero p { margin: 0; color: var(--muted); font-size: 12px; }
-.plan-metrics { gap: 16px; flex-shrink: 0; }
-.plan-metrics span { color: var(--muted); font-size: 11px; text-align: right; }
-.plan-metrics b { display: block; color: var(--ink); font: 700 30px/1 var(--font-display); }
+.plan-hero { padding-bottom: 22px; border-bottom: 1px solid var(--tp-line); }
+.plan-title-heading { margin: 8px 0 14px; }
+.plan-title-input { width: 100%; min-height: 48px; padding: 0; border: 0; color: var(--tp-ink); background: transparent; font: 700 clamp(40px, 11vw, 68px)/.92 var(--font-display), var(--font-cn); letter-spacing: -.03em; }
+.plan-title-input:focus { text-decoration: underline; text-decoration-color: rgb(217 75 43 / 24%); text-underline-offset: 7px; }
+.plan-name-error { margin: -6px 0 12px; color: var(--tp-danger); font-size: 12px; }
+.plan-metrics { display: flex; flex-wrap: wrap; gap: 10px 24px; }
+.plan-metrics span { color: var(--tp-muted); font-size: 12px; }
+.plan-metrics b { margin-right: 4px; color: var(--tp-ink); font: 700 25px/1 var(--font-display); }
 .quick-notice,
-.save-message { margin: 12px 0 0; padding: 9px 11px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 6%); font-size: 11px; }
-.save-message { border-left-color: var(--cyan); color: var(--cyan); background: rgb(38 235 213 / 5%); }
+.pending-notice,
+.save-message { margin: 14px 0 0; padding: 11px 13px; border-left: 3px solid var(--tp-primary); border-radius: 0 10px 10px 0; color: var(--tp-muted); background: rgb(217 75 43 / 7%); font-size: 12px; line-height: 1.55; }
+.pending-notice { border-left-color: #9A6A1D; color: #72501B; background: rgb(154 106 29 / 8%); }
+.save-message { border-left-color: var(--tp-success); color: var(--tp-success); background: rgb(73 115 59 / 7%); }
 
-.plan-list { display: grid; gap: 14px; margin-top: 20px; }
-.plan-card { display: grid; grid-template-columns: 62px 1fr; overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: linear-gradient(135deg, rgb(255 255 255 / 4%), rgb(255 255 255 / 1%)); }
-.plan-card.has-validation-error { border-color: rgb(255 111 97 / 55%); }
-.plan-card.has-validation-error:focus { outline: 2px solid var(--coral); outline-offset: 3px; }
-.order-column { display: grid; grid-template-rows: auto 1fr auto; justify-items: center; gap: 8px; padding: 16px 8px; border-right: 1px solid var(--line); background: rgb(38 235 213 / 3%); }
-.order-column > span { color: var(--cyan); font: 700 22px/1 var(--font-display); }
-.order-column > i { width: 1px; background: linear-gradient(var(--cyan), transparent); }
-.order-column div { display: grid; gap: 8px; }
-.order-column button { width: 46px; min-width: 46px; height: 46px; min-height: 46px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: transparent; }
-.order-column button:disabled { opacity: .2; }
+.coach-card { display: grid; grid-template-columns: auto 1fr; gap: 12px 14px; margin-top: 20px; padding: 18px; }
+.coach-mark { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 18px 18px 18px 5px; color: var(--tp-ink); background: var(--tp-secondary); font: 800 18px/1 var(--font-display); transform: rotate(-2deg); }
+.coach-card h2 { margin: 5px 0 4px; font-size: 20px; }
+.coach-card p:not(.tp-kicker) { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.6; }
+.coach-card a { grid-column: 2; justify-self: start; min-height: 44px; padding: 12px 0 0; color: var(--tp-primary-readable); font-size: 13px; font-weight: 800; text-decoration: none; }
 
-.card-content { min-width: 0; padding: 16px; }
-.source-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.source-summary { display: flex; min-width: 0; align-items: center; gap: 7px; }
-.source-label { min-width: 0; margin: 0; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; text-transform: uppercase; letter-spacing: .08em; }
-.segment-role-badge { flex: 0 0 auto; padding: 4px 6px; border: 1px solid rgb(38 235 213 / 25%); border-radius: 999px; color: var(--cyan); font-size: 11px; }
-.original-video-link { display: inline-grid; min-width: 44px; min-height: 44px; flex: 0 0 auto; place-items: center; color: var(--cyan); font-size: 11px; font-weight: 700; text-decoration: none; }
-.local-preview-button { min-height: 44px; flex: 0 0 auto; padding: 0 6px; border: 0; color: var(--cyan); background: transparent; font-size: 11px; font-weight: 700; }
-.local-preview { display: grid; gap: 8px; margin: 8px 0 12px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgb(0 0 0 / 16%); }
-.local-preview video { width: 100%; max-height: 260px; border-radius: 8px; background: #000; }
-.local-preview p { margin: 0; color: var(--muted); font-size: 11px; }
-.local-preview .local-storage-message { color: var(--cyan); }
-.reselect-local-media { position: relative; display: inline-grid; min-height: 44px; place-items: center; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 9px; color: var(--ink); font-size: 11px; font-weight: 700; cursor: pointer; }
-.reselect-local-media input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.plan-name { width: 100%; min-height: 44px; padding: 0; border: 0; color: var(--ink); background: transparent; font: 700 28px/1.1 var(--font-display), var(--font-cn); }
-.mode-toggle { display: inline-flex; gap: 4px; margin: 14px 0; padding: 3px; border: 1px solid var(--line); border-radius: 10px; }
-.mode-toggle button { min-width: 44px; min-height: 44px; padding: 7px 12px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; }
-.mode-toggle button.active { color: var(--bg); background: var(--cyan); font-weight: 800; }
+.plan-list { display: grid; gap: 10px; margin-top: 22px; }
+.plan-card { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; overflow: hidden; border: 1px solid var(--tp-line); border-radius: 18px; background: var(--tp-surface); box-shadow: 0 8px 28px rgb(42 51 45 / 6%); }
+.plan-card.has-validation-error { border-color: var(--tp-danger); }
+.plan-card.needs-confirmation { border-style: dashed; border-color: #B48A49; background: #FFF9ED; }
+.plan-card.has-validation-error:focus { outline: 2px solid var(--tp-danger); outline-offset: 3px; }
+.action-index { color: var(--tp-primary); font: 700 21px/1 var(--font-display); text-align: center; }
+.action-summary { display: flex; min-width: 0; min-height: 76px; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 8px; border: 0; color: var(--tp-ink); background: transparent; text-align: left; }
+.action-summary span { min-width: 0; }
+.action-summary strong,
+.action-summary small { display: block; }
+.action-summary strong { overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.pending-badge { display: inline-flex; margin-left: 5px; padding: 4px 7px; border-radius: 999px; color: #72501B; background: #F1DEBA; font-size: 11px; font-style: normal; vertical-align: 2px; }
+.action-summary small { margin-top: 6px; color: var(--tp-muted); font-size: 12px; }
+.action-summary > b { color: var(--tp-primary); font-size: 28px; font-weight: 400; }
+.order-controls { display: grid; gap: 2px; padding-right: 8px; }
+.order-controls button { width: 44px; min-height: 44px; border: 0; color: var(--tp-muted); background: transparent; }
+.order-controls button:disabled { opacity: .22; }
+.source-shortcut { display: flex; grid-column: 2 / -1; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 0 12px 10px 8px; }
+.source-shortcut > span { min-width: 0; overflow: hidden; color: var(--tp-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.source-shortcut a,
+.source-shortcut button { flex: 0 0 auto; min-height: 44px; padding: 0 4px; border: 0; color: var(--tp-primary-readable); background: transparent; font-size: 11px; font-weight: 800; text-decoration: none; }
+.source-shortcut a { display: grid; place-items: center; }
+.card-validation { grid-column: 1 / -1; padding: 10px 14px; border-top: 1px solid rgb(179 38 30 / 20%); color: var(--tp-danger); background: rgb(179 38 30 / 5%); }
+.card-validation strong { font-size: 12px; }
+.card-validation p { margin: 3px 0 0; font-size: 12px; }
 
-.parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
-.parameter-grid label { display: grid; gap: 5px; }
-.parameter-grid label > span { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
-.parameter-grid em,
-.segment-line em { color: var(--cyan); font-size: 11px; font-style: normal; }
-.parameter-grid input { width: 100%; min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); font: 600 18px/1 var(--font-display); }
-.parameter-grid input:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgb(38 235 213 / 8%); }
+.empty-plan { margin-top: 22px; padding: 38px 22px; text-align: center; }
+.empty-plan > span { color: var(--tp-primary); font: 700 26px/1 var(--font-display); }
+.empty-plan h2 { margin: 8px 0; }
+.empty-plan p { max-width: 330px; margin: auto; color: var(--tp-muted); font-size: 13px; line-height: 1.7; }
+.empty-plan button { min-height: 48px; margin-top: 18px; padding: 0 20px; border: 0; border-radius: 999px; color: var(--tp-surface); background: var(--tp-primary-readable); font-weight: 800; }
+.empty-plan small { display: block; margin-top: 9px; color: var(--tp-muted); font-size: 11px; }
+.empty-plan .empty-plan-error { margin-top: 10px; color: var(--tp-danger); }
 
-.segment-line { gap: 8px; margin-top: 12px; padding: 9px 10px; border-left: 2px solid var(--coral); color: var(--muted); background: rgb(255 111 97 / 5%); font-size: 11px; }
-.segment-line b { margin-left: auto; color: var(--ink); font: 600 14px/1 var(--font-display); }
-.card-actions { justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.card-actions button { min-width: 44px; min-height: 44px; padding: 6px 9px; border: 0; color: var(--muted); background: transparent; font-size: 11px; }
-.card-actions .danger { color: var(--coral); }
-.card-validation { margin-top: 10px; padding: 10px 12px; border-left: 2px solid var(--coral); color: var(--coral); background: rgb(255 111 97 / 6%); }
-.card-validation strong { font-size: 11px; }
-.card-validation p { margin: 4px 0 0; font-size: 11px; }
-
-.manual-section { margin-top: 16px; }
-.manual-trigger { width: 100%; gap: 13px; padding: 15px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--ink); background: transparent; text-align: left; }
-.manual-trigger > span { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 50%; color: var(--bg); background: var(--coral); font-size: 22px; }
+.plan-tools { display: grid; gap: 12px; margin-top: 14px; }
+.manual-trigger { display: flex; width: 100%; min-height: 68px; align-items: center; gap: 12px; padding: 12px 15px; border: 1px dashed #BDB9AC; border-radius: 16px; color: var(--tp-ink); background: transparent; text-align: left; }
+.manual-trigger > span:first-child { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; color: var(--tp-surface); background: var(--tp-primary); font-size: 21px; }
 .manual-trigger strong,
 .manual-trigger small { display: block; }
-.manual-trigger small { margin-top: 3px; color: var(--muted); }
-.manual-form { display: grid; gap: 13px; padding: 18px; border: 1px solid var(--line-strong); border-radius: 18px; background: var(--surface); }
+.manual-trigger small { margin-top: 3px; color: var(--tp-muted); }
+.manual-form { display: grid; gap: 14px; padding: 18px; }
 .manual-form h2 { margin: 5px 0 0; }
-.manual-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
-.manual-form input { min-height: 44px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); }
-.manual-form .mode-toggle { margin: 0; justify-self: start; }
-.manual-actions { justify-content: flex-end; gap: 8px; }
-.manual-actions button { min-height: 44px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }
-.manual-actions .confirm { color: var(--bg); border-color: var(--cyan); background: var(--cyan); font-weight: 800; }
+.manual-form label,
+.save-as-panel label,
+.field-stack { display: grid; gap: 6px; color: var(--tp-muted); font-size: 12px; }
+.manual-form input,
+.save-as-panel input,
+.field-stack input { min-height: 48px; padding: 11px 13px; border: 1px solid var(--tp-line); border-radius: 12px; color: var(--tp-ink); background: var(--tp-surface); }
+.mode-toggle { display: inline-flex; justify-self: start; gap: 4px; padding: 4px; border: 1px solid var(--tp-line); border-radius: 13px; background: #F7F3EA; }
+.mode-toggle button { min-height: 44px; padding: 0 14px; border: 0; border-radius: 9px; color: var(--tp-muted); background: transparent; }
+.mode-toggle button.active { color: var(--tp-surface); background: var(--tp-ink); font-weight: 800; }
+.manual-actions,
+.save-as-panel form > div { display: flex; justify-content: flex-end; gap: 8px; }
+.manual-actions button,
+.save-as-panel button { min-height: 44px; padding: 0 15px; border: 1px solid var(--tp-line); border-radius: 999px; color: var(--tp-muted); background: var(--tp-surface); }
+.manual-actions .confirm,
+.save-as-panel .confirm { color: var(--tp-surface); border-color: var(--tp-primary); background: var(--tp-primary-readable); font-weight: 800; }
+.save-as-panel { display: grid; gap: 10px; padding: 8px 0; }
+.save-as-panel > button { justify-self: start; }
+.save-as-panel form { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--tp-line); border-radius: 16px; background: var(--tp-surface); }
 
-.empty-plan { margin-top: 20px; padding: 48px 20px; border: 1px dashed var(--line); border-radius: 18px; text-align: center; }
-.empty-plan > span { color: var(--coral); font: 700 24px/1 var(--font-display); }
-.empty-plan h2 { margin: 8px 0; }
-.empty-plan p { max-width: 320px; margin: auto; color: var(--muted); font-size: 12px; line-height: 1.7; }
-.empty-plan button { min-height: 46px; margin-top: 18px; padding: 0 18px; border: 0; border-radius: 12px; color: var(--bg); background: var(--coral); font-weight: 800; }
-.empty-plan small { display: block; margin-top: 8px; color: var(--muted); font-size: 11px; }
-.empty-plan .empty-plan-error { margin-top: 10px; color: var(--coral); }
+.save-state { display: flex; min-height: 44px; align-items: center; gap: 7px; margin-top: 8px; color: var(--tp-muted); font-size: 11px; }
+.save-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--tp-success); }
+.save-state small { color: inherit; }
+.save-state.failed { color: var(--tp-danger); }
+.save-state.failed i { background: var(--tp-danger); }
+.save-state button { min-height: 44px; padding: 0; border: 0; color: inherit; background: transparent; text-decoration: underline; }
+.operation-error,
+.plan-error { margin-top: 12px; padding: 13px 15px; border: 1px solid rgb(179 38 30 / 28%); border-radius: 14px; color: var(--tp-danger); background: rgb(179 38 30 / 5%); font-size: 12px; }
+.operation-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.operation-error button { min-height: 44px; padding: 0 14px; border: 1px solid currentcolor; border-radius: 999px; color: inherit; background: transparent; font-weight: 800; }
+.plan-error p { margin: 4px 0 0; }
 
-.start-training-panel {
-  position: sticky;
-  bottom: max(12px, env(safe-area-inset-bottom));
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 20px;
-  padding: 14px;
-  border: 1px solid rgb(38 235 213 / 28%);
-  border-radius: 16px;
-  background: rgb(16 20 23 / 94%);
-  box-shadow: 0 16px 40px rgb(0 0 0 / 38%);
-  backdrop-filter: blur(18px);
-}
+.start-training-panel { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); z-index: 20; display: flex; max-width: 820px; align-items: center; justify-content: space-between; gap: 12px; margin: auto; padding: 12px 12px 12px 16px; border: 1px solid rgb(28 40 34 / 16%); border-radius: 22px; color: var(--tp-training-ink); background: var(--tp-training-surface); box-shadow: var(--tp-shadow-float); }
 .start-training-panel strong,
 .start-training-panel small { display: block; }
-.start-training-panel strong { font-size: 12px; }
-.start-training-panel small { margin-top: 3px; color: var(--muted); font-size: 11px; }
-.start-training-panel .training-safety-tip { margin-top: 6px; color: var(--ink); }
+.start-training-panel strong { font-size: 13px; }
+.start-training-panel small { margin-top: 4px; color: #B9C0BB; font-size: 11px; }
 .start-training-panel button,
-.start-training-panel a {
-  min-height: 44px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 12px;
-  color: var(--bg);
-  background: var(--cyan);
-  font-size: 12px;
-  font-weight: 800;
-  text-decoration: none;
-}
-.start-training-panel a { display: grid; place-items: center; }
+.start-training-panel a { display: grid; min-height: 52px; flex: 0 0 auto; place-items: center; padding: 0 22px; border: 0; border-radius: 999px; color: var(--tp-surface); background: var(--tp-primary-readable); font-weight: 800; text-decoration: none; }
 .start-training-panel button:disabled { opacity: .55; }
-.save-as-panel { display: grid; gap: 10px; margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: rgb(255 255 255 / 2%); }
-.save-as-panel > button { justify-self: start; min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 10px; color: var(--ink); background: transparent; font-weight: 700; }
-.save-as-panel form { display: grid; gap: 10px; }
-.save-as-panel form label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
-.save-as-panel form input { min-height: 44px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-raised); }
-.save-as-panel form div { display: flex; justify-content: flex-end; gap: 8px; }
-.save-as-panel form button { min-height: 44px; padding: 0 14px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; }
-.save-as-panel form .confirm { color: var(--bg); border-color: var(--cyan); background: var(--cyan); font-weight: 800; }
-.operation-error {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgb(255 111 97 / 30%);
-  border-radius: 14px;
-  color: var(--coral);
-  background: rgb(255 111 97 / 6%);
-  font-size: 11px;
-}
-.operation-error button { min-height: 44px; padding: 0 14px; border: 1px solid currentcolor; border-radius: 9px; color: inherit; background: transparent; font-weight: 700; }
-.operation-error button:disabled { opacity: .55; }
-.plan-error {
-  margin-top: 12px;
-  padding: 14px;
-  border: 1px solid rgb(255 111 97 / 30%);
-  border-radius: 14px;
-  color: var(--coral);
-  background: rgb(255 111 97 / 6%);
-}
-.plan-error p { margin: 5px 0 0; font-size: 11px; }
 
-@media (min-width: 720px) {
-  .plan-page { padding-inline: 28px; }
-  .parameter-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .plan-card { grid-template-columns: 62px 1fr; }
+.sheet-backdrop { position: fixed; inset: 0; z-index: 60; width: 100%; border: 0; background: rgb(14 19 17 / 48%); backdrop-filter: blur(3px); }
+.action-sheet { position: fixed; right: 0; bottom: 0; left: 0; z-index: 61; display: grid; max-height: min(88dvh, 820px); gap: 16px; overflow-y: auto; padding: 20px clamp(16px, 4vw, 26px) calc(20px + env(safe-area-inset-bottom)); border-radius: 28px 28px 0 0; color: var(--tp-ink); background: var(--tp-surface); box-shadow: 0 -24px 70px rgb(14 19 17 / 24%); }
+.action-sheet > header { display: flex; align-items: center; justify-content: space-between; }
+.action-sheet h2 { margin: 5px 0 0; font-size: 26px; }
+.action-sheet > header button { width: 44px; min-height: 44px; border: 1px solid var(--tp-line); border-radius: 50%; color: var(--tp-ink); background: transparent; font-size: 25px; }
+.user-priority-note { margin: 0; padding: 11px 13px; border-left: 3px solid var(--tp-secondary); color: var(--tp-muted); background: rgb(165 186 99 / 12%); font-size: 12px; line-height: 1.6; }
+.confirmation-note { margin: 0; padding: 12px 13px; border: 1px solid #DDBD85; border-radius: 13px; color: #72501B; background: #FFF7E8; font-size: 12px; line-height: 1.6; }
+.plan-name { font-size: 17px; font-weight: 800; }
+.parameter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.parameter-grid label { display: grid; gap: 6px; }
+.parameter-grid label > span { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; color: var(--tp-muted); font-size: 11px; }
+.parameter-grid em,
+.segment-line em { color: var(--tp-primary-readable); font-size: 11px; font-style: normal; }
+.parameter-grid input { width: 100%; min-height: 48px; padding: 10px 12px; border: 1px solid var(--tp-line); border-radius: 12px; color: var(--tp-ink); background: #F7F3EA; font: 700 19px/1 var(--font-display); }
+.source-detail { display: grid; gap: 10px; padding: 15px; border: 1px solid var(--tp-line); border-radius: 16px; background: #F7F3EA; }
+.source-detail strong { display: block; margin-top: 5px; font-size: 13px; }
+.segment-line { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--tp-muted); font-size: 11px; }
+.segment-line b { margin-left: auto; color: var(--tp-ink); font: 700 15px/1 var(--font-display); }
+.source-detail > a,
+.source-detail > button { justify-self: start; min-height: 44px; padding: 0; border: 0; color: var(--tp-primary-readable); background: transparent; font-size: 12px; font-weight: 800; text-decoration: none; }
+.source-detail > a { display: grid; place-items: center; }
+.source-help { margin: 0; color: var(--tp-muted); font-size: 11px; line-height: 1.6; }
+.local-preview { display: grid; gap: 8px; }
+.local-preview video { width: 100%; max-height: 280px; border-radius: 12px; object-fit: contain; background: #000; }
+.local-preview p { margin: 0; color: var(--tp-muted); font-size: 11px; }
+.local-preview .local-storage-message { color: var(--tp-success); }
+.reselect-local-media { position: relative; display: grid; min-height: 44px; place-items: center; overflow: hidden; border: 1px solid var(--tp-line); border-radius: 999px; color: var(--tp-ink); font-size: 12px; font-weight: 800; }
+.reselect-local-media:focus-within { outline: 2px solid var(--tp-focus); outline-offset: 3px; }
+.reselect-local-media input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.sheet-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.sheet-actions button { min-height: 46px; padding: 0 16px; border: 1px solid var(--tp-line); border-radius: 999px; color: var(--tp-muted); background: transparent; }
+.sheet-actions .danger { color: var(--tp-danger); }
+.sheet-actions .done { margin-left: auto; color: var(--tp-surface); border-color: var(--tp-ink); background: var(--tp-ink); font-weight: 800; }
+
+@media (min-width: 760px) {
+  .coach-card { grid-template-columns: auto 1fr auto; align-items: center; }
+  .coach-card a { grid-column: 3; grid-row: 1; padding: 0; }
+  .action-sheet { top: 0; right: 0; bottom: 0; left: auto; width: min(520px, 100%); max-height: none; border-radius: 28px 0 0 28px; }
+}
+
+@media (max-width: 359px) {
+  .parameter-grid { grid-template-columns: 1fr; }
+  .start-training-panel { align-items: stretch; }
+  .start-training-panel > div { display: none; }
+  .start-training-panel button,
+  .start-training-panel a { width: 100%; }
 }
 </style>

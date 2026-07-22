@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import App from '@/App.vue'
+import { useAnalysisStore } from '@/stores/analysis'
 import { useAppBootstrapStore } from '@/stores/app-bootstrap'
 import { useTrainingStore } from '@/stores/training'
 import type { TrainingCommand, TrainingEngine, TrainingEngineResult } from '@/training/training-engine'
@@ -55,6 +56,44 @@ class UnavailableTrainingEngine implements TrainingEngine {
 }
 
 describe('应用本机数据启动壳', () => {
+  it('shows the three-item navigation only for top-level route meta', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        {
+          path: '/',
+          name: 'home',
+          component: { template: '<p>首页</p>' },
+          meta: { showBottomNav: true, theme: 'journal' },
+        },
+        {
+          path: '/analysis',
+          name: 'analysis',
+          component: { template: '<p>分析</p>' },
+          meta: { showBottomNav: false, theme: 'journal' },
+        },
+      ],
+    })
+    await router.push('/')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [pinia, router] } })
+    await useAppBootstrapStore().initialize(async () => undefined)
+    await flushPromises()
+
+    const navigation = wrapper.get('[aria-label="主要导航"]')
+    expect(navigation.findAll('a').map((link) => link.text())).toEqual([
+      '01首页',
+      '02训练',
+      '03我的',
+    ])
+
+    await router.push('/analysis')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="主要导航"]').exists()).toBe(false)
+  })
+
   it('mounts a recoverable error shell when IndexedDB bootstrap fails', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -102,15 +141,42 @@ describe('应用本机数据启动壳', () => {
     expect(wrapper.text()).not.toContain('首页已就绪')
   })
 
-  it('does not cover the plan primary action with the global continue entry', async () => {
+  it('keeps unfinished training reachable outside the active training page and training hub', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: '/', name: 'home', component: { template: '<p>视频页</p>' } },
-        { path: '/plan', name: 'plan', component: { template: '<p>方案页</p>' } },
-        { path: '/mine', name: 'mine', component: { template: '<p>我的训练</p>' } },
+        {
+          path: '/',
+          name: 'home',
+          component: { template: '<p>视频页</p>' },
+          meta: { showTrainingTask: true },
+        },
+        {
+          path: '/plan',
+          name: 'plan',
+          component: { template: '<p>方案页</p>' },
+          meta: { showTrainingTask: true },
+        },
+        {
+          path: '/mine',
+          name: 'mine',
+          component: { template: '<p>我的训练</p>' },
+          meta: { showTrainingTask: true },
+        },
+        {
+          path: '/train',
+          name: 'train',
+          component: { template: '<p>训练中心</p>' },
+          meta: { showTrainingTask: false },
+        },
+        {
+          path: '/training',
+          name: 'training',
+          component: { template: '<p>训练中</p>' },
+          meta: { showTrainingTask: false },
+        },
       ],
     })
     await router.push('/plan')
@@ -121,16 +187,56 @@ describe('应用本机数据启动壳', () => {
     })
     await flushPromises()
 
-    expect(wrapper.find('.global-training-entry').exists()).toBe(false)
+    expect(wrapper.get('.global-training-entry').text()).toContain('继续训练')
 
     await router.push('/mine')
     await flushPromises()
 
-    expect(wrapper.find('.global-training-entry').exists()).toBe(false)
+    expect(wrapper.get('.global-training-entry').text()).toContain('继续训练')
 
-    await router.push('/')
+    await router.push('/train')
     await flushPromises()
 
-    expect(wrapper.get('.global-training-entry').text()).toContain('继续训练')
+    expect(wrapper.find('.global-training-entry').exists()).toBe(false)
+
+    await router.push('/training')
+    await flushPromises()
+
+    expect(wrapper.find('.global-training-entry').exists()).toBe(false)
+  })
+
+  it('keeps a running analysis reachable outside the analysis page, including during training', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        {
+          path: '/analysis',
+          name: 'analysis',
+          component: { template: '<p>分析页</p>' },
+          meta: { showAnalysisTask: false },
+        },
+        {
+          path: '/training',
+          name: 'training',
+          component: { template: '<p>训练中</p>' },
+          meta: { showAnalysisTask: true },
+        },
+      ],
+    })
+    await router.push('/training')
+    await router.isReady()
+    const wrapper = mount(App, { global: { plugins: [pinia, router] } })
+    await useAppBootstrapStore().initialize(async () => undefined)
+    useAnalysisStore().status = 'running'
+    await flushPromises()
+
+    expect(wrapper.get('.global-analysis-entry').text()).toContain('正在建立分析请求')
+
+    await router.push('/analysis')
+    await flushPromises()
+
+    expect(wrapper.find('.global-analysis-entry').exists()).toBe(false)
   })
 })

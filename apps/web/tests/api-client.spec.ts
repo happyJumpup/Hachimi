@@ -30,14 +30,14 @@ describe('API client', () => {
   it('loads the current local-upload limits from capabilities', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       local_upload_enabled: true,
-      local_analysis_max_seconds: 60,
+      local_analysis_max_seconds: 300,
       local_upload_max_bytes: 25_000_000,
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(analysisClient.getCapabilities()).resolves.toEqual({
       local_upload_enabled: true,
-      local_analysis_max_seconds: 60,
+      local_analysis_max_seconds: 300,
       local_upload_max_bytes: 25_000_000,
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/capabilities', expect.objectContaining({

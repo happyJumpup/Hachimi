@@ -1,7 +1,7 @@
 import type { components } from '@/api/schema'
 
 export type ActionMode = components['schemas']['ActionMode']
-export type ValueSource = 'video' | 'rule' | 'user'
+export type ValueSource = 'video' | 'rule' | 'personalized' | 'user'
 
 export interface Segment {
   start_seconds: number
@@ -28,10 +28,7 @@ export interface AnalysisCandidate {
   parameters: CandidateParameters
   evidence: EvidenceSpan[]
   needs_confirmation: boolean
-  segment_role?: SegmentRole
 }
-
-export type SegmentRole = 'follow_along' | 'teaching_demo' | 'unknown'
 
 export type SourceSummary = components['schemas']['SourceSummary']
 
@@ -85,7 +82,7 @@ export interface AnalysisRun {
   source_duration_seconds: number
   processed_seconds: number
   discovered_candidate_count: number
-  coverage_status: 'complete' | 'partial' | null
+  coverage_status: 'complete' | 'partial' | 'insufficient' | null
   coverage_gaps: CoverageGap[]
   created_at: string
   updated_at: string
@@ -136,7 +133,7 @@ export interface DraftItem {
   name: string
   sourceRef: DraftSourceRef | null
   segment: SourcedValue<Segment>
-  segmentRole?: SourcedValue<SegmentRole>
+  confirmationStatus?: 'confirmed' | 'pending'
   mode: ActionMode
   sets: SourcedValue<number>
   reps: SourcedValue<number>

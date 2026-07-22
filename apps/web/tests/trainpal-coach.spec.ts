@@ -1,26 +1,26 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
-import HachimiPet from '@/features/experience/HachimiPet.vue'
+import TrainPalCoach from '@/features/experience/TrainPalCoach.vue'
 
-describe('HachimiPet', () => {
+describe('TrainPalCoach', () => {
   it('renders the selected presentation state and never exposes training controls', () => {
-    const wrapper = mount(HachimiPet, { props: { state: 'training', visible: true } })
+    const wrapper = mount(TrainPalCoach, { props: { state: 'training', visible: true } })
 
-    expect(wrapper.get('img').attributes('alt')).toBe('哈肌咪正在陪你训练')
+    expect(wrapper.get('img').attributes('alt')).toBe('TrainPal 小猫教练正在陪你训练')
     expect(wrapper.find('button').exists()).toBe(false)
   })
 
   it('falls back to equivalent status text when the asset fails', async () => {
-    const wrapper = mount(HachimiPet, { props: { state: 'resting', visible: true } })
+    const wrapper = mount(TrainPalCoach, { props: { state: 'resting', visible: true } })
     await wrapper.get('img').trigger('error')
 
     expect(wrapper.find('img').exists()).toBe(false)
-    expect(wrapper.text()).toContain('哈肌咪正在休息，训练不受影响')
+    expect(wrapper.text()).toContain('TrainPal 正在陪你休息，训练不受影响')
   })
 
   it('occupies no space when the persisted preference hides it', () => {
-    const wrapper = mount(HachimiPet, { props: { state: 'idle', visible: false } })
+    const wrapper = mount(TrainPalCoach, { props: { state: 'idle', visible: false } })
 
     expect(wrapper.html()).toBe('<!--v-if-->')
   })

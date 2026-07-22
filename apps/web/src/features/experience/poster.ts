@@ -96,7 +96,7 @@ function createBrowserRuntime(): PosterRuntime {
       return new Promise<CanvasImageSource>((resolve, reject) => {
         const image = new Image()
         image.onload = () => resolve(image)
-        image.onerror = () => reject(new Error('哈肌咪素材加载失败，请重试'))
+        image.onerror = () => reject(new Error('TrainPal 小猫素材加载失败，请重试'))
         image.src = url
       })
     },
@@ -104,38 +104,38 @@ function createBrowserRuntime(): PosterRuntime {
 }
 
 function drawPoster(context: PosterDrawingContext, model: CompletionPosterModel, pet: CanvasImageSource): void {
-  context.fillStyle = '#07090b'
+  context.fillStyle = '#F3EFE5'
   context.fillRect(0, 0, POSTER_WIDTH, POSTER_HEIGHT)
-  context.fillStyle = '#0f1719'
+  context.fillStyle = '#FFFDF8'
   context.fillRect(72, 84, 936, 1_752)
-  context.fillStyle = '#26ebd5'
+  context.fillStyle = '#A5BA63'
   context.fillRect(72, 84, 18, 1_752)
-  context.fillStyle = '#ff6f61'
+  context.fillStyle = '#D94B2B'
   context.fillRect(90, 84, 918, 18)
 
   context.textAlign = 'left'
   context.textBaseline = 'alphabetic'
-  context.fillStyle = '#26ebd5'
+  context.fillStyle = '#D94B2B'
   context.font = '700 88px "Arial Narrow", "Microsoft YaHei", sans-serif'
   context.fillText(model.title, 144, 310, 780)
-  context.fillStyle = '#f5f7f6'
+  context.fillStyle = '#1C2822'
   context.font = '700 74px "Microsoft YaHei", sans-serif'
   context.fillText(model.planName, 144, 470, 792)
 
-  context.fillStyle = '#9eaaa7'
+  context.fillStyle = '#6C746E'
   context.font = '500 38px "Microsoft YaHei", sans-serif'
   context.fillText('本次训练', 144, 670)
-  context.fillStyle = '#f5f7f6'
+  context.fillStyle = '#1C2822'
   context.font = '700 64px "Arial Narrow", "Microsoft YaHei", sans-serif'
   context.fillText(model.durationLabel, 144, 760)
   context.fillText(model.caloriesLabel, 144, 890)
   context.fillText(model.actionCountLabel, 144, 1_020)
 
   context.drawImage(pet, 570, 1_110, 360, 360)
-  context.fillStyle = '#9eaaa7'
+  context.fillStyle = '#6C746E'
   context.font = '500 34px "Microsoft YaHei", sans-serif'
-  context.fillText('哈基米练臂力动', 144, 1_690)
-  context.fillStyle = '#26ebd5'
+  context.fillText('TrainPal · 你的专属训练伙伴', 144, 1_690)
+  context.fillStyle = '#D94B2B'
   context.font = '700 34px "Microsoft YaHei", sans-serif'
   context.fillText('继续找动作，下一练见', 144, 1_765)
 }
@@ -159,7 +159,7 @@ function posterFilename(planName: string): string {
     .replace(/[<>:"/\\|?*]/g, '-')
     .replace(/-+/g, '-')
     .slice(0, 48)
-  return `哈基米-${safePlanName || '训练完成'}.png`
+  return `TrainPal-${safePlanName || '训练完成'}.png`
 }
 
 function createBrowserDeliveryRuntime(): PosterDeliveryRuntime {
@@ -190,7 +190,7 @@ export async function deliverCompletionPoster(
   const filename = posterFilename(planName)
   const file = new File([blob], filename, { type: 'image/png' })
   const shareData: ShareData = {
-    title: '哈基米练臂力动训练海报',
+    title: 'TrainPal 训练完成海报',
     files: [file],
   }
 

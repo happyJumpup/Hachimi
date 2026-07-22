@@ -1,27 +1,36 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 
+import { useDialogFocus } from '@/composables/useDialogFocus'
 import type { TrainingProfile } from '@/domain/training'
 import ProfileForm from '@/features/experience/ProfileForm.vue'
-import { QUICK_EXPERIENCE_LABEL } from '@/features/quick-experience/fixture'
 import { LocalDataCoordinationUnavailableError } from '@/local-data/clear-coordinator'
-import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
 import { useLocalDataClearStore } from '@/stores/local-data-clear'
-import { useTrainingStore } from '@/stores/training'
 
-const router = useRouter()
-const draft = useDraftStore()
+type DetailPanel = 'records' | 'gymti' | 'profile' | 'coach' | 'growth' | 'data' | null
+
 const library = useLibraryStore()
 const localDataClear = useLocalDataClearStore()
-const training = useTrainingStore()
 const pending = ref(false)
 const notice = ref('')
+const activePanel = ref<DetailPanel>(null)
+const detailSheet = ref<HTMLElement | null>(null)
+const dialogFocus = useDialogFocus(detailSheet)
 
-const currentDraftLabel = computed(() =>
-  draft.items.length ? `${draft.items.length} 个动作` : '还没有动作',
-)
+const profileFields = computed(() => [
+  library.profile.sex,
+  library.profile.age,
+  library.profile.heightCm,
+  library.profile.weightKg,
+].filter((value) => value !== null).length)
+
+const effectiveTrainingDays = computed(() => {
+  const days = library.records
+    .filter((record) => record.actions.some((action) => action.completedSets > 0))
+    .map((record) => new Date(record.endedAt).toLocaleDateString('zh-CN'))
+  return new Set(days).size
+})
 
 const formatDate = (value: string): string => new Intl.DateTimeFormat('zh-CN', {
   month: 'numeric',
@@ -30,61 +39,18 @@ const formatDate = (value: string): string => new Intl.DateTimeFormat('zh-CN', {
   minute: '2-digit',
 }).format(new Date(value))
 
-const useQuickPlan = async (): Promise<void> => {
-  if (pending.value) return
-  if (
-    draft.items.length > 0
-    && !window.confirm('使用快速体验方案会替换当前草稿，确定继续吗？')
-  ) return
-  pending.value = true
-  try {
-    await draft.quiescePersistence()
-    const next = await library.useQuickExperience()
-    draft.adoptPersistedPlan(next)
-    await router.push('/plan')
-  } catch {
-    notice.value = '快速体验方案没有载入成功，请重试'
-  } finally {
-    draft.resumePersistence()
-    pending.value = false
-  }
+const openPanel = async (
+  panel: Exclude<DetailPanel, null>,
+  event?: Event,
+): Promise<void> => {
+  activePanel.value = panel
+  notice.value = ''
+  await dialogFocus.activate(event?.currentTarget as HTMLElement | null)
 }
 
-const openPlan = async (planId: string): Promise<void> => {
-  if (pending.value) return
-  if (
-    draft.items.length > 0
-    && !window.confirm('打开这个方案会替换当前草稿，确定继续吗？')
-  ) return
-  pending.value = true
-  try {
-    await draft.quiescePersistence()
-    draft.adoptPersistedPlan(await library.openPlan(planId))
-    await router.push('/plan')
-  } catch {
-    notice.value = '这个方案没有打开成功，请重试'
-  } finally {
-    draft.resumePersistence()
-    pending.value = false
-  }
-}
-
-const deletePlan = async (planId: string, planName: string): Promise<void> => {
-  if (pending.value) return
-  if (!window.confirm(`删除“${planName}”？已有训练记录会保留。`)) return
-  pending.value = true
-  try {
-    if (draft.plan.linkedPlanId === planId) await draft.flushPersist()
-    await draft.quiescePersistence()
-    const nextDraft = await library.deletePlan(planId)
-    if (nextDraft) draft.adoptPersistedPlan(nextDraft)
-    notice.value = '方案已删除，训练记录仍然保留'
-  } catch {
-    notice.value = '这个方案没有删除成功，请重试'
-  } finally {
-    draft.resumePersistence()
-    pending.value = false
-  }
+const closePanel = async (): Promise<void> => {
+  activePanel.value = null
+  await dialogFocus.deactivate()
 }
 
 const saveProfile = async (
@@ -107,42 +73,28 @@ const clearProfile = async (): Promise<void> => {
   }
 }
 
-const togglePet = async (): Promise<void> => {
+const toggleCoach = async (): Promise<void> => {
   if (pending.value || library.persistenceSuspended) return
   pending.value = true
   try {
     await library.setPetVisible(!library.preferences.petVisible)
-    notice.value = library.preferences.petVisible ? '训练中将显示哈肌咪' : '训练中已隐藏哈肌咪'
+    notice.value = library.preferences.petVisible
+      ? '训练中将显示 TrainPal 小猫教练'
+      : '训练中已隐藏 TrainPal 小猫教练'
   } catch {
-    notice.value = '哈肌咪显示偏好没有保存成功，请重试'
-  } finally {
-    pending.value = false
-  }
-}
-
-const endCurrentTraining = async (): Promise<void> => {
-  if (pending.value || !training.hasCurrent) return
-  if (!window.confirm('提前结束后只记录实际完成量，确定结束吗？')) return
-  pending.value = true
-  try {
-    const result = await training.endEarly()
-    if (!result.ok || !result.record) {
-      notice.value = training.errorMessage ?? '这次没有结束成功，请重试'
-      return
-    }
-    await library.refreshHistory()
-    await router.push(`/result/${result.record.id}`)
+    notice.value = 'TrainPal 显示偏好没有保存成功，请重试'
   } finally {
     pending.value = false
   }
 }
 
 const clearEverything = async (): Promise<void> => {
-  if (!window.confirm('将清除本机上的来源视频、分析恢复点、草稿、方案、未完成训练、记录和训练档案。确定继续吗？')) return
+  if (!window.confirm('将清除本机上的来源视频、分析恢复点、当前方案、已存方案、未完成训练、记录和训练档案。确定继续吗？')) return
   pending.value = true
   try {
     await localDataClear.clearAllLocalData()
     notice.value = '本机视频和训练数据已清除'
+    closePanel()
   } catch (error) {
     notice.value = error instanceof LocalDataCoordinationUnavailableError
       ? '当前浏览器无法安全协调其他标签页，数据没有清除'
@@ -156,180 +108,234 @@ onMounted(async () => {
   try {
     await library.refreshHistory()
   } catch {
-    notice.value = '方案和记录暂时没有读取成功，请重试进入此页'
+    notice.value = '训练记录暂时没有读取成功，请稍后重试'
   }
 })
 </script>
 
 <template>
-  <main class="mine-page">
-    <header class="mine-header">
-      <RouterLink to="/">← 返回视频</RouterLink>
-      <span>只保存在当前设备</span>
+  <main class="mine-page tp-page">
+    <header class="mine-hero">
+      <div>
+        <p class="tp-kicker">YOUR TRAINPAL</p>
+        <h1 class="tp-title">我的</h1>
+        <p class="tp-lead">目标、教练和训练资料，只留在当前设备。</p>
+      </div>
+      <div class="coach-sticker" aria-label="TrainPal 小猫教练形象待定">
+        <span>TP</span>
+        <small>教练形象待定</small>
+      </div>
     </header>
 
-    <section class="mine-hero">
-      <p class="eyebrow">MY TRAINING</p>
-      <h1>我的训练</h1>
-      <p>方案、进度和记录都在这里。</p>
-    </section>
+    <p v-if="notice && !activePanel" class="notice" role="status">{{ notice }}</p>
 
-    <p v-if="notice" class="notice" role="status">{{ notice }}</p>
-
-    <section class="dashboard-grid">
-      <div v-if="training.hasCurrent" class="dashboard-card active-session">
-        <span>未完成训练</span>
-        <strong>{{ training.session?.plan.name }}</strong>
-        <small>上次进度已保存在本机</small>
-        <div class="session-actions">
-          <RouterLink to="/training">继续训练</RouterLink>
-          <button
-            type="button"
-            aria-label="结束未完成训练"
-            :disabled="pending"
-            @click="endCurrentTraining"
-          >
-            结束训练
-          </button>
-        </div>
-      </div>
-      <RouterLink class="dashboard-card" to="/plan">
-        <span>当前草稿</span>
-        <strong>{{ draft.plan.name }}</strong>
-        <small>{{ currentDraftLabel }} · 继续编辑 →</small>
-      </RouterLink>
-    </section>
-
-    <section class="quick-card">
+    <section class="growth-overview tp-card">
       <div>
-        <span>{{ QUICK_EXPERIENCE_LABEL }}</span>
-        <h2>8 分钟手臂唤醒</h2>
-        <p>无需等待分析，先走通训练、Pet 和结果流程。</p>
+        <p class="tp-kicker">TOGETHER</p>
+        <h2><b>{{ effectiveTrainingDays }}</b> 个有效训练日</h2>
+        <p>完整完成或留下实际完成量，都算一次与你并肩的训练日。</p>
       </div>
-      <button type="button" :disabled="pending" @click="useQuickPlan">使用快速体验方案</button>
-      <small>这是产品示例，不是 AI 分析结果。</small>
+      <button type="button" aria-label="查看陪伴成长" @click="openPanel('growth', $event)">›</button>
     </section>
 
-    <section class="mine-section">
-      <div class="section-heading">
-        <div><span>PLANS</span><h2>已存方案</h2></div>
-        <b>{{ library.plans.length }}</b>
-      </div>
-      <div v-if="library.plans.length" class="row-list">
-        <div v-for="plan in library.plans" :key="plan.id" class="plan-row">
-          <button type="button" class="plan-open" @click="openPlan(plan.id)">
-            <span><strong>{{ plan.name }}</strong><small>{{ plan.items.length }} 个动作 · {{ formatDate(plan.updatedAt) }}</small></span>
-            <b>编辑 →</b>
-          </button>
-          <button
-            type="button"
-            class="plan-delete"
-            :aria-label="`删除方案 ${plan.name}`"
-            :disabled="pending"
-            @click="deletePlan(plan.id, plan.name)"
-          >
-            删除
-          </button>
-        </div>
-      </div>
-      <p v-else class="section-empty">在方案页使用“另存为”，这里就会出现可复用方案。</p>
-    </section>
-
-    <section class="mine-section">
-      <div class="section-heading">
-        <div><span>RECORDS</span><h2>训练记录</h2></div>
-        <b>{{ library.records.length }}</b>
-      </div>
-      <div v-if="library.records.length" class="row-list">
-        <RouterLink v-for="record in library.records" :key="record.id" :to="`/result/${record.id}`">
-          <span><strong>{{ record.plan.name }}</strong><small>{{ formatDate(record.endedAt) }} · 约 {{ record.calorie.value }} 千卡</small></span>
-          <b>{{ record.outcome === 'completed' ? '已完成' : '提前结束' }}</b>
-        </RouterLink>
-      </div>
-      <p v-else class="section-empty">完成或提前结束一次训练后，实际结果会保存在这里。</p>
-    </section>
-
-    <section class="mine-section profile-section">
-      <div class="section-heading">
-        <div><span>PROFILE</span><h2>训练档案</h2></div>
-      </div>
-      <p class="section-copy">用于卡路里约值；不包含体脂率，也不会上传。</p>
-      <ProfileForm :profile="library.profile" @save="saveProfile" @clear="clearProfile" />
-    </section>
-
-    <section class="mine-section preference-row">
-      <div><span>PET</span><h2>训练中显示哈肌咪</h2></div>
-      <button
-        type="button"
-        :aria-pressed="library.preferences.petVisible"
-        :disabled="pending || library.persistenceSuspended"
-        @click="togglePet"
-      >
-        {{ library.preferences.petVisible ? '已显示' : '已隐藏' }}
+    <section class="settings-list" aria-label="我的 TrainPal 设置">
+      <button type="button" class="setting-row" @click="openPanel('gymti', $event)">
+        <span class="row-icon goal-icon" aria-hidden="true">G</span>
+        <span><small>GYMTI 健身目标</small><strong>问卷待定稿</strong></span>
+        <b>›</b>
+      </button>
+      <button type="button" class="setting-row" @click="openPanel('coach', $event)">
+        <span class="row-icon coach-icon" aria-hidden="true">C</span>
+        <span><small>小猫教练风格</small><strong>当前使用 TrainPal 默认风格</strong></span>
+        <b>›</b>
+      </button>
+      <button type="button" class="setting-row" @click="openPanel('profile', $event)">
+        <span class="row-icon profile-icon" aria-hidden="true">P</span>
+        <span><small>个人信息 · 可选</small><strong>{{ profileFields ? `已填写 ${profileFields}/4 项` : '尚未填写' }}</strong></span>
+        <b>›</b>
+      </button>
+      <button type="button" class="setting-row" @click="openPanel('records', $event)">
+        <span class="row-icon record-icon" aria-hidden="true">R</span>
+        <span><small>训练记录</small><strong>{{ library.records.length ? `${library.records.length} 次训练` : '还没有记录' }}</strong></span>
+        <b>›</b>
+      </button>
+      <button type="button" class="setting-row" @click="openPanel('data', $event)">
+        <span class="row-icon data-icon" aria-hidden="true">D</span>
+        <span><small>设置与本机数据</small><strong>隐私、可见性与数据清理</strong></span>
+        <b>›</b>
       </button>
     </section>
 
-    <button type="button" class="clear-data" :disabled="pending" @click="clearEverything">清除本机训练数据</button>
+    <p class="local-only-note">TrainPal 首版不建设账号与跨设备同步；清除浏览器数据后无法恢复。</p>
+
+    <template v-if="activePanel">
+      <button class="sheet-backdrop" type="button" aria-label="关闭详情" @click="closePanel" />
+      <section
+        ref="detailSheet"
+        class="detail-sheet"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="`panel-${activePanel}`"
+        tabindex="-1"
+        @keydown="dialogFocus.onKeydown($event, closePanel)"
+      >
+        <header>
+          <div>
+            <p class="tp-kicker">MY TRAINPAL</p>
+            <h2 :id="`panel-${activePanel}`">
+              {{ activePanel === 'records' ? '训练记录' : activePanel === 'gymti' ? 'GYMTI 健身目标' : activePanel === 'profile' ? '个人信息' : activePanel === 'coach' ? '小猫教练风格' : activePanel === 'growth' ? '陪伴成长' : '设置与本机数据' }}
+            </h2>
+          </div>
+          <button type="button" aria-label="关闭详情" data-dialog-initial-focus @click="closePanel">×</button>
+        </header>
+
+        <p v-if="notice" class="notice sheet-notice" role="status">{{ notice }}</p>
+
+        <div v-if="activePanel === 'records'" class="record-panel">
+          <div v-if="library.records.length" class="record-list">
+            <RouterLink v-for="record in library.records" :key="record.id" :to="`/result/${record.id}`">
+              <span>
+                <strong>{{ record.plan.name }}</strong>
+                <small>{{ formatDate(record.endedAt) }} · 约 {{ record.calorie.value }} 千卡</small>
+              </span>
+              <b>{{ record.outcome === 'completed' ? '已完成' : '提前结束' }}</b>
+            </RouterLink>
+          </div>
+          <p v-else class="panel-empty">完成或提前结束一次训练后，实际完成量会保存在这里。</p>
+        </div>
+
+        <div v-else-if="activePanel === 'gymti'" class="placeholder-panel">
+          <span class="big-letter">G</span>
+          <h3>目标导向问卷正在定稿</h3>
+          <p>GYMTI 会表达你的健身目标取向并采集训练经验，但不会根据身体信息推断人格或训练强度。</p>
+          <RouterLink to="/personalize">查看个性化如何工作</RouterLink>
+        </div>
+
+        <div v-else-if="activePanel === 'profile'" class="profile-panel">
+          <p>年龄、性别、身高和体重主要用于卡路里约值，也只能作为个性策略的弱参考。全部字段都可跳过。</p>
+          <ProfileForm :profile="library.profile" @save="saveProfile" @clear="clearProfile" />
+        </div>
+
+        <div v-else-if="activePanel === 'coach'" class="coach-panel">
+          <div class="coach-placeholder" aria-hidden="true">TP</div>
+          <h3>小猫教练形象正在制作</h3>
+          <p>教练风格只影响语气、鼓励方式和提示密度，不改变动作与训练参数。</p>
+          <div class="preference-row">
+            <span><strong>训练中显示 TrainPal</strong><small>隐藏不会移除训练控制与安全信息</small></span>
+            <button type="button" :aria-pressed="library.preferences.petVisible" :disabled="pending || library.persistenceSuspended" @click="toggleCoach">
+              {{ library.preferences.petVisible ? '已显示' : '已隐藏' }}
+            </button>
+          </div>
+        </div>
+
+        <div v-else-if="activePanel === 'growth'" class="growth-panel">
+          <span>{{ effectiveTrainingDays }}</span>
+          <h3>一起训练过的日子</h3>
+          <p>成长只奖励有效训练日，不因中断倒退，也不会解锁更激进的训练参数或 Agent 权限。</p>
+          <div class="milestone-track" aria-label="下一个里程碑为 3 个有效训练日">
+            <i :style="{ width: `${Math.min(effectiveTrainingDays / 3, 1) * 100}%` }" />
+          </div>
+          <small>下一个里程碑：3 个有效训练日</small>
+        </div>
+
+        <div v-else class="data-panel">
+          <section>
+            <h3>本机保存</h3>
+            <p>来源视频、当前方案、已存方案、训练进度、记录和个人信息只保存在这台设备。</p>
+          </section>
+          <button type="button" class="clear-data" :disabled="pending" @click="clearEverything">清除本机训练数据</button>
+        </div>
+      </section>
+    </template>
   </main>
 </template>
 
 <style scoped>
-.mine-page { width: min(100%, 780px); min-height: 100dvh; margin: auto; padding: max(18px, env(safe-area-inset-top)) 16px max(40px, env(safe-area-inset-bottom)); }
-.mine-header,
-.section-heading,
-.preference-row,
-.row-list button,
-.row-list a { display: flex; align-items: center; }
-.mine-header { justify-content: space-between; }
-.mine-header a { display: inline-grid; min-height: 44px; place-items: center; color: var(--ink); font-size: 11px; font-weight: 700; text-decoration: none; }
-.mine-header > span { color: var(--muted); font-size: 11px; }
-.mine-hero { padding: 42px 0 24px; border-bottom: 1px solid var(--line); }
-.eyebrow,
-.section-heading span,
-.preference-row span { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .14em; }
-.mine-hero h1 { margin: 8px 0 4px; font: 700 clamp(46px, 14vw, 72px)/.9 var(--font-display), var(--font-cn); }
-.mine-hero > p:last-child,
-.section-copy { margin: 0; color: var(--muted); font-size: 11px; }
-.notice { margin: 14px 0 0; padding: 10px; border-radius: 10px; color: var(--cyan); background: rgb(38 235 213 / 7%); font-size: 11px; }
-.quick-card { display: grid; gap: 12px; margin-top: 18px; padding: 18px; border: 1px solid rgb(255 111 97 / 35%); border-radius: 20px; background: linear-gradient(135deg, rgb(255 111 97 / 10%), rgb(38 235 213 / 4%)); }
-.quick-card span { color: var(--coral); font: 700 11px/1 var(--font-display); letter-spacing: .12em; }
-.quick-card h2 { margin: 5px 0; font: 700 30px/1 var(--font-display), var(--font-cn); }
-.quick-card p,
-.quick-card small { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
-.quick-card button { min-height: 46px; border: 0; border-radius: 12px; color: var(--bg); background: var(--coral); font-weight: 800; }
-.dashboard-grid { display: grid; gap: 10px; margin-top: 12px; }
-.dashboard-card { display: grid; gap: 5px; padding: 16px; border: 1px solid var(--line); border-radius: 16px; color: var(--ink); background: var(--surface); text-decoration: none; }
-.dashboard-card span,
-.dashboard-card small { color: var(--muted); font-size: 11px; }
-.dashboard-card strong { font-size: 16px; }
-.active-session { border-color: rgb(38 235 213 / 35%); }
-.session-actions { display: flex; gap: 8px; margin-top: 8px; }
-.session-actions a,
-.session-actions button { display: grid; min-height: 44px; place-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 11px; font-weight: 700; text-decoration: none; }
-.session-actions a { color: var(--bg); border-color: var(--cyan); background: var(--cyan); }
-.session-actions button { color: var(--coral); background: transparent; }
-.session-actions button:disabled { opacity: .5; }
-.mine-section { margin-top: 24px; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: rgb(255 255 255 / 2%); }
-.section-heading { justify-content: space-between; }
-.section-heading h2,
-.preference-row h2 { margin: 4px 0 0; font-size: 18px; }
-.section-heading > b { color: var(--muted); font: 700 28px/1 var(--font-display); }
-.row-list { display: grid; margin-top: 12px; }
-.plan-row { display: flex; align-items: stretch; border-top: 1px solid var(--line); }
-.row-list button,
-.row-list a { width: 100%; justify-content: space-between; gap: 12px; min-height: 58px; padding: 10px 0; border: 0; border-top: 1px solid var(--line); color: var(--ink); background: transparent; text-align: left; text-decoration: none; }
-.plan-row > button { border-top: 0; }
-.plan-row .plan-open { min-width: 0; flex: 1 1 auto; }
-.plan-row .plan-delete { width: auto; min-width: 44px; flex: 0 0 auto; padding-left: 12px; color: var(--coral); font-size: 11px; text-align: center; }
-.row-list span { min-width: 0; }
-.row-list strong,
-.row-list small { display: block; }
-.row-list small { margin-top: 4px; color: var(--muted); font-size: 11px; }
-.row-list b { color: var(--cyan); font-size: 11px; white-space: nowrap; }
-.section-empty { margin: 14px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
-.profile-section { display: grid; gap: 12px; }
-.preference-row { justify-content: space-between; }
-.preference-row button { min-width: 74px; min-height: 44px; border: 1px solid var(--line); border-radius: 999px; color: var(--cyan); background: var(--surface-raised); }
-.clear-data { width: 100%; min-height: 44px; margin-top: 24px; border: 1px solid rgb(255 111 97 / 28%); border-radius: 12px; color: var(--coral); background: transparent; }
-@media (min-width: 640px) { .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mine-page { display: grid; align-content: start; gap: 20px; }
+.mine-hero { display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 14px 0 4px; }
+.mine-hero .tp-title { margin-top: 7px; }
+.mine-hero .tp-lead { margin-top: 10px; font-size: 13px; }
+.coach-sticker { display: grid; width: 92px; min-height: 100px; flex: 0 0 auto; place-items: center; align-content: center; gap: 7px; border: 1px solid var(--tp-line); border-radius: 34px 34px 34px 9px; background: var(--tp-secondary); box-shadow: var(--tp-shadow-soft); transform: rotate(2deg); }
+.coach-sticker span { font: 800 32px/1 var(--font-display); }
+.coach-sticker small { font-size: 11px; font-weight: 800; }
+.notice { margin: 0; padding: 11px 13px; border-left: 3px solid var(--tp-secondary); border-radius: 0 10px 10px 0; color: var(--tp-success); background: rgb(165 186 99 / 12%); font-size: 12px; }
+
+.growth-overview { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 20px; background: var(--tp-training-surface); }
+.growth-overview .tp-kicker { color: var(--tp-secondary); }
+.growth-overview h2 { margin: 7px 0 5px; color: var(--tp-training-ink); font-size: 20px; }
+.growth-overview h2 b { margin-right: 5px; font: 700 38px/1 var(--font-display); }
+.growth-overview p:not(.tp-kicker) { margin: 0; color: #B9C0BB; font-size: 11px; line-height: 1.6; }
+.growth-overview button { width: 44px; min-width: 44px; min-height: 44px; border: 1px solid rgb(247 243 233 / 16%); border-radius: 50%; color: var(--tp-secondary); background: transparent; font-size: 30px; }
+
+.settings-list { display: grid; overflow: hidden; border: 1px solid var(--tp-line); border-radius: 20px; background: var(--tp-surface); box-shadow: var(--tp-shadow-soft); }
+.setting-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 24px; min-height: 74px; align-items: center; gap: 12px; padding: 12px 14px; border: 0; border-top: 1px solid var(--tp-line); color: var(--tp-ink); background: transparent; text-align: left; }
+.setting-row:first-child { border-top: 0; }
+.row-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 15px 15px 15px 5px; color: var(--tp-ink); font: 800 17px/1 var(--font-display); }
+.goal-icon { background: #F1C894; }
+.coach-icon { background: var(--tp-secondary); }
+.profile-icon { background: #D4C8E5; }
+.record-icon { background: #BFD8D1; }
+.data-icon { background: #D8D5CA; }
+.setting-row small,
+.setting-row strong { display: block; }
+.setting-row small { color: var(--tp-muted); font-size: 11px; }
+.setting-row strong { margin-top: 5px; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.setting-row > b { color: var(--tp-primary); font-size: 26px; font-weight: 400; }
+.local-only-note { margin: 0; padding-inline: 4px; color: var(--tp-muted); font-size: 11px; line-height: 1.7; }
+
+.sheet-backdrop { position: fixed; inset: 0; z-index: 60; width: 100%; border: 0; background: rgb(14 19 17 / 48%); backdrop-filter: blur(3px); }
+.detail-sheet { position: fixed; right: 0; bottom: 0; left: 0; z-index: 61; display: grid; max-height: min(88dvh, 820px); gap: 18px; overflow-y: auto; padding: 20px clamp(16px, 4vw, 26px) calc(22px + env(safe-area-inset-bottom)); border-radius: 28px 28px 0 0; color: var(--tp-ink); background: var(--tp-surface); box-shadow: 0 -24px 70px rgb(14 19 17 / 24%); }
+.detail-sheet > header { display: flex; align-items: center; justify-content: space-between; }
+.detail-sheet h2 { margin: 5px 0 0; font-size: 26px; }
+.detail-sheet > header button { width: 44px; min-height: 44px; border: 1px solid var(--tp-line); border-radius: 50%; color: var(--tp-ink); background: transparent; font-size: 25px; }
+.record-list { display: grid; overflow: hidden; border: 1px solid var(--tp-line); border-radius: 16px; }
+.record-list a { display: flex; min-height: 66px; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--tp-line); color: var(--tp-ink); text-decoration: none; }
+.record-list a:first-child { border-top: 0; }
+.record-list strong,
+.record-list small { display: block; }
+.record-list small { margin-top: 4px; color: var(--tp-muted); font-size: 11px; }
+.record-list b { color: var(--tp-primary-readable); font-size: 11px; }
+.panel-empty { margin: 0; padding: 30px 18px; border: 1px dashed #BDB9AC; border-radius: 16px; color: var(--tp-muted); font-size: 12px; line-height: 1.7; text-align: center; }
+.placeholder-panel,
+.coach-panel,
+.growth-panel { display: grid; justify-items: start; gap: 10px; }
+.big-letter,
+.coach-placeholder { display: grid; width: 64px; height: 64px; place-items: center; border-radius: 24px 24px 24px 7px; color: var(--tp-ink); background: var(--tp-secondary); font: 800 26px/1 var(--font-display); transform: rotate(-3deg); }
+.placeholder-panel h3,
+.coach-panel h3,
+.growth-panel h3 { margin: 4px 0 0; font-size: 22px; }
+.placeholder-panel p,
+.coach-panel p,
+.growth-panel p,
+.profile-panel > p,
+.data-panel p { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.7; }
+.placeholder-panel a { display: inline-flex; min-height: 44px; align-items: center; color: var(--tp-primary-readable); font-size: 12px; font-weight: 800; }
+.profile-panel { display: grid; gap: 18px; }
+.profile-panel :deep(.profile-form) { padding-top: 4px; }
+.profile-panel :deep(.profile-actions button:not(.quiet)) { color: var(--tp-surface); border-color: var(--tp-primary); background: var(--tp-primary-readable); }
+.coach-placeholder { background: #F1C894; }
+.preference-row { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding: 14px; border: 1px solid var(--tp-line); border-radius: 16px; }
+.preference-row strong,
+.preference-row small { display: block; }
+.preference-row strong { font-size: 13px; }
+.preference-row small { margin-top: 4px; color: var(--tp-muted); font-size: 11px; }
+.preference-row button { min-width: 78px; min-height: 44px; border: 1px solid var(--tp-line); border-radius: 999px; color: var(--tp-primary-readable); background: #F7F3EA; font-weight: 800; }
+.growth-panel > span { color: var(--tp-primary); font: 700 72px/.8 var(--font-display); }
+.milestone-track { width: 100%; height: 8px; margin-top: 8px; overflow: hidden; border-radius: 999px; background: #E4E0D6; }
+.milestone-track i { display: block; height: 100%; border-radius: inherit; background: var(--tp-secondary); }
+.growth-panel > small { color: var(--tp-muted); font-size: 11px; }
+.data-panel { display: grid; gap: 18px; }
+.data-panel section { padding: 16px; border: 1px solid var(--tp-line); border-radius: 16px; background: #F7F3EA; }
+.data-panel h3 { margin: 0 0 6px; font-size: 16px; }
+.clear-data { min-height: 48px; border: 1px solid rgb(179 38 30 / 28%); border-radius: 999px; color: var(--tp-danger); background: transparent; font-weight: 800; }
+
+@media (min-width: 760px) {
+  .detail-sheet { top: 0; right: 0; bottom: 0; left: auto; width: min(520px, 100%); max-height: none; border-radius: 28px 0 0 28px; }
+}
+
+@media (max-width: 359px) {
+  .coach-sticker { width: 76px; min-height: 88px; }
+  .preference-row { align-items: stretch; flex-direction: column; }
+  .preference-row button { width: 100%; }
+}
 </style>

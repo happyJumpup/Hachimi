@@ -183,7 +183,12 @@ export const useAnalysisStore = defineStore('analysis', () => {
     if (typeof data.discovered_candidate_count === 'number') {
       discoveredCandidateCount.value = Math.max(0, Math.trunc(data.discovered_candidate_count))
     }
-    if (data.coverage_status === null || data.coverage_status === 'complete' || data.coverage_status === 'partial') {
+    if (
+      data.coverage_status === null
+      || data.coverage_status === 'complete'
+      || data.coverage_status === 'partial'
+      || data.coverage_status === 'insufficient'
+    ) {
       coverageStatus.value = data.coverage_status
     }
     if (Array.isArray(data.coverage_gaps)) {

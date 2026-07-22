@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import HachimiPet from '@/features/experience/HachimiPet.vue'
+import TrainPalCoach from '@/features/experience/TrainPalCoach.vue'
 import {
   deliverCompletionPoster,
   downloadCompletionPoster,
@@ -23,6 +23,22 @@ const recordId = computed(() => String(route.params.recordId ?? ''))
 const record = computed(() => library.records.find((entry) => entry.id === recordId.value) ?? null)
 const canCreatePoster = computed(() => record.value?.outcome === 'completed')
 const primaryActionLabel = computed(() => training.hasCurrent ? '继续当前训练' : '再练一次')
+const resultDateLabel = computed(() => {
+  const endedAt = record.value?.endedAt
+  if (!endedAt) return ''
+  const date = new Date(endedAt)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  }).format(date)
+})
+const coachResultMessage = computed(() => (
+  record.value?.outcome === 'completed'
+    ? '这一页已经替你记好了。下一次训练，TrainPal 还会从这里继续陪你。'
+    : '今天做到这里也算一次真实训练。实际完成量已经保存，不需要勉强补齐。'
+))
 
 const formatDuration = (seconds: number): string => {
   const rounded = Math.max(0, Math.round(seconds))
@@ -87,7 +103,7 @@ const trainAgain = async (): Promise<void> => {
   }
   if (
     draft.items.length > 0
-    && !window.confirm('再练一次会替换当前草稿，确定继续吗？')
+    && !window.confirm('再练一次会替换当前方案，确定继续吗？')
   ) return
 
   pending.value = true
@@ -118,33 +134,55 @@ onMounted(async () => {
 
 <template>
   <main class="result-page">
-    <header><RouterLink to="/mine">← 我的训练</RouterLink><span>训练记录</span></header>
+    <header class="result-header">
+      <RouterLink to="/mine">← 我的训练</RouterLink>
+      <span>{{ resultDateLabel || '训练记录' }}</span>
+    </header>
 
     <section v-if="record" class="result-card" :class="{ completed: record.outcome === 'completed' }">
-      <p class="eyebrow">{{ record.outcome === 'completed' ? 'SESSION COMPLETE' : 'SESSION ENDED' }}</p>
-      <h1>{{ record.outcome === 'completed' ? '训练完成' : '本次训练已结束' }}</h1>
-      <h2>{{ record.plan.name }}</h2>
+      <div class="journal-tape" aria-hidden="true"></div>
+      <div class="result-hero">
+        <div>
+          <p class="eyebrow">TrainPal · {{ record.outcome === 'completed' ? 'DONE' : 'SAVED' }}</p>
+          <h1>{{ record.outcome === 'completed' ? '练完啦' : '今天先到这里' }}</h1>
+          <h2>{{ record.plan.name }}</h2>
+        </div>
+        <span class="outcome-stamp">{{ record.outcome === 'completed' ? '完整完成' : '实际完成' }}</span>
+      </div>
 
-      <HachimiPet v-if="record.outcome === 'completed'" state="completed" :visible="true" />
+      <div class="coach-result">
+        <TrainPalCoach
+          :state="record.outcome === 'completed' ? 'completed' : 'paused'"
+          :visible="library.preferences.petVisible"
+        />
+        <div>
+          <span>TrainPal 留言</span>
+          <p>{{ coachResultMessage }}</p>
+        </div>
+      </div>
 
-      <div class="result-metrics">
+      <div class="result-metrics" aria-label="本次训练数据">
         <span><b>{{ formatDuration(record.trainingDurationSeconds) }}</b>训练时长</span>
         <span><b>约 {{ record.calorie.value }}</b>千卡</span>
         <span><b>{{ record.completedActionCount }}</b>完成动作</span>
       </div>
 
-      <div class="action-results">
-        <div v-for="action in record.actions" :key="action.itemId">
+      <details class="action-results">
+        <summary>
+          <span>本次完成内容</span>
+          <small>{{ record.actions.length }} 个动作 · 查看明细</small>
+        </summary>
+        <div v-for="action in record.actions" :key="action.itemId" class="action-result-row">
           <span><strong>{{ action.name }}</strong><small>{{ action.completedSets }} / {{ action.targetSets }} 组</small></span>
           <b>{{ action.status === 'completed' ? '完成' : action.status === 'partial' ? '部分完成' : '已跳过' }}</b>
         </div>
-      </div>
+      </details>
 
-      <div v-if="canCreatePoster" class="poster-actions">
+      <p v-if="!canCreatePoster" class="early-note">提前结束只保留实际记录，不生成完成海报。</p>
+      <div v-if="canCreatePoster" class="poster-actions" aria-label="训练结果分享">
         <button type="button" :disabled="pending" @click="sharePoster">分享海报</button>
         <button type="button" class="secondary" :disabled="pending" @click="downloadPoster">下载海报</button>
       </div>
-      <p v-else class="early-note">提前结束只保留实际记录，不生成完成海报。</p>
       <p v-if="feedback" class="feedback" role="status">{{ feedback }}</p>
 
       <footer>
@@ -155,47 +193,81 @@ onMounted(async () => {
 
     <section v-else class="missing-result">
       <h1>没有找到这条训练记录</h1>
+      <p>这条记录可能已经从本机清除。</p>
       <RouterLink to="/mine">返回我的训练</RouterLink>
     </section>
   </main>
 </template>
 
 <style scoped>
-.result-page { width: min(100%, 430px); min-height: 100dvh; margin: auto; padding: max(18px, env(safe-area-inset-top)) 16px max(30px, env(safe-area-inset-bottom)); }
-.result-page > header,
+.result-page {
+  width: min(100%, 760px);
+  min-height: 100dvh;
+  margin: auto;
+  padding:
+    max(18px, env(safe-area-inset-top))
+    clamp(16px, 4vw, 28px)
+    max(34px, env(safe-area-inset-bottom));
+  color: var(--tp-ink);
+  background:
+    radial-gradient(circle at 90% 2%, rgb(165 186 99 / 22%), transparent 21rem),
+    transparent;
+}
+.result-header,
 .result-metrics,
-.action-results div,
 .poster-actions,
 .result-card footer { display: flex; align-items: center; }
-.result-page > header { justify-content: space-between; }
-.result-page > header a { display: inline-grid; min-height: 44px; place-items: center; color: var(--ink); font-size: 11px; font-weight: 700; text-decoration: none; }
-.result-page > header span { color: var(--muted); font-size: 11px; }
-.result-card { margin-top: 24px; padding: 22px; border: 1px solid var(--line-strong); border-radius: 24px; background: linear-gradient(160deg, var(--surface-raised), var(--surface)); }
-.result-card.completed { border-color: rgb(38 235 213 / 35%); }
-.eyebrow { margin: 0; color: var(--cyan); font: 600 11px/1 var(--font-display); letter-spacing: .14em; }
-.result-card h1 { margin: 10px 0 4px; font: 700 48px/.9 var(--font-display), var(--font-cn); }
-.result-card h2 { margin: 0; color: var(--muted); font-size: 14px; font-weight: 600; }
-.result-card :deep(.hachimi-pet) { margin: 18px auto -4px; }
-.result-metrics { justify-content: space-between; gap: 8px; margin: 20px 0; padding: 16px 0; border-block: 1px solid var(--line); }
-.result-metrics span { color: var(--muted); font-size: 11px; text-align: center; }
-.result-metrics b { display: block; margin-bottom: 4px; color: var(--ink); font: 700 25px/1 var(--font-display); }
-.action-results { display: grid; }
-.action-results div { justify-content: space-between; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
-.action-results strong,
-.action-results small { display: block; }
-.action-results small { margin-top: 3px; color: var(--muted); font-size: 11px; }
-.action-results > div > b { color: var(--cyan); font-size: 11px; }
-.poster-actions { gap: 8px; margin-top: 18px; }
-.poster-actions button { min-height: 48px; flex: 1; border: 0; border-radius: 12px; color: var(--bg); background: var(--cyan); font-weight: 800; }
-.poster-actions .secondary { color: var(--ink); border: 1px solid var(--line); background: transparent; }
+.result-header { justify-content: space-between; }
+.result-header a { display: inline-grid; min-height: 44px; place-items: center; color: var(--tp-ink); font-size: 12px; font-weight: 800; text-decoration: none; }
+.result-header span { color: var(--tp-muted); font-size: 11px; }
+.result-card { position: relative; margin-top: 20px; padding: clamp(22px, 6vw, 42px); border: 1px solid var(--tp-line); border-radius: 6px 30px 30px 30px; background: var(--tp-surface); box-shadow: var(--tp-shadow-soft); }
+.result-card::before { position: absolute; inset: 8px; border: 1px solid rgb(28 40 34 / 5%); border-radius: 4px 23px 23px 23px; content: ''; pointer-events: none; }
+.journal-tape { position: absolute; top: -11px; left: clamp(26px, 10vw, 72px); width: 92px; height: 24px; background: rgb(165 186 99 / 50%); box-shadow: 0 3px 8px rgb(28 40 34 / 8%); rotate: -2deg; }
+.result-hero { position: relative; display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
+.eyebrow { margin: 0; color: var(--tp-primary-readable); font: 700 11px/1 var(--font-display), var(--font-cn); letter-spacing: .14em; }
+.result-card h1 { margin: 12px 0 6px; color: var(--tp-ink); font: 700 clamp(52px, 16vw, 86px)/.84 var(--font-display), var(--font-cn); letter-spacing: -.03em; }
+.result-card h2 { margin: 0; color: var(--tp-muted); font-size: 14px; font-weight: 700; }
+.outcome-stamp { flex: 0 0 auto; padding: 10px 8px; border: 2px solid var(--tp-primary); border-radius: 50%; color: var(--tp-primary-readable); font-size: 11px; font-weight: 900; letter-spacing: .08em; rotate: 6deg; }
+.result-card.completed .outcome-stamp { border-color: var(--tp-success); color: var(--tp-success); }
+.coach-result { position: relative; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 14px; margin: 24px 0 12px; padding: 14px 16px; border: 1px solid rgb(165 186 99 / 45%); border-radius: 22px; background: rgb(165 186 99 / 12%); }
+.coach-result :deep(.trainpal-coach__image) { width: clamp(72px, 22vw, 104px); filter: drop-shadow(0 9px 18px rgb(42 51 45 / 20%)); }
+.coach-result span { color: var(--tp-success); font: 700 11px/1 var(--font-display), var(--font-cn); letter-spacing: .12em; }
+.coach-result p { margin: 7px 0 0; color: var(--tp-ink); font-size: 13px; line-height: 1.6; }
+.result-metrics { position: relative; justify-content: space-between; gap: 8px; margin: 18px 0; padding: 18px 0; border-block: 1px dashed var(--tp-line); }
+.result-metrics span { flex: 1; color: var(--tp-muted); font-size: 11px; text-align: center; }
+.result-metrics b { display: block; margin-bottom: 5px; color: var(--tp-ink); font: 700 clamp(28px, 9vw, 40px)/.9 var(--font-display); }
+.action-results { position: relative; border-bottom: 1px solid var(--tp-line); }
+.action-results summary { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 12px; color: var(--tp-ink); font-size: 13px; font-weight: 800; cursor: pointer; list-style: none; }
+.action-results summary::-webkit-details-marker { display: none; }
+.action-results summary::after { content: '＋'; color: var(--tp-primary); font-size: 18px; }
+.action-results[open] summary::after { content: '－'; }
+.action-results summary small { margin-left: auto; color: var(--tp-muted); font-size: 11px; font-weight: 500; }
+.action-result-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; border-top: 1px solid var(--tp-line); }
+.action-result-row strong,
+.action-result-row small { display: block; }
+.action-result-row small { margin-top: 3px; color: var(--tp-muted); font-size: 11px; }
+.action-result-row > b { color: var(--tp-success); font-size: 11px; }
+.poster-actions { position: relative; gap: 8px; margin-top: 18px; }
+.poster-actions button { min-height: 48px; flex: 1; border: 1px solid var(--tp-line); border-radius: 999px; color: var(--tp-ink); background: var(--tp-surface); font-weight: 800; }
+.poster-actions .secondary { color: var(--tp-muted); background: transparent; }
 .early-note,
-.feedback { color: var(--muted); font-size: 11px; text-align: center; }
-.feedback { color: var(--cyan); }
-.result-card footer { justify-content: center; gap: 18px; margin-top: 18px; }
-.result-card footer a,
-.result-card footer button { display: inline-grid; min-width: 44px; min-height: 44px; padding: 0 6px; place-items: center; border: 0; color: var(--muted); background: transparent; font-size: 11px; text-decoration: none; }
+.feedback { position: relative; color: var(--tp-muted); font-size: 11px; text-align: center; }
+.early-note { margin: 18px 0 0; padding: 12px; border-radius: 14px; background: rgb(108 116 110 / 8%); line-height: 1.55; }
+.feedback { color: var(--tp-success); }
+.result-card footer { position: relative; flex-direction: column; justify-content: center; gap: 6px; margin-top: 22px; }
+.result-card footer button { display: inline-grid; width: 100%; min-height: 52px; padding: 0 20px; place-items: center; border: 1px solid var(--tp-primary); border-radius: 999px; color: var(--tp-surface); background: var(--tp-primary-readable); box-shadow: 0 12px 24px rgb(217 75 43 / 22%); font-weight: 900; }
+.result-card footer a { display: inline-grid; min-width: 44px; min-height: 44px; padding: 0 6px; place-items: center; color: var(--tp-muted); font-size: 11px; font-weight: 700; text-decoration: none; }
 .result-card footer button:disabled { opacity: .5; }
-.missing-result { margin-top: 25vh; text-align: center; }
-.missing-result h1 { font-size: 24px; }
-.missing-result a { display: inline-grid; min-height: 44px; place-items: center; color: var(--cyan); }
+.missing-result { margin-top: 20vh; padding: 28px; border: 1px solid var(--tp-line); border-radius: 28px; background: var(--tp-surface); text-align: center; box-shadow: var(--tp-shadow-soft); }
+.missing-result h1 { margin-bottom: 8px; font: 700 36px/.95 var(--font-display), var(--font-cn); }
+.missing-result p { color: var(--tp-muted); font-size: 12px; }
+.missing-result a { display: inline-grid; min-height: 44px; place-items: center; color: var(--tp-primary-readable); font-weight: 800; }
+
+@media (max-width: 359px) {
+  .result-hero { display: grid; }
+  .outcome-stamp { position: absolute; top: 0; right: 0; }
+  .result-metrics { gap: 3px; }
+  .result-metrics b { font-size: 26px; }
+  .coach-result { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+}
 </style>

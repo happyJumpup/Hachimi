@@ -116,6 +116,8 @@ const eventNames = [
   'stage.changed',
   'branch.started',
   'branch.completed',
+  'visual_chunk.started',
+  'visual_chunk.completed',
   'run.completed',
   'run.failed',
   'run.cancelled',

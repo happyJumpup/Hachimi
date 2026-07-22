@@ -76,6 +76,6 @@ describe('completion poster', () => {
     })
 
     expect(result).toBe('downloaded')
-    expect(download).toHaveBeenCalledWith(expect.any(File), '哈基米-手臂-计划.png')
+    expect(download).toHaveBeenCalledWith(expect.any(File), 'TrainPal-手臂-计划.png')
   })
 })

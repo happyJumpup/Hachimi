@@ -130,6 +130,20 @@ class ExistingSessionEngine implements TrainingEngine {
   }
 }
 
+class CapturingStartEngine implements TrainingEngine {
+  createdPlan: Extract<TrainingCommand, { type: 'session.create' }>['plan'] | null = null
+
+  async restore(): Promise<TrainingEngineResult> {
+    return { ok: true, session: null, record: null, events: [] }
+  }
+
+  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
+    if (command.type !== 'session.create') throw new Error('unexpected command')
+    this.createdPlan = structuredClone(command.plan)
+    return { ok: true, session: null, record: null, events: [] }
+  }
+}
+
 describe('方案草稿保存状态', () => {
   afterEach(() => vi.useRealTimers())
 
@@ -155,7 +169,7 @@ describe('方案草稿保存状态', () => {
 
     expect(wrapper.get('[role="alert"]').text()).toContain('未保存，点击重试')
     repository.failSave = false
-    await wrapper.get('button[aria-label="重试保存草稿"]').trigger('click')
+    await wrapper.get('button[aria-label="重试保存当前方案"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('已自动保存到本机')
@@ -253,7 +267,7 @@ describe('方案草稿保存状态', () => {
     await flushPromises()
 
     expect(wrapper.get('[role="alert"]').text()).toContain('未保存，点击重试')
-    expect(wrapper.get('button[aria-label="重试保存草稿"]')).toBeTruthy()
+    expect(wrapper.get('button[aria-label="重试保存当前方案"]')).toBeTruthy()
   })
 
   it('shows a safe retry when the save-as transaction fails after draft flush', async () => {
@@ -339,6 +353,102 @@ describe('方案草稿保存状态', () => {
     expect(document.activeElement).toBe(card.element)
   })
 
+  it('marks uncertain actions, confirms them in the sheet, and restores focus', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    draft.applyCandidateProposal([{
+      id: 'candidate-pending',
+      name: '疑似弯举',
+      source_id: 'video-a',
+      segment: { start_seconds: 4, end_seconds: 12 },
+      parameters: {
+        mode: null,
+        sets: null,
+        reps: null,
+        duration_seconds: null,
+        rest_seconds: null,
+      },
+      evidence: [{ type: 'visual', start_seconds: 4, end_seconds: 12 }],
+      needs_confirmation: true,
+    }], {}, 'replace')
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/plan', component: PlanDraftView }],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, {
+      attachTo: document.body,
+      global: { plugins: [pinia, router] },
+    })
+
+    const trigger = wrapper.get<HTMLButtonElement>('.action-summary')
+    expect(wrapper.get('.pending-badge').text()).toBe('待确认')
+    expect(wrapper.get('.start-training-panel button').attributes('disabled')).toBeDefined()
+    await trigger.trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(wrapper.get('.action-sheet .plan-name').element)
+
+    await wrapper.get('.action-sheet').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(wrapper.find('.action-sheet').exists()).toBe(false)
+    expect(document.activeElement).toBe(trigger.element)
+
+    await trigger.trigger('click')
+    await flushPromises()
+    await wrapper.get('.action-sheet .done').trigger('click')
+    await flushPromises()
+    expect(draft.items[0]!.confirmationStatus).toBe('confirmed')
+    expect(wrapper.find('.pending-badge').exists()).toBe(false)
+  })
+
+  it('starts training with only confirmed actions', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const repository = new RecoverableDraftRepository()
+    repository.failSave = false
+    const draft = useDraftStore()
+    await draft.load(repository)
+    draft.addManualAction({ name: '已确认动作', mode: 'reps' })
+    draft.applyCandidateProposal([{
+      id: 'candidate-pending',
+      name: '待确认动作',
+      source_id: 'video-a',
+      segment: { start_seconds: 4, end_seconds: 12 },
+      parameters: {
+        mode: 'reps',
+        sets: 3,
+        reps: 10,
+        duration_seconds: null,
+        rest_seconds: 60,
+      },
+      evidence: [{ type: 'visual', start_seconds: 4, end_seconds: 12 }],
+      needs_confirmation: true,
+    }])
+    const engine = new CapturingStartEngine()
+    await useTrainingStore().load(engine)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/plan', component: PlanDraftView },
+        { path: '/training', component: { template: '<p>training</p>' } },
+      ],
+    })
+    await router.push('/plan')
+    await router.isReady()
+    const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
+
+    await wrapper.get('.start-training-panel button').trigger('click')
+    await flushPromises()
+
+    expect(engine.createdPlan?.items.map((item) => item.name)).toEqual(['已确认动作'])
+    expect(router.currentRoute.value.path).toBe('/training')
+  })
+
   it('shows a safe original-video link only for an action with a source URL', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
@@ -346,7 +456,7 @@ describe('方案草稿保存状态', () => {
     repository.failSave = false
     const draft = useDraftStore()
     await draft.load(repository)
-    draft.addCandidates([{
+    draft.applyCandidateProposal([{
       id: 'candidate-a',
       name: '拖拽弯举',
       source_id: 'video-a',
@@ -360,7 +470,7 @@ describe('方案草稿保存状态', () => {
       },
       evidence: [{ type: 'visual', start_seconds: 41, end_seconds: 51 }],
       needs_confirmation: false,
-    }], [], {
+    }], {
       'video-a': {
         title: '来源视频 A',
         origin_url: 'https://www.douyin.com/video/123456',
@@ -393,12 +503,11 @@ describe('方案草稿保存状态', () => {
     const draft = useDraftStore()
     await draft.load(repository)
     const sourceId = 'local:plan-preview'
-    draft.addCandidates([{
+    draft.applyCandidateProposal([{
       id: 'candidate-local',
       name: '本地弯举',
       source_id: sourceId,
       segment: { start_seconds: 4, end_seconds: 12 },
-      segment_role: 'follow_along',
       parameters: {
         mode: 'reps',
         sets: 3,
@@ -408,7 +517,7 @@ describe('方案草稿保存状态', () => {
       },
       evidence: [{ type: 'visual', start_seconds: 4, end_seconds: 12 }],
       needs_confirmation: false,
-    }], [], {
+    }], {
       [sourceId]: {
         kind: 'local',
         title: 'local.mp4',
@@ -431,7 +540,8 @@ describe('方案草稿保存状态', () => {
     await router.isReady()
     const wrapper = mount(PlanDraftView, { global: { plugins: [pinia, router] } })
 
-    expect(wrapper.text()).toContain('跟练执行')
+    expect(wrapper.text()).not.toContain('跟练执行')
+    expect(wrapper.text()).not.toContain('教学演示')
     await wrapper.get('button.local-preview-button').trigger('click')
     await flushPromises()
 

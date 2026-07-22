@@ -63,23 +63,33 @@ describe('web experience design contract', () => {
     expect(violations).toEqual([])
   })
 
-  it('keeps the keyboard focus ring at 2px cyan with a 3px offset', () => {
+  it('publishes the frozen TrainPal semantic color tokens', () => {
+    const baseStyles = readFileSync(resolve(sourceRoot, 'styles/base.css'), 'utf8')
+
+    expect(baseStyles).toMatch(/--tp-canvas\s*:\s*#F3EFE5/i)
+    expect(baseStyles).toMatch(/--tp-surface\s*:\s*#FFFDF8/i)
+    expect(baseStyles).toMatch(/--tp-primary\s*:\s*#D94B2B/i)
+    expect(baseStyles).toMatch(/--tp-secondary\s*:\s*#A5BA63/i)
+    expect(baseStyles).toMatch(/--tp-training-canvas\s*:\s*#0E1311/i)
+    expect(baseStyles).toMatch(/--tp-focus\s*:\s*#2459D6/i)
+  })
+
+  it('keeps the keyboard focus ring at 2px with a 3px offset', () => {
     const baseStyles = readFileSync(resolve(sourceRoot, 'styles/base.css'), 'utf8')
     const focusRule = baseStyles.match(
       /button:focus-visible,\s*a:focus-visible,\s*select:focus-visible,\s*input:focus-visible\s*\{([^}]*)\}/,
     )
 
     expect(focusRule).not.toBeNull()
-    expect(focusRule?.[1]).toMatch(/outline\s*:\s*2px\s+solid\s+var\(--cyan\)/)
+    expect(focusRule?.[1]).toMatch(/outline\s*:\s*2px\s+solid\s+var\(--tp-focus\)/)
     expect(focusRule?.[1]).toMatch(/outline-offset\s*:\s*3px/)
   })
 
-  it('keeps the initial video stage at a strict 9:16 ratio', () => {
-    const videoView = readFileSync(resolve(sourceRoot, 'views/VideoAnalysisView.vue'), 'utf8')
-    const stageRule = videoView.match(/\.video-stage\s*\{([^}]*)\}/)
+  it('keeps training reference video visible without cropping', () => {
+    const trainingView = readFileSync(resolve(sourceRoot, 'views/TrainingView.vue'), 'utf8')
+    const videoRule = trainingView.match(/\.media-stage\s+video\s*\{([^}]*)\}/)
 
-    expect(stageRule).not.toBeNull()
-    expect(stageRule?.[1]).toMatch(/aspect-ratio\s*:\s*9\s*\/\s*16/)
-    expect(stageRule?.[1]).not.toMatch(/(?:min-)?height\s*:/)
+    expect(videoRule).not.toBeNull()
+    expect(videoRule?.[1]).toMatch(/object-fit\s*:\s*contain/)
   })
 })

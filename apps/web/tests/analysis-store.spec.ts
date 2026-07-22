@@ -178,6 +178,16 @@ describe('动作分析 store', () => {
     expect(store.sourceDurationSeconds).toBe(120)
     expect(store.processedSeconds).toBe(37)
     expect(store.discoveredCandidateCount).toBe(2)
+
+    events.emit('visual_chunk.completed', {
+      source_duration_seconds: 120,
+      processed_seconds: 60,
+      discovered_candidate_count: 3,
+      coverage_status: 'insufficient',
+    })
+    expect(store.processedSeconds).toBe(60)
+    expect(store.discoveredCandidateCount).toBe(3)
+    expect(store.coverageStatus).toBe('insufficient')
   })
 
   it('keeps the backend local-media limit visible and refreshes capabilities', async () => {

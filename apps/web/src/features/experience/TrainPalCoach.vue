@@ -13,35 +13,35 @@ const props = withDefaults(
 
 const assetFailed = ref(false)
 
-const petPresentation = {
+const coachPresentation = {
   idle: {
     url: new URL('../../assets/pet/idle.webp', import.meta.url).href,
-    alt: '哈肌咪在旁边等你开始',
-    fallback: '哈肌咪正在等你，训练不受影响',
+    alt: 'TrainPal 小猫教练在旁边等你开始',
+    fallback: 'TrainPal 正在等你，训练不受影响',
   },
   training: {
     url: new URL('../../assets/pet/training.webp', import.meta.url).href,
-    alt: '哈肌咪正在陪你训练',
-    fallback: '哈肌咪正在陪你训练，训练不受影响',
+    alt: 'TrainPal 小猫教练正在陪你训练',
+    fallback: 'TrainPal 正在陪你训练，训练不受影响',
   },
   resting: {
     url: new URL('../../assets/pet/resting.webp', import.meta.url).href,
-    alt: '哈肌咪正在陪你休息',
-    fallback: '哈肌咪正在休息，训练不受影响',
+    alt: 'TrainPal 小猫教练正在陪你休息',
+    fallback: 'TrainPal 正在陪你休息，训练不受影响',
   },
   paused: {
     url: new URL('../../assets/pet/paused.webp', import.meta.url).href,
-    alt: '哈肌咪正在等你继续',
-    fallback: '哈肌咪正在等你继续，训练不受影响',
+    alt: 'TrainPal 小猫教练正在等你继续',
+    fallback: 'TrainPal 正在等你继续，训练不受影响',
   },
   completed: {
     url: new URL('../../assets/pet/completed.webp', import.meta.url).href,
-    alt: '哈肌咪在庆祝训练完成',
-    fallback: '哈肌咪为你庆祝，训练结果不受影响',
+    alt: 'TrainPal 小猫教练在庆祝训练完成',
+    fallback: 'TrainPal 为你庆祝，训练结果不受影响',
   },
 } as const satisfies Record<PetState, { url: string; alt: string; fallback: string }>
 
-const presentation = computed(() => petPresentation[props.state])
+const presentation = computed(() => coachPresentation[props.state])
 
 watch(
   () => props.state,
@@ -52,31 +52,31 @@ watch(
 </script>
 
 <template>
-  <figure v-if="visible" class="hachimi-pet" :data-state="state" aria-live="polite">
+  <figure v-if="visible" class="trainpal-coach" :data-state="state">
     <img
       v-if="!assetFailed"
-      class="hachimi-pet__image"
+      class="trainpal-coach__image"
       :src="presentation.url"
       :alt="presentation.alt"
       width="112"
       height="112"
       @error="assetFailed = true"
     />
-    <figcaption v-else class="hachimi-pet__fallback">
+    <figcaption v-else class="trainpal-coach__fallback">
       {{ presentation.fallback }}
     </figcaption>
   </figure>
 </template>
 
 <style scoped>
-.hachimi-pet {
+.trainpal-coach {
   display: grid;
   width: fit-content;
   margin: 0;
   place-items: center;
 }
 
-.hachimi-pet__image {
+.trainpal-coach__image {
   display: block;
   width: clamp(88px, 28vw, 112px);
   height: auto;
@@ -85,23 +85,23 @@ watch(
   transform-origin: 50% 84%;
 }
 
-[data-state='idle'] .hachimi-pet__image {
-  animation: pet-breathe 3.2s ease-in-out infinite;
+[data-state='idle'] .trainpal-coach__image {
+  animation: coach-breathe 3.2s ease-in-out infinite;
 }
 
-[data-state='training'] .hachimi-pet__image {
-  animation: pet-train 0.82s ease-in-out infinite;
+[data-state='training'] .trainpal-coach__image {
+  animation: coach-train 0.82s ease-in-out infinite;
 }
 
-[data-state='resting'] .hachimi-pet__image {
-  animation: pet-rest 2.6s ease-in-out infinite;
+[data-state='resting'] .trainpal-coach__image {
+  animation: coach-rest 2.6s ease-in-out infinite;
 }
 
-[data-state='completed'] .hachimi-pet__image {
-  animation: pet-celebrate 720ms cubic-bezier(0.2, 0.8, 0.2, 1) 1;
+[data-state='completed'] .trainpal-coach__image {
+  animation: coach-celebrate 720ms cubic-bezier(0.2, 0.8, 0.2, 1) 1;
 }
 
-.hachimi-pet__fallback {
+.trainpal-coach__fallback {
   max-width: 168px;
   color: #9eaaa7;
   font-size: 12px;
@@ -109,7 +109,7 @@ watch(
   text-align: center;
 }
 
-@keyframes pet-breathe {
+@keyframes coach-breathe {
   0%,
   100% {
     transform: translateY(0) scale(1);
@@ -119,7 +119,7 @@ watch(
   }
 }
 
-@keyframes pet-train {
+@keyframes coach-train {
   0%,
   100% {
     transform: translateY(0) rotate(-1deg);
@@ -129,7 +129,7 @@ watch(
   }
 }
 
-@keyframes pet-rest {
+@keyframes coach-rest {
   0%,
   100% {
     transform: scale(0.985);
@@ -141,7 +141,7 @@ watch(
   }
 }
 
-@keyframes pet-celebrate {
+@keyframes coach-celebrate {
   0% {
     transform: translateY(10px) scale(0.9);
   }
@@ -154,7 +154,7 @@ watch(
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hachimi-pet__image {
+  .trainpal-coach__image {
     animation: none !important;
   }
 }

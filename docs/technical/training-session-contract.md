@@ -1,25 +1,26 @@
-# 训练场次、本地媒体与本地数据合同
+# TrainPal 方案、训练场次与本地数据合同
 
-> 状态：下一轮本地视频原型已冻结；训练状态机继续沿用已验收基线
+> 状态：训练状态机基线已接受；TrainPal 个性化与 Skill 持久化为冻结后的接入合同
 >
 > 更新日期：2026-07-23
 
 ## 1. 边界与原则
 
-训练执行器只消费用户已经确认的动作安排，不调用动作分析 Agent，也不评价动作顺序、训练量、伤病风险或训练效果。
+确定性训练引擎只消费用户已经确认的当前方案，不调用内容理解 Provider 或 LLM，也不评价动作顺序、训练量、伤病风险或训练效果。
 
 - 当前设备同时最多存在一个未完成训练，固定存为 `sessions/current`。
-- 用户导入的来源视频以 Blob 保存在同一浏览器数据库；它可以被方案、场次和记录引用，但不是训练记录本身，也不上传为服务端视频资产。
-- 开始训练会深拷贝方案快照；之后编辑草稿或方案库不能改变正在训练或已经完成的记录。
-- 活动训练只累计前台实际执行时间；组间休息按墙钟流逝，但计入时长最多不超过计划休息时间。
+- 用户导入的来源视频以 Blob 保存在同一浏览器数据库，可以被方案、场次和记录引用，但不是训练记录本身，也不成为服务端长期资产。
+- 开始训练会深拷贝方案快照；之后编辑草稿、方案库或个性化上下文不能改变正在训练或已经完成的记录。
+- 活动训练只累计前台实际执行时间；组间休息按墙钟流逝，但计入训练时长最多不超过计划休息时间。
 - 未完成训练可恢复，但不进入训练记录，也不产生最终卡路里或海报。
-- 自建动作没有来源视频和演示片段，训练页显示无视频状态，不自动匹配替代视频。
-- 本地来源媒体丢失时保留动作、参数和训练控制，并要求用户重新选择原视频；不得静默替换来源或阻止完成训练。
-- Pet、卡路里、训练记录和海报都是训练执行器状态或终态记录的消费者，不能反向控制状态机。
+- 自建动作没有来源视频和参考片段，训练页显示无视频状态，不自动匹配替代视频。
+- 本地来源媒体丢失时保留动作、参数和训练控制，并要求用户重新选择原视频；不得静默换片或阻止完成训练。
+- TrainPal 呈现、动作要点、卡路里、训练记录、成长和海报都是状态或终态记录的消费者，不能反向控制状态机。
+- 用户对方案字段的修改高于视频值、规则值和 TrainPal 建议；只要仍满足可执行结构，系统不能用推荐范围阻止用户保存或训练。
 
-## 2. Dexie v3
+## 2. 本地数据版本与迁移
 
-数据库名称继续使用 `hachimi-fitness`。v3 在现有 v2 六张训练表之外增加本地媒体表，不清除或重建已有数据：
+当前工程基线使用 Dexie v3，内部数据库名称为既有兼容标识。v3 表结构为：
 
 ```ts
 db.version(3).stores({
@@ -33,17 +34,72 @@ db.version(3).stores({
 })
 ```
 
-v1 → v2 的既有升级继续保留：迁移 `drafts` 并创建其余训练表。v2 → v3 只创建空的 `localMedia` 表；旧 `DraftSourceRef` 没有 `kind` 时按 `controlled` 读取，不批量重写历史记录。迁移中发生异常必须整体回滚并提示“本机训练数据暂时无法读取”，不得以清空数据库作为自动恢复。
+三个 Skill 的成功结果、任务幂等信息和个性化上下文需要同设备持久化。接入切片可以在上述记录中嵌入版本化子对象，或通过一次新的 Dexie 版本增加专用表；物理方案必须在实现前锁定并用迁移测试证明，不得修改 v3 迁移函数、重建数据库或用清库恢复异常。
 
-### 2.1 草稿、方案、档案与偏好
+迁移要求：
 
-现有 `DraftItem`、`SourcedValue<T>` 和字段来源规则保持不变。新增持久化类型：
+- 旧记录缺少来源种类时按 `controlled` 读取，不批量重写动作 ID。
+- 旧三态来源记录保持原语义；只有用户确认的新个性化差异才写入 `personalized`。
+- 旧教练可见性字段映射到新的 TrainPal 可见性偏好；兼容键不是用户界面命名。
+- 旧场次和记录缺少教练风格快照时使用明确的默认占位，不反推 GYMTI 或人格。
+- 任一迁移异常整体回滚并提示“本机训练数据暂时无法读取”，不得自动清空。
+
+## 3. 方案与字段来源
+
+### 3.1 通用类型
+
+```ts
+type FieldSource = 'video' | 'rule' | 'personalized' | 'user'
+
+interface SourcedValue<T> {
+  value: T
+  source: FieldSource
+}
+
+interface SourceRange {
+  startSeconds: number
+  endSeconds: number
+}
+
+interface SourceEvidenceSnapshot {
+  originalName: string | null
+  ranges: SourceRange[]
+  explicitParameters: Record<string, unknown>
+  evidenceKinds: Array<'speech' | 'visual' | 'text'>
+}
+
+interface DraftSourceRef {
+  sourceId: string
+  title?: string
+  originUrl?: string
+  kind?: 'controlled' | 'local'
+  referenceRange?: SourceRange
+  localMedia?: LocalMediaFingerprint
+  evidenceSnapshot?: SourceEvidenceSnapshot
+}
+```
+
+公开方案不保存片段用途分类。来源片段默认只是参考；可靠来源节奏使用独立的时间线级输入，在训练编译阶段展开为扁平动作安排。
+
+### 3.2 来源优先级
+
+- `video`：视频明确表达的组数、次数、时长或休息，以及可靠来源节奏提供的执行默认值。
+- `rule`：视频缺失参数时，由版本化确定性规则补充的可修改值。
+- `personalized`：用户主动运行个性化调整并整体确认后写入的差异值。
+- `user`：用户输入或手动修改，优先于全部其他来源。
+
+重量只允许 `user` 来源。创作者使用的重量、规则值或 TrainPal 建议都不能直接进入用户负重字段。
+
+接受个性化提案只更新提案中已经展示、仍未被用户修改的字段；用户随后编辑时，该字段立即改为 `user`。恢复基础方案只撤销当前方案中的 `personalized` 差异，不撤销用户值，也不删除个性化上下文。
+
+### 3.3 草稿与方案
 
 ```ts
 interface DraftPlan {
   id: 'current'
   name: string
   linkedPlanId: string | null
+  revision: number
   items: DraftItem[]
   updatedAt: string
 }
@@ -51,26 +107,123 @@ interface DraftPlan {
 interface SavedPlan {
   id: string
   name: string
+  revision: number
   items: DraftItem[]
   createdAt: string
   updatedAt: string
 }
+```
 
-interface TrainingProfile {
-  id: 'current'
-  sex: 'male' | 'female' | null
-  age: number | null
-  heightCm: number | null
-  weightKg: number | null
-  updatedAt: string
+- 当前设备只有一个未命名草稿，300ms 防抖自动保存。
+- 基础方案提案在用户确认前不能写入草稿。草稿为空时可确认写入；草稿非空时必须让用户明确追加或替换。
+- 打开已保存方案后直接编辑原方案；“另存为”创建副本并把草稿链接到新方案。开始训练不会自动保存方案。
+- 快速体验方案是显式标注的版本化 Fixture，选择后只复制到草稿，不得伪装成 AI 结果。
+- 删除方案不删除由它产生的场次或记录；若草稿链接该方案，删除事务只解除链接并保留内容。
+
+### 3.4 展开式执行时间线
+
+- 可靠来源节奏中的动作、休息和切换按绝对时间展开；循环内容形成 `A1 → B1 → A2 → B2` 这类扁平顺序。
+- 每次出现拥有不同动作安排 ID。轮次只作展示标签，不进入状态机；组数只表示同一次动作安排中的连续组数。
+- 没有可靠来源节奏时，标准动作、器械和变式相同的重复演示合并为一个方案动作，证据最完整的连续范围成为参考片段，其余范围留在只读证据快照中。
+- 器械、变式或视频明确参数不同的同名动作保持分开；时间重叠且名称冲突时形成一个待确认动作。
+- 待确认动作原位保留但默认排除。用户确认、修改或删除后才成为可执行动作；不发起多轮问答。
+
+## 4. TrainPal Skill 任务与个性化
+
+### 4.1 任务信封
+
+```ts
+interface SkillTaskEnvelope {
+  task_id: string
+  task_type: 'training_compilation' | 'personalization' | 'action_tips'
+  contract_version: string
+  skill_version: string
+  input_version: number
+  input_fingerprint: string
 }
 
-interface Preferences {
-  id: 'current'
-  petVisible: boolean
+interface SkillTaskResult<T> {
+  envelope: SkillTaskEnvelope
+  status: 'running' | 'succeeded' | 'failed_retryable' | 'failed_terminal'
+  value: T | null
+  createdAt: string
+  completedAt: string | null
+}
+```
+
+相同 `task_id + input_fingerprint + contract_version + skill_version` 的重复请求复用同一次运行或成功结果。刷新或返回页面不重新调用模型；只有用户明确重试或重新生成才创建新任务。输入变化、任务被替换或页面已经接受更新版本时，迟到结果必须丢弃。
+
+三个 Skill 各用独立小载荷，不接收原始媒体、不写草稿、不读取训练场次，也不互相调用：
+
+1. 训练编译 Skill 消费完整内容理解结果并输出基础方案提案；缺失参数由确定性规则补齐。
+2. 动作要点补充 Skill 按已确认动作非阻塞运行；待确认动作确认后只触发该动作。
+3. 个性化调整 Skill 只在用户主动选择“让 TrainPal 调整这次训练”时运行。
+
+### 4.2 个性化上下文
+
+```ts
+interface PersonalizationContext {
+  gymti: { version: string; resultId: string } | null
+  trainingExperience: string | null
+  coachStyleId: string | null
+  profile: TrainingProfile | null
+  signals: TrainingSignal[]
+  revision: number
   updatedAt: string
 }
+```
 
+稳定个性信息只能由用户明确设置或修改。年龄、性别、身高、体重均可不填，主要用于卡路里约值，只能在视频证据和规则候选范围已经形成后作为个性策略的弱参考；不得据此推断 GYMTI、训练经验、健康状态或直接决定训练强度。
+
+训练信号必须关联具体动作、方案或场次，例如结构化轻反馈、实际完成、场次调整接受／拒绝和参数再次修改。单条信号不是跨视频默认值，也不能被 LLM 扩写为自由用户画像。
+
+### 4.3 个性化提案时效
+
+```ts
+interface PersonalizationProposal {
+  task: SkillTaskEnvelope
+  basePlanRevision: number
+  contextRevision: number
+  changes: PersonalizationChange[]
+  generatedAt: string
+}
+```
+
+- 基础方案变化后，旧提案不可应用。
+- 用户重测 GYMTI、切换教练风格或修改个人信息后，旧提案仍可应用，但界面提示“TrainPal 对你的了解已经更新，建议重新调整”。
+- 成功提案在返回页面或刷新后保持不变；只有用户明确点击“重新调整”才生成新提案。
+- 没有差异是合法成功结果。失败时基础方案继续可用，不展示部分差异，也不把规则值伪装成个性化结果。
+- 个性化不能替换、增加、删除或重排动作，不能增加重量，也不能覆盖 `user` 值。修改视频明确值必须突出理由并由用户确认。
+
+## 5. 动作要点
+
+```ts
+type TipBasis = 'video' | 'web' | 'model'
+type TipStatus = 'ready' | 'no_reliable_tip' | 'failed_retryable'
+
+interface ActionTip {
+  text: string
+  basis: TipBasis
+  videoRange?: SourceRange
+  citation?: { title: string; url: string }
+}
+
+interface ActionTipResult {
+  itemId: string
+  status: TipStatus
+  tips: ActionTip[]
+}
+```
+
+- 每个已确认动作最多三条要点，只涉及准备姿势、动作路径、呼吸、节奏和常见代偿。
+- `web` 必须保留可点击引用；`model` 明确显示为“TrainPal 通用建议”。视频、网页和模型冲突时按 `video > web > model` 选择。
+- 要点失败不阻塞方案、编辑或训练。成功动作保持稳定，重试只处理失败或无可靠要点的动作。
+- 训练中只读取已保存要点，不联网、不调用模型、不判断实时姿态。
+- 用户反馈疼痛或眩晕时不再生成训练调整，只提示停止训练并寻求专业帮助。
+
+## 6. 本地媒体
+
+```ts
 interface LocalMediaFingerprint {
   fileName: string
   mimeType: string
@@ -85,35 +238,15 @@ interface LocalSourceMedia extends LocalMediaFingerprint {
   importedAt: string
   updatedAt: string
 }
-
-interface DraftSourceRef {
-  sourceId: string
-  title?: string
-  originUrl?: string
-  kind?: 'controlled' | 'local'
-  localMedia?: LocalMediaFingerprint
-}
 ```
 
-- 草稿继续 300ms 防抖自动保存。
-- 打开方案库中的方案会在用户确认后用深拷贝替换当前草稿，并把 `linkedPlanId` 设为该方案 ID；后续自动保存以同一个 Dexie 事务同时更新草稿和原方案。
-- “另存为”要求非空名称，创建新 UUID 方案，并把草稿链接到新方案；旧方案不变。开始训练本身不会把未链接草稿写入方案库。
-- 快速体验方案是版本化前端 fixture。用户选择后只复制到当前草稿，除非主动“另存为”，否则不进入方案库。
-- 删除一个方案不删除由它产生的训练场次或记录；若当前草稿仍链接该方案，删除事务同时把 `linkedPlanId` 置空，但保留草稿内容。
-- 首次读取不到偏好时使用 `petVisible=true`。隐藏 Pet 立即写入长期偏好，不是当前场次临时状态。
-- 本地导入生成规范小写 `local:<UUID>`，先完成能力、类型、大小和时长检查，再把 Blob 与指纹写入 `localMedia`。保存失败时可保留当前标签页内存 Blob，但不能写入“已保存到本机”状态。
-- 本地视频动作的 `DraftSourceRef.kind='local'`，`sourceId` 等于 `LocalSourceMedia.sourceId`，并嵌入不含 Blob 的指纹；受控来源可显式写 `controlled`，旧数据缺少 `kind` 时仍按受控来源读取。
-- 重新选择媒体时，用户选中的文件必须通过基本指纹与时长校验后才可替换相同 `sourceId` 的 Blob。替换媒体不改写方案、场次或记录快照。
-- 新候选加入草稿前必须处理 `needs_confirmation`；公开候选和 `DraftItem` 都不保存 `segment_role`。旧草稿若仍有历史 `segmentRole` 字段只允许兼容读取并在下一次规范化写入时删除，不能继续影响运行时判断。
+- 本地导入先完成能力、类型、大小和时长检查，再把 Blob 与指纹写入 `localMedia`。
+- 保存失败可保留当前标签页内存 Blob，但不能显示“已保存到本机”。
+- 重新选择媒体时必须通过基础指纹和时长校验，才能替换同一个 `sourceId` 的 Blob；替换不改写方案、场次或记录快照。
+- 结构校验不要求 Blob 此刻可读；Blob 缺失只影响参考播放，不能把视频动作改成自建动作。
+- 新候选加入草稿前必须处理 `needs_confirmation`；公开候选和 `DraftItem` 都不保存 `segment_role`。旧草稿中的历史 `segmentRole` 只兼容读取，并在下一次规范化写入时删除。
 
-### 2.2 展开式执行时间线
-
-- 从来源视频得到的候选按绝对开始时间排序。循环或重复出现的动作不去重，每次出现都创建不同 ID 的扁平 `DraftItem`，例如 `A1 → B1 → A2 → B2`。
-- 轮次只作为可选展示标签，不参与训练状态机。每个 `DraftItem.sets` 只表示该次动作安排内的连续组数，不能用 `sets=2` 把 `A → B` 的两轮折叠成 `A(2组) → B(2组)`。
-- 只有带时间的明确口令或其他可定位来源证据可以写入 `video` 来源的动作时长、次数、组数和休息；来源片段长度本身绝不自动写入训练时长，缺失值由用户或已有规则明确补充。
-- 证据不足或冲突且会改变训练参数时，加入草稿前要求一次确认。训练执行器只消费确认后的扁平安排，不在运行时重新调用 Agent 或推断段类型。
-
-### 2.3 方案快照、训练场次与记录
+## 7. 方案快照、场次与记录
 
 ```ts
 interface PlanSnapshot {
@@ -121,6 +254,8 @@ interface PlanSnapshot {
   source: 'draft' | 'saved' | 'sample'
   sourcePlanId: string | null
   items: DraftItem[]
+  coachStyleId: string | null
+  tipSnapshotVersion: string | null
 }
 
 type SessionStatus = 'active' | 'resting' | 'ready_to_continue' | 'paused'
@@ -131,6 +266,7 @@ interface ActionProgress {
   completedSets: number
   activeMilliseconds: number
   skipped: boolean
+  feedbackAsked: boolean
 }
 
 interface TrainingSession {
@@ -149,75 +285,40 @@ interface TrainingSession {
   scheduledRestSeconds: number | null
   creditedRestMilliseconds: number
   progress: ActionProgress[]
-  petId: 'hachimi'
   startedAt: string
   updatedAt: string
 }
-
-interface CalorieEstimate {
-  value: number
-  method: 'personalized' | 'generic'
-}
-
-interface ActionResult {
-  itemId: string
-  name: string
-  targetSets: number
-  completedSets: number
-  completedReps: number | null
-  completedDurationSeconds: number | null
-  activeSeconds: number
-  status: 'completed' | 'partial' | 'skipped'
-}
-
-interface TrainingRecord {
-  id: string // 与 sessionId 相同
-  outcome: 'completed' | 'ended_early'
-  plan: PlanSnapshot
-  actions: ActionResult[]
-  activeSeconds: number
-  creditedRestSeconds: number
-  trainingDurationSeconds: number
-  completedActionCount: number
-  calorie: CalorieEstimate
-  petId: 'hachimi'
-  startedAt: string
-  endedAt: string
-}
 ```
 
-`currentItemIndex`、`currentSetIndex` 均从 0 开始，指向下一组要执行的动作和组。`progress` 按方案动作顺序初始化且一一对应。完成本组时先递增实际完成量并把索引推进到下一组或下一动作，再进入休息；因此 `resting` 和 `ready_to_continue` 中的索引始终指向休息后将要开始的目标。
+`currentItemIndex`、`currentSetIndex` 从 0 开始，指向下一组要执行的动作和组。`progress` 与方案动作一一对应。完成本组后先累积实际完成量并推进索引，再进入休息；因此休息与准备继续期间，索引始终指向下一步。
 
-训练记录不保存档案原值；它保存终态时算出的卡路里值及计算方式，因此用户以后修改档案不会改写历史。`trainingDurationSeconds` 固定为 `activeSeconds + creditedRestSeconds`，不采用开始至结束的墙钟差，避免离开页面或隔夜恢复夸大训练时长。
+记录保存不可变方案快照、实际完成量、教练风格快照、卡路里值和计算方法，不保存可变档案原值。训练总时长固定为 `activeSeconds + creditedRestSeconds`，不使用开始至结束的墙钟差。
 
-终态换算统一使用四舍五入到整秒。次数型的 `completedReps` 为目标次数乘已完成组数；时长型的 `completedDurationSeconds` 为目标时长乘已完成组数。未完成一整组的活动时间仍进入 `activeSeconds` 和卡路里，但不伪装为已完成次数或时长。`completedActionCount` 只统计 `status='completed'` 的动作。
+动作结果由实际量派生：完成全部目标组为 `completed`；完成至少一组但未完成全部为 `partial`；一组都未完成为 `skipped`。未完成一整组的活动时间仍计入活动时间和卡路里，但不伪装成已完成次数或时长。
 
-`ActionResult.status` 由实际量确定：完成全部目标组为 `completed`；未完成全部目标组但至少完成一组为 `partial`；一组都未完成为 `skipped`。该派生规则同时适用于跳过剩余组和提前结束，不能由视图自行覆盖。
+## 8. 开始训练与结构校验
 
-## 3. 开始训练与结构校验
-
-“开始训练”只做结构校验，不做科学性或健康评估：
+“开始训练”只验证可执行结构：
 
 - 至少一个动作；动作 ID 唯一且名称非空。
-- 组数为正整数；次数型必须有正整数次数且时长为空，时长型必须有正整数秒数且次数为空。
-- 休息秒数为非负整数；重量为空或正数，且非空重量的来源必须为 `user`。
-- 视频动作的 `sourceRef` 与有效演示片段同时存在；自建动作两者同时为空。
+- 组数为正整数；次数型必须有正整数次数且时长为空，时长型反之。
+- 休息秒数为非负整数；重量为空或正数，且非空重量来源必须为 `user`。
+- 视频动作的来源引用与有效参考范围同时存在；自建动作二者同时为空。
+- 参考范围位于已知视频边界内。
 
-结构校验不要求本地媒体 Blob 此刻可读：Blob 缺失只影响演示播放，不能把已有视频动作改成自建动作或阻止训练。训练页应显示来源指纹和“重新选择原视频”，校验成功后恢复同一来源片段。
+结构校验不评价科学性或健康风险。非阻塞安全提示与结果同时显示；用户值超出 TrainPal 建议范围但仍可执行时最多提示，不阻止开始。
 
-校验通过后，在一个 Dexie 写事务中使用固定主键 `current` 执行 `sessions.add`。若已经存在记录，返回 `active_session_exists`，界面只提供“继续训练”或“结束当前训练”，不能覆盖。新场次深拷贝方案，生成 `sessionId`，初始状态为 `paused/before_start`；用户再次点击“开始本组”后才进入 `active`。
+校验通过后，在一个 Dexie 写事务中以固定主键 `current` 执行原子新增。已有场次时返回 `active_session_exists`，界面只提供继续或明确结束，不能覆盖。新场次初始为 `paused/before_start`；用户再次点击“开始本组”后才进入 `active`。
 
-训练安全提示与结构校验结果同时显示，但安全提示不要求额外确认，也不能阻止用户开始。
-
-## 4. 状态机与命令
+## 9. 状态机
 
 ```mermaid
 stateDiagram-v2
     [*] --> paused: 创建场次
     paused --> active: 开始或继续本组
     active --> paused: 用户暂停 / 页面隐藏 / 恢复归一化
-    active --> resting: 本组完成且仍有后续
-    active --> completed: 最后一组完成
+    active --> resting: 完成本组且仍有后续
+    active --> completed: 完成最后一组
     resting --> active: 用户提前继续
     resting --> ready_to_continue: 休息自然结束
     ready_to_continue --> active: 用户确认继续
@@ -230,40 +331,39 @@ stateDiagram-v2
     ended_early --> [*]
 ```
 
-`completed` 和 `ended_early` 是终态事件，不留在 `sessions` 表：同一事务写入 `records/{sessionId}` 后删除 `sessions/current`。
+`completed` 与 `ended_early` 是终态事件，不留在 `sessions` 表。同一事务写入 `records/{sessionId}` 后删除 `sessions/current`。
 
-### 4.1 次数型与时长型
+### 9.1 次数型与时长型
 
-- 次数型进入 `active` 后不自动计数。用户点击“完成本组”时，将目标次数作为该组实际完成次数，累计一组。
-- 时长型进入 `active` 后按前台活动时间倒计时；达到目标秒数时自动完成本组。暂停、隐藏或刷新后不会在后台补算时长。
-- 活动计时在内存使用单调时钟；每秒把增量提交到 `currentSetActiveMilliseconds`，并在命令、页面隐藏和卸载前立即提交。意外崩溃最多损失最近一次尚未提交的秒数，不能根据恢复时的墙钟补算。
-- 完成一组后把本组活动时间移入对应 `ActionProgress.activeMilliseconds` 并清零本组计时。当前动作还有组或仍有下一个动作时，使用当前动作安排的休息值进入 `resting`；休息为 0 时直接进入 `ready_to_continue`。最后一个动作最后一组完成则终结场次。
+- 次数型不自动计数。用户点击“完成本组”时，把目标次数记为该组完成量。
+- 时长型只按前台活动时间倒计时，达到目标后自动完成；暂停、隐藏或刷新不补算后台时间。
+- 活动计时在内存使用单调时钟，每秒提交增量，并在命令、页面隐藏和卸载前立即提交。
+- 完成本组后把本组活动时间移入动作进度并清零。仍有后续时按当前安排进入休息；休息为 0 时直接进入准备继续。
 
-### 4.2 休息、离开与恢复
+### 9.2 休息、离开与恢复
 
-- 进入休息时一次写入 `restStartedAt`、`restEndsAt` 和 `scheduledRestSeconds`。界面从墙钟推导剩余秒数，不每秒持久化休息倒计时。
-- 用户提前点击“继续训练”时，计入从开始至点击的实际休息并直接进入 `active`。
-- 自然结束时，计入时间上限为计划休息时长并进入 `ready_to_continue`；必须由用户确认才开始下一组。
-- 休息期间离开训练路由，倒计时继续；全局“继续训练”入口显示剩余时间或“准备继续”。
-- `active` 时页面变为 hidden 或离开训练路由，必须先结算前台增量再转为 `paused/page_hidden`。`paused` 和 `ready_to_continue` 都不累计任何时间。
-- 应用启动或刷新读取到 `active` 时，不计算 `activeStartedAt` 之后的墙钟时间，直接归一化为 `paused/recovered`；读取到已过期的 `resting` 时，按计划上限结算并归一化为 `ready_to_continue`。
+- 进入休息时一次写入 `restStartedAt`、`restEndsAt` 和计划休息秒数；界面从墙钟推导剩余时间。
+- 用户提前继续时，计入实际休息并进入活动状态；自然结束时按计划上限计入并进入准备继续，绝不自动开始。
+- 离开训练路由后休息继续；所有非训练页使用同一个轻量恢复入口。
+- 活动状态下页面隐藏或离开训练路由时，先结算前台增量，再转为 `paused/page_hidden`。
+- 刷新读取到活动状态时不补算墙钟，直接归一化为 `paused/recovered`；读取到过期休息时按计划上限归一化为准备继续。
+- 只有用户主动选择“休息结束提醒我”时才请求设备通知；拒绝或不支持时只保留页面内召回。点击提醒仍进入准备继续。
 
-### 4.3 跳过与提前结束
+### 9.3 跳过、提前结束与反馈
 
-- “跳过剩余组”先结算当前前台活动时间，再保留当前动作已经完成的组和全部活动时间，将其标记为 `partial`；若一组都未完成则为 `skipped`。未完成的次数或时长不计为完成量。
-- 存在下一动作时，跳过后移动到下一动作并进入 `paused/between_actions`；用户明确开始后才执行。没有下一动作时，该命令按“提前结束训练”处理并要求确认。
-- “提前结束训练”在任何非终态显示确认。确认后生成 `ended_early` 记录，只保存实际完成量；不生成训练海报。
+- 跳过剩余组先结算当前活动时间，保留已完成组和全部活动时间；存在下一动作时移动到下一动作并暂停，用户明确开始后才继续。
+- 提前结束在任何非终态都要求确认，只保存实际完成量，不生成完整完成海报。
+- 每个动作至多在首个正式组后询问一次“太累 / 刚好 / 太轻”。反馈不是姿态、伤病或人格判断。
+- “太累”或“太轻”可由确定性规则提出仅影响本场当前动作剩余组的休息、次数、时长或组数调整，必须由用户确认；不调用 LLM、不增加重量、不改其他动作或已保存方案。
 
-## 5. 一致性与幂等
+## 10. 一致性与幂等
 
-- 所有改变训练场次的命令携带调用方读到的 `revision`。Dexie 事务只在 revision 匹配时更新并递增；不匹配返回 `session_conflict`、重新加载最新场次并暂停当前页面，防止重复点击和多标签页静默覆盖。
-- “完成本组”、自动计时完成、跳过和暂停都通过同一个训练 Repository 调用状态机，不允许视图直接写表。
-- 终态事务先按 `sessionId` 检查记录：记录已存在时返回该记录；否则 `records.add` 后删除 `sessions/current`。重复完成、返回键重放或刷新不会生成第二条记录。
-- 删除全部本机训练数据必须在一个事务中清空七张表，并要求用户明确确认；同时释放当前对象 URL。它不删除受控来源、活动中的服务端分析运行或已经在各终态清理的上传副本。
+- 所有场次命令携带调用方读到的 `revision`。事务只在 revision 匹配时更新并递增；冲突时重新加载最新场次并暂停当前视图。
+- 完成本组、自动完成、跳过、暂停和有界调整都通过同一训练 Repository 调用状态机，视图不能直接写表。
+- 终态事务先按 `sessionId` 查记录；已存在则返回原记录，否则新增后删除当前场次。重复完成、返回键重放或刷新不生成第二条记录。
+- 清除本机训练数据必须显式确认，并在一个事务中清空媒体和训练数据、停止待写任务、释放对象 URL。它不删除正在服务端运行的分析；界面应要求用户先明确取消该运行。
 
-## 6. 领域事件与下游消费者
-
-状态机命令同步返回以下确定性领域事件；竞赛版不持久化事件日志，也不通过网络发布：
+## 11. 领域事件与 TrainPal 呈现
 
 ```ts
 type TrainingEvent =
@@ -273,85 +373,74 @@ type TrainingEvent =
   | { type: 'session.paused'; reason: PauseReason }
   | { type: 'rest.started'; endsAt: string }
   | { type: 'rest.finished' }
+  | { type: 'feedback.recorded'; itemId: string; value: 'too_hard' | 'just_right' | 'too_easy' }
+  | { type: 'adjustment.decided'; itemId: string; accepted: boolean }
   | { type: 'action.skipped'; itemId: string }
   | { type: 'session.completed'; recordId: string }
   | { type: 'session.ended_early'; recordId: string }
 ```
 
-| 消费者 | 唯一输入 | 行为 |
-| --- | --- | --- |
-| Pet | 当前场次状态、暂停原因和终态事件 | `active→训练`、`resting→休息`、`paused/before_start` 或 `paused/between_actions→待机`、其他 `paused` 与 `ready_to_continue→暂停`、无场次→待机、完整完成结果页→完成 |
-| 卡路里 | 终态实际活动/计入休息时间和当前档案 | 在记录事务中计算一次；Pet 和 Agent 不参与 |
-| 训练记录 | 终态场次和方案快照 | 保存实际完成量；不引用可变方案 |
-| 海报 | `outcome=completed` 的训练记录 | 即时生成；提前结束没有海报 |
+TrainPal 使用待机、训练、休息、暂停、完成五种呈现状态。角色加载失败、被隐藏或启用低动效都不改变状态机；隐藏时必须保留等价文字、要点、安全信息和控制。训练阶段最多显示一条当前要点，点击后才展开；休息阶段可把 TrainPal 与倒计时作为视觉中心。
 
-Pet 加载失败、被隐藏或使用低动效都不改变状态机。Pet 可见性不影响完成海报：完整训练海报按产品合同始终包含哈肌咪。
+陪伴成长只按有效训练日累积：同一本地自然日只要产生至少一条包含实际完成动作的记录就计一次，停练不倒退。成长只解锁表达、纪念卡与共同训练回顾，不改变训练参数、Agent 权限或安全边界。
 
-## 7. 卡路里合同
+## 12. 卡路里、记录与海报
 
-GymBTI 的计算细节不属于本轮原型。本节既有卡路里规则继续作为当前训练结果基线，不因本地视频导入、Agent 分类或 Provider 路线变化而调整。
-
-档案只有在性别、年龄、身高、体重四项均通过表单校验时才算完整：性别为 `male` 或 `female`，年龄为 18–100 的整数，身高为 100–250 cm、体重为 20–300 kg 的有限数值。不完整时不填入默认体重或虚构个人数据。
-
-完整档案先计算 Mifflin–St Jeor 静息代谢率：
+档案四项完整时使用当前 Mifflin–St Jeor 基线：
 
 ```text
 RMR = 10 × weightKg + 6.25 × heightCm - 5 × age + sexOffset
 sexOffset = 5 (male) 或 -161 (female)
 
-personalizedKcal = round(
+kcal = round(
   RMR / 1440 × (3.5 × activeMinutes + 1.0 × creditedRestMinutes)
 )
 ```
 
-档案缺失任一项时采用弱化通用规则：
+年龄、性别、身高或体重缺失任一项时使用通用约值：
 
 ```text
-genericKcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
+kcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 ```
 
-结果不得小于 0，只显示“约 N 千卡”和 `personalized`/`generic` 的非技术化说明，不显示区间或精确承诺。`creditedRestMinutes` 已按每段计划休息封顶；暂停、准备继续、后台停留和完成后的时间均不计入。训练记录保存值与方法，之后不重算历史。
+结果不得小于 0，只显示“约 N 千卡”。暂停、准备继续、后台停留和完成后的时间不计入。训练记录保存值与方法，之后修改档案不重算历史。
 
-## 8. 海报与隐私合同
+完整结束和提前结束都生成记录，但只有完整结束可以生成 1080×1920 PNG 海报。海报只读取方案名称、训练时长、约卡路里、完成动作数和 TrainPal；不得包含动作／组数明细、训练档案、来源视频、AI 原始结论或置信度。优先使用 Web Share API，失败时提供下载。
 
-只有 `outcome=completed` 的记录可以生成 1080×1920 PNG。海报只读取：
+## 13. 验收场景
 
-- 方案名称；
-- `trainingDurationSeconds`；
-- “约 N 千卡”；
-- `completedActionCount`；
-- 固定哈肌咪完成态素材。
+- 旧数据库无损迁移，既有方案、场次、记录和来源值保持可读。
+- 四态字段来源可追溯；用户值不会被规则、视频或个性化覆盖，重量只接受用户来源。
+- 可靠来源节奏展开为扁平顺序；无可靠节奏的重复演示正确合并且不把片段时长当训练时长。
+- 三个 Skill 的重复提交、刷新复用、显式重试、输入变化和迟到结果均遵守任务时效。
+- 基础方案变化使个性化提案不可应用；上下文变化只提示，成功提案不静默漂移。
+- 动作要点失败不阻塞训练；网页引用、模型回退和冲突优先级可验证，训练中无网络调用。
+- 次数型、时长型、休息自然结束、提前继续、页面隐藏、刷新恢复均产生正确实际时间。
+- 连续双击、两标签页冲突和终态重试只推进一次并产生一条记录。
+- 结构化反馈只触发需确认的本场有界调整；疼痛／眩晕进入停止与专业帮助提示。
+- 完整结束、提前结束、媒体丢失、TrainPal 隐藏、素材失败、通知拒绝和分享不支持均有可用路径。
 
-海报不得出现动作/组数明细、训练档案、来源视频、原视频链接、AI 结论或数值置信度。优先使用 Web Share API 分享 PNG；不可用或被拒绝时提供下载。Canvas、字体或 Pet 素材加载失败时显示可重试错误，不生成缺字段或泄露内部信息的半成品。
+## 14. 当前实现差距
 
-## 9. 验收场景
+截至 2026-07-22，Dexie v3、单一活动场次、训练状态机、记录、卡路里和既有角色五态已有工程基线。以下是冻结合同而非已完成声明：
 
-- 从 v1 含跨视频和自建动作的 `current` 草稿升级，全部动作及字段来源保持不变。
-- 从 v2 升级到 v3 后旧受控动作仍可训练；导入本地视频、刷新并复练时从同一 `local_source_id` 恢复 Blob 和片段。
-- 本地 Blob 丢失时结构化方案仍可训练；重新选择正确文件恢复播放，错误文件不能静默替换。
-- `A → B` 两轮来源按 `A1 → B1 → A2 → B2` 形成四个独立安排，完成、跳过和记录都按四个扁平条目推进。
-- 草稿另存为、打开原方案继续编辑、再次另存为，三个副本互不串改。
-- 次数型手动完成、时长型前台自动完成、计划休息自然结束和提前继续均产生正确实际时间。
-- 活动训练切到后台、刷新和崩溃恢复后不会补算后台活动；休息恢复按计划上限进入准备继续。
-- 连续双击完成、两个标签页同时操作、终态事务重试都只产生一次状态推进和一条记录。
-- 跳过剩余组保留部分完成；提前结束生成记录但没有海报；完整结束生成可分享 PNG。
-- 档案完整与不完整使用不同卡路里方法，修改档案后历史记录数值不变。
-- Pet 隐藏、素材失败和低动效不影响任何训练命令。
+- 四态来源中的 `personalized` 全链路与旧数据迁移；
+- 三个领域 Skill 的持久化任务、幂等键和成功结果复用；
+- 基础方案提案取代独立候选收件箱；
+- 来源节奏结构与公开旧分类字段移除；
+- GYMTI／训练经验、教练风格、个性化上下文与提案时效；
+- 带依据动作要点、结构化轻反馈、有界场次调整、成长和设备休息提醒。
 
-## 10. 扩展边界
+相关切片在持久化或公开接口落地前必须补充迁移、Repository、状态机与端到端测试，不能只改界面文案。
 
-- 未来账号同步通过新的 Repository 与冲突协议实现，不能让当前本地表直接承担服务端同步队列。
-- 未来抖音推荐页只消费 `resting`/`ready_to_continue` 的召回视图；离开训练页仍必须暂停活动训练。
-- 自动计数、动作质量评判、健康风险判断、用户自定义 Pet 和训练处方不属于本状态机。
-- GymBTI 细节、Pet 新能力和正式产品命名不属于本合同；没有新决策前保持现有卡路里与 Pet 五态。
-- 新训练状态、跨设备并发或服务端记录都必须先更新本合同及 ADR-0010。
+## 15. 关联决策
 
-## 11. 关联决策
-
-- [ADR-0001：Pet 是非阻塞的训练呈现层](../adr/0001-pet-is-a-non-blocking-presentation-layer.md)
-- [ADR-0002：休息可以在推荐页中继续](../adr/0002-rest-can-continue-on-the-recommendation-page.md)
-- [ADR-0003：训练场次可以恢复但不会在后台训练](../adr/0003-training-sessions-are-recoverable.md)
-- [ADR-0004：分离草稿、方案库和训练记录](../adr/0004-separate-drafts-library-and-training-records.md)
-- [ADR-0005：Agent 提出动作候选，用户决定训练方案](../adr/0005-agent-proposes-actions-users-decide-plans.md)
-- [ADR-0010：训练数据留在同设备且仅有一个未完成场次](../adr/0010-local-training-data-and-single-active-session.md)
-- [ADR-0013：本地视频优先与可恢复的覆盖分析](../adr/0013-local-video-import-and-recoverable-analysis.md)
+- [ADR-0010：本地训练数据与单一活动场次](../adr/0010-local-training-data-and-single-active-session.md)
+- [ADR-0016：个性化上下文](../adr/0016-personalization-context-uses-explicit-facts-and-contextual-signals.md)
+- [ADR-0017：来源片段与可靠来源节奏](../adr/0017-source-clips-are-reference-unless-reliable-rhythm-exists.md)
+- [ADR-0018：三个领域 Skill](../adr/0018-trainpal-orchestrates-base-compilation-and-optional-personalization.md)
+- [ADR-0019：个性化提案时效](../adr/0019-plan-changes-invalidate-personalization-proposals.md)
+- [ADR-0020：动作要点联网与模型回退](../adr/0020-web-search-enriches-tips-with-labeled-model-fallback.md)
+- [ADR-0021：独立 Web 休息召回](../adr/0021-independent-web-rest-recall-is-in-app-first.md)
+- [ADR-0022：陪伴成长](../adr/0022-companion-growth-rewards-training-days-not-intensity.md)
+- [ADR-0023：Skill 任务幂等](../adr/0023-skill-tasks-are-idempotent-and-version-bound.md)

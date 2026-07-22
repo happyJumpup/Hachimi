@@ -105,7 +105,7 @@ describe('训练页合同', () => {
     vi.useRealTimers()
   })
 
-  it('shows the action position and locks the ready CTA to 准备继续', async () => {
+  it('shows the action position and locks the ready CTA to 准备好了', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     await useTrainingStore().load(new SessionEngine(trainingSession('ready_to_continue', 1)))
@@ -113,7 +113,7 @@ describe('训练页合同', () => {
     const wrapper = await mountTraining(pinia)
 
     expect(wrapper.text()).toContain('动作 2 / 3')
-    expect(wrapper.get('button.primary-action').text()).toBe('准备继续')
+    expect(wrapper.get('button.primary-action').text()).toBe('准备好了')
     wrapper.unmount()
   })
 
@@ -125,6 +125,24 @@ describe('训练页合同', () => {
     const wrapper = await mountTraining(pinia)
 
     expect(wrapper.get('button.primary-action').text()).toBe('继续训练')
+    wrapper.unmount()
+  })
+
+  it('makes rest a TrainPal-led focus without covering the reference video', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('resting')
+    current.restStartedAt = new Date(Date.now() - 1_000).toISOString()
+    current.restEndsAt = new Date(Date.now() + 30_000).toISOString()
+    current.scheduledRestSeconds = 30
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    expect(wrapper.get('.rest-focus').text()).toContain('TrainPal')
+    expect(wrapper.find('.media-stage .trainpal-coach').exists()).toBe(false)
+    expect(wrapper.findAll('button.primary-action')).toHaveLength(1)
+    expect(wrapper.get('button.primary-action').text()).toBe('提前继续')
     wrapper.unmount()
   })
 
@@ -227,7 +245,7 @@ describe('训练页合同', () => {
     const wrapper = await mountTraining(pinia)
 
     expect(wrapper.get('video').attributes('src')).toBe('blob:restored-local-video')
-    expect(wrapper.text()).toContain('本地片段循环')
+    expect(wrapper.text()).toContain('本地参考片段')
     expect(loadSources).not.toHaveBeenCalled()
 
     training.session = { ...current, currentItemIndex: 1 }
@@ -238,7 +256,7 @@ describe('训练页合同', () => {
     wrapper.unmount()
   })
 
-  it('restarts an active segment when the real media ends before its manifest endpoint', async () => {
+  it('stops an ordinary reference clip at its endpoint instead of looping it', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const current = trainingSession('active')
@@ -251,21 +269,89 @@ describe('训练页合同', () => {
       source: 'video',
     }
     await useTrainingStore().load(new SessionEngine(current))
-    useAnalysisStore().sources = [{ ...source, duration_seconds: 51 }]
-    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    useAnalysisStore().sources = [{ ...source, duration_seconds: 60 }]
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
     const wrapper = await mountTraining(pinia)
-    play.mockClear()
+    pause.mockClear()
     const media = wrapper.get<HTMLVideoElement>('video')
     Object.defineProperty(media.element, 'currentTime', {
       configurable: true,
       writable: true,
-      value: 50,
+      value: 51,
     })
-    await media.trigger('ended')
+    await media.trigger('timeupdate')
     await flushPromises()
 
-    expect(media.element.currentTime).toBe(41)
-    expect(play).toHaveBeenCalledTimes(1)
+    expect(media.element.currentTime).toBe(51)
+    expect(pause).toHaveBeenCalledTimes(1)
+    expect(media.attributes('loop')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('does not replay media that ended before the declared segment endpoint', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('active')
+    current.plan.items[0]!.sourceRef = {
+      sourceId: source.id,
+      title: source.title,
+    }
+    current.plan.items[0]!.segment = {
+      value: { start_seconds: 41, end_seconds: 51 },
+      source: 'video',
+    }
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [{ ...source, duration_seconds: 50 }]
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
+    const wrapper = await mountTraining(pinia)
+    play.mockClear()
+    const media = wrapper.get<HTMLVideoElement>('video')
+    Object.defineProperties(media.element, {
+      currentTime: { configurable: true, writable: true, value: 50 },
+      ended: { configurable: true, get: () => true },
+    })
+
+    await media.trigger('ended')
+    await media.trigger('loadedmetadata')
+    await flushPromises()
+
+    expect(media.element.currentTime).toBe(50)
+    expect(play).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('clamps an overrun to the segment endpoint instead of jumping to its start', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('active')
+    current.plan.items[0]!.sourceRef = {
+      sourceId: source.id,
+      title: source.title,
+    }
+    current.plan.items[0]!.segment = {
+      value: { start_seconds: 41, end_seconds: 51 },
+      source: 'video',
+    }
+    await useTrainingStore().load(new SessionEngine(current))
+    useAnalysisStore().sources = [source]
+    vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue()
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => undefined)
+    const wrapper = await mountTraining(pinia)
+    pause.mockClear()
+    const media = wrapper.get<HTMLVideoElement>('video')
+    Object.defineProperty(media.element, 'currentTime', {
+      configurable: true,
+      writable: true,
+      value: 51.25,
+    })
+
+    await media.trigger('loadedmetadata')
+    await flushPromises()
+
+    expect(media.element.currentTime).toBe(51)
+    expect(pause).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 
@@ -278,7 +364,7 @@ describe('训练页合同', () => {
     useAnalysisStore().sources = [source]
     const wrapper = await mountTraining(pinia)
 
-    await wrapper.get('button.primary-action').trigger('click')
+    await wrapper.get('button.pause-training').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('此页面已暂停')

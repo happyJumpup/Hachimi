@@ -109,6 +109,24 @@ const setup = async (options: { failReplacement?: boolean } = {}) => {
 describe('训练结果', () => {
   afterEach(() => vi.restoreAllMocks())
 
+  it('presents one warm result summary before progressively disclosing action details', async () => {
+    const context = await setup()
+
+    expect(context.wrapper.get('.coach-result').text()).toContain('TrainPal 留言')
+    expect(context.wrapper.get('.result-metrics').text()).toContain('约 4')
+    expect(context.wrapper.get('.action-results').attributes('open')).toBeUndefined()
+    expect(context.wrapper.findAll('footer button')).toHaveLength(1)
+  })
+
+  it('keeps the TrainPal message when the user hides the cat coach', async () => {
+    const context = await setup()
+    useLibraryStore().preferences.petVisible = false
+    await flushPromises()
+
+    expect(context.wrapper.find('.trainpal-coach').exists()).toBe(false)
+    expect(context.wrapper.get('.coach-result').text()).toContain('TrainPal 留言')
+  })
+
   it('does not overwrite a different non-empty draft when the user cancels', async () => {
     const context = await setup()
     const draft = useDraftStore()
@@ -118,7 +136,7 @@ describe('训练结果', () => {
     await context.wrapper.get('footer button').trigger('click')
     await flushPromises()
 
-    expect(confirm).toHaveBeenCalledWith('再练一次会替换当前草稿，确定继续吗？')
+    expect(confirm).toHaveBeenCalledWith('再练一次会替换当前方案，确定继续吗？')
     expect(context.replacementCalls).toEqual([])
     expect(draft.items[0]?.name).toBe('当前草稿动作')
     expect(context.router.currentRoute.value.path).toBe('/result/record-1')

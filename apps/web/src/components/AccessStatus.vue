@@ -51,7 +51,7 @@ const submit = async (): Promise<void> => {
     </form>
 
     <div v-if="!access.canAnalyze && access.loaded" class="access-fallback">
-      <RouterLink to="/mine">使用快速体验方案</RouterLink>
+      <RouterLink to="/train">使用快速体验方案</RouterLink>
       <button type="button" :disabled="access.pending" @click="access.load()">刷新名额</button>
     </div>
     <p v-if="access.errorMessage" class="access-error" role="alert">{{ access.errorMessage }}</p>
@@ -59,23 +59,27 @@ const submit = async (): Promise<void> => {
 </template>
 
 <style scoped>
-.access-status { width: min(100%, 430px); margin: 0 auto 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 13px; background: rgb(16 20 23 / 86%); }
+.access-status { width: 100%; margin: 0 auto 14px; padding: 10px 12px; border: 1px solid var(--tp-line); border-radius: 15px; color: var(--tp-ink); background: var(--tp-surface); }
 .access-summary { display: flex; align-items: center; gap: 9px; }
-.access-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--coral); box-shadow: 0 0 0 4px rgb(255 111 97 / 10%); }
-.tier-judge .access-dot { background: var(--cyan); box-shadow: 0 0 0 4px rgb(38 235 213 / 10%); }
+.access-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--tp-primary); box-shadow: 0 0 0 4px rgb(217 75 43 / 10%); }
+.tier-judge .access-dot { background: var(--tp-secondary); box-shadow: 0 0 0 4px rgb(165 186 99 / 14%); }
 .access-summary p { min-width: 0; flex: 1; margin: 0; }
 .access-summary strong,
 .access-summary small { display: block; }
 .access-summary strong { font-size: 11px; }
-.access-summary small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.access-summary small { margin-top: 2px; color: var(--tp-muted); font-size: 11px; }
 .access-summary button,
-.access-fallback button { min-width: 44px; min-height: 44px; padding: 0 7px; border: 0; color: var(--cyan); background: transparent; font-size: 11px; }
-.access-status form { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-.access-status form label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
-.access-status form input { min-width: 0; min-height: 44px; padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--surface-raised); }
-.access-status form > button { min-height: 44px; align-self: end; padding: 0 11px; border: 0; border-radius: 9px; color: var(--bg); background: var(--cyan); font-size: 11px; font-weight: 800; }
+.access-fallback button { min-width: 44px; min-height: 44px; padding: 0 7px; border: 0; color: var(--tp-focus); background: transparent; font-size: 11px; }
+.access-status form { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--tp-line); }
+.access-status form label { display: grid; gap: 4px; color: var(--tp-muted); font-size: 11px; }
+.access-status form input { min-width: 0; min-height: 44px; padding: 0 10px; border: 1px solid var(--tp-line); border-radius: 9px; color: var(--tp-ink); background: #F7F3EA; }
+.access-status form > button { min-height: 44px; align-self: end; padding: 0 11px; border: 0; border-radius: 9px; color: var(--tp-surface); background: var(--tp-primary-readable); font-size: 11px; font-weight: 800; }
 .access-status form > button:disabled { opacity: .5; }
-.access-fallback { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; border-top: 1px solid var(--line); }
-.access-fallback a { display: inline-grid; min-height: 44px; place-items: center; color: var(--coral); font-size: 11px; font-weight: 700; text-decoration: none; }
-.access-error { margin: 6px 0 0; color: var(--coral); font-size: 11px; }
+.access-fallback { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; border-top: 1px solid var(--tp-line); }
+.access-fallback a { display: inline-grid; min-height: 44px; place-items: center; color: var(--tp-primary-readable); font-size: 11px; font-weight: 700; text-decoration: none; }
+.access-error { margin: 6px 0 0; color: var(--tp-danger); font-size: 11px; }
+
+@media (max-width: 480px) {
+  .access-status form { grid-template-columns: 1fr; }
+}
 </style>

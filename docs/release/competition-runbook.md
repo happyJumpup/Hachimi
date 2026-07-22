@@ -1,381 +1,321 @@
-# 竞赛 Web MVP 发布、验收与回滚手册
+# TrainPal 竞赛版发布、验收与回滚手册
 
-> 历史竞赛部署基线：下一轮本地视频原型的入口、能力与分析恢复语义以[权威规格](../specs/local-video-training-prototype.md)和 [ADR-0013](../adr/0013-local-video-import-and-recoverable-analysis.md) 为准。本手册继续用于受控快速体验的既有部署，不覆盖本地上传合同。
-
-> 状态：Issue #3 冻结的发布合同；部署实现由 Issue #8 完成
+> 状态：CloudBase Run 基础合同已审计；服务创建、素材接入、公网 canary 与发布验收尚未留有通过记录
 >
-> 适用范围：腾讯云单机竞赛环境、2–3 个团队受控视频源、评委真实 AI 与访客快速体验
+> 更新日期：2026-07-22
 >
-> 禁止将本手册中的占位项当作已验证事实。所有标记为“部署时填写”的内容必须由当班发布人现场采集。
+> 适用范围：独立 Web、本地视频上传、受控快速体验、真实 Provider 与腾讯云 CloudBase Run 临时竞赛入口
 
-## 1. 发布目标与不可变边界
+本手册禁止把计划值、占位项或本地通过记录表述为公网已上线事实。操作源以 [`deploy/cloudbase/foundation-plan.json`](../../deploy/cloudbase/foundation-plan.json)、[`deploy/cloudbase/README.md`](../../deploy/cloudbase/README.md) 和 [ADR-0029](../adr/0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md) 为准。
 
-本手册用于把哈基米练臂力动的竞赛 Web MVP 发布为一个可由评委真实操作、可回滚且不泄露媒体与密钥的 HTTPS 站点。发布成功必须同时满足：
+## 1. 当前发布结论
 
-- Web 静态资源和 FastAPI 使用同一域名；浏览器不接触 Ark、ASR、COS 写权限或服务器密钥。
-- 腾讯云主机只运行一个 `app` 容器实例、一个 Uvicorn worker 和一个 `caddy` 容器，不使用多副本、持久任务队列或服务器数据库。
-- Analysis Run 仍是单进程内存态；重启、SSE 断开、取消或超时都会使运行失效，迟到结果不回填。
-- 公开媒体 URL 只能由 `PUBLIC_MEDIA_BASE_URL` 与版本化受控清单中的 `media_path` 拼接；客户端只提交 `source_id`，不能提供 URL、对象键或本地路径。
-- 评委体验码只提升真实 AI 容量优先级。访客的“快速体验方案”必须明确标注为产品示例，不得伪装成 Agent 返回或云端降级结果。
-- 训练档案、草稿、方案、未完成训练和记录保留在浏览器 IndexedDB；服务器不接收或同步这些训练数据。
-- 原始视频、音频、帧、转录、提示词和模型原始响应不得进入 Git、容器镜像、长期日志、CI 产物或发布录屏附件。
-- 历史 GPL 项目只作行为参考，不复制其代码或组件；团队自有视频和哈肌咪素材须逐项登记权属。
+截至 2026-07-22，仓库已经完成：
 
-`GET /api/v1/health` 只证明进程存活；`GET /api/v1/ready` 才是接入流量的门禁。仓库已包含容器、Caddy、媒体同步、访问分级和 `/ready` 的可测试实现；在目标服务器完成本手册的真实部署、重启、回滚和云端 smoke 前，仍不得宣称生产部署已完成。
+- CloudBase Run 非秘密基础计划、预算上限、单实例安全边界和校验脚本；
+- 同源 SPA + FastAPI 镜像、健康／就绪、访问分级和测试 Provider 隔离的工程基线；
+- 现有真实云内容理解 Provider 的本地受控样本 smoke 基线。
 
-## 2. 部署事实记录
+尚未完成或没有可审计通过记录：
 
-每次发布复制一份下表到发布记录中并填写。未知服务器值必须通过腾讯云控制台或只读系统命令采集，不得推测。
+- `trainpal-demo` 服务的私有部署与不可变镜像 digest 登记；
+- 最终本地上传／受控媒体、来源清单、smoke 标注和 FFmpeg 审计材料接入；
+- CloudBase 内部路径上的 `/ready`、真实分析和清理门禁；
+- 未公布公网 canary、三路真实并发、超额 429、第二浏览器、回滚与恢复；
+- 最终公网链接公告与真机验收。
 
-| 事实 | 发布记录值 |
-| --- | --- |
-| 发布负责人、复核人 | 部署时填写 |
-| 发布开始/结束时间（Asia/Shanghai） | 部署时填写 |
-| 公网域名、DNS 生效结果 | 部署时填写 |
-| 腾讯云地域、实例 ID、公网 IP | 部署时填写 |
-| CPU 核数、内存、可用磁盘、公网带宽 | 部署时填写 |
-| 操作系统、CPU 架构 | 部署时填写 |
-| Docker Engine、Compose、Caddy 版本 | 部署时填写 |
-| 安全组开放端口 | 部署时填写；应只有运维 SSH、80、443 |
-| 发布 Git 提交 SHA | 部署时填写，必须是完整 40 位 SHA |
-| GHCR 镜像标签、不可变 digest | 部署时填写 |
-| 上一个已验证 SHA 与 digest | 部署时填写 |
-| COS 地域、桶、只读前缀、CDN 域名 | 部署时填写 |
-| 受控媒体清单版本与 SHA-256 | 部署时填写 |
-| 容器内分析临时目录 | 部署时填写 |
-| Ark 模型 ID、ASR 资源 ID/权益类型 | 部署时填写，不记录密钥 |
-| 实测评委/公共并发配置 | 部署时填写 |
-| 50 会话与真实 AI 容量结论 | 部署时填写；附脱敏结果位置 |
-| Android/iOS 真机与浏览器版本 | 部署时填写 |
-| 录屏备份位置与 SHA-256 | 部署时填写，不放入 Git |
+因此当前状态是“可执行的发布基础”，不是“公网演示已上线”。任一门禁失败时，保持或恢复公网关闭。
 
-发布记录只保留状态、提交、digest、哈希、耗时、容量和脱敏错误码。不得粘贴环境文件、请求正文、完整响应或控制台密钥截图。
+## 2. 发布不变量
 
-## 3. 生产拓扑与服务器目录
+- 当前产品是 TrainPal 独立 Web；本地视频导入是主入口，受控视频是明确标注的快速体验兜底。
+- Vue SPA 与 `/api/v1/*` 从同一个容器和域名提供；浏览器不接触 Ark、ASR、对象存储写权限或服务器秘密。
+- CloudBase Run 只运行一个 `trainpal-demo` 服务、一个实例上限和一个 Uvicorn worker。Analysis Run、SSE、取消句柄和容量均在单进程内存中。
+- 原始上传、音频、帧、联系表、转录、提示词和模型响应只在独立临时目录或内存中存在，所有终态都清理。
+- 训练档案、个性化上下文、方案、场次、记录和本地视频 Blob 留在浏览器 IndexedDB，不上传为账户数据。
+- Provider-backed 分析必须使用评委体验码；`PUBLIC_ANALYSIS_CONCURRENCY=0`，匿名访客不能消耗付费分析额度。
+- 测试 Provider 只允许 `APP_ENV=test`；生产环境配置测试 Provider 必须拒绝启动。
+- 快速体验方案必须明确标注为示例，不能伪装成真实 AI 结果、缓存回退或用户记录。
+- 当前真实 Provider 仍是已接入的 Ark + 豆包流式语音识别 2.0 路线；未完成新的质量选型前不得临时切换模型并宣称升级。
+- 仓库名、镜像路径或兼容字段中的历史工程标识不构成产品品牌；用户界面和答辩统一使用 TrainPal。
+
+## 3. CloudBase Run 拓扑
 
 ```mermaid
 flowchart LR
-    B["评委或访客浏览器"] -->|"HTTPS 同源"| C["Caddy"]
-    C -->|"SPA / API / SSE"| A["FastAPI + 单 Uvicorn worker"]
-    B -->|"Range GET"| CDN["COS / CDN 受控媒体"]
-    A -->|"只读本地文件"| M["媒体哈希缓存"]
-    A -->|"临时分析材料"| T["独立临时目录"]
-    A --> ASR["豆包流式 ASR 2.0"]
-    A --> ARK["Ark"]
+    B["评委或受邀访客浏览器"] -->|"腾讯托管 HTTPS 同源"| CBR["CloudBase Run\ntrainpal-demo"]
+    CBR --> APP["Vue SPA + FastAPI\n单 Uvicorn worker"]
+    APP --> TMP["内存型临时目录"]
+    APP --> ASR["豆包流式语音识别 2.0"]
+    APP --> ARK["Ark"]
+    B --> IDB["IndexedDB\n本地媒体与训练数据"]
+    CBR --> CTRL["只读受控媒体／清单\n如启用快速体验"]
 ```
 
-Issue #8 应版本化 `deploy/compose.yml` 与 `deploy/Caddyfile`。服务器目录固定为：
+冻结配置：
 
-```text
-/opt/hachimi/releases/<git-sha>/    # 该 SHA 对应的 Compose、Caddy 与媒体清单
-/opt/hachimi/current                # 指向当前 release 的链接
-/opt/hachimi/shared/.env.production # 仅 root/发布用户可读的生产环境文件
-/opt/hachimi/shared/bin/ffmpeg      # 单独审计、只读挂载的 FFmpeg；不进入 GHCR 镜像
-/var/lib/hachimi/media              # 只读受控媒体缓存
-```
+| 项目 | 值 |
+| --- | --- |
+| CloudBase 环境 | `bizhao-d8grp8yqd81759fbb`，`ap-shanghai` |
+| 服务名 | `trainpal-demo` |
+| 容器端口 | `8000` |
+| CPU / 内存 | 2 vCPU / 4 GiB |
+| 最大实例 | 1 |
+| 非评审期最小实例 | 0 |
+| 预热与评审期最小实例 | 1 |
+| 平台请求超时 | 至少 240 秒 |
+| 应用安全超时 | 180 秒 |
+| 应用 worker | 1 |
+| 日志 | 只写标准输出 |
 
-Compose 只包含：
+CloudBase 本地存储是内存型且实例替换后消失。它只适合瞬时分析材料，不是媒体库或任务数据库。最大实例不能提高到 2；否则同一 `run_id` 的快照、SSE、取消和限流会分裂。
 
-- `app`：`ghcr.io/happyjumpup/hachimi:<git-sha>`；镜像同时包含构建后的 Vue SPA 与 FastAPI，但不包含 FFmpeg 可执行文件。生产命令必须显式使用 `--workers 1`，媒体缓存与服务器管理的 FFmpeg 均以只读方式挂载；`stop_grace_period` 固定为 240 秒，使 180 秒运行上限结束后仍有清理余量。
-- `caddy`：固定版本镜像；只暴露 80/443，只向内部 `app` 转发。
+CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾讯云风险提示，二维码或链接旁必须写：
 
-Caddy 必须：
+> 首次打开会看到腾讯云安全提示，请点击“确定访问”进入演示。
 
-- 自动取得并续期 HTTPS 证书，HTTP 跳转 HTTPS。
-- 对 SSE 关闭代理缓冲，使用等价于 `flush_interval -1` 的即时刷出，并将上游读取超时设为大于 180 秒。
-- 不缓存 `/api/*`，保留 SSE 的 `Cache-Control: no-cache` 和 `X-Accel-Buffering: no`。
-- 将全部同源请求转发给 `app`；SPA history fallback 只由 FastAPI 负责，Caddy 不维护第二套回退规则。不存在的 `/api/*` 必须继续得到 JSON 404。
-- 添加合理的安全响应头；不得向外暴露内部容器地址、栈追踪或服务器路径。
+默认域名不得表述为长期生产域名。平台可能限制异常流量，因此评审前必须保留录屏和无需真实分析的快速体验路径。
 
-服务器仅保留当前与上一个已验证 release 和镜像，赛事结束前不要清理上一个版本。媒体缓存与生产环境文件不随镜像切换而删除。
+## 4. 公网开关与访问分级
 
-## 4. 环境变量与秘密
+- 私有门禁期间关闭 CloudBase 公网开关和任何 HTTP Access 映射。
+- 最小实例为 0 只控制成本，不等于关闭公网；访问控制必须依赖公网开关和映射状态。
+- 私有门禁全部通过后，才能短时开启未公布的公网 canary。
+- 匿名用户可以浏览产品页面和快速体验；开始真实 Provider 分析必须先取得评委访问会话。
+- 体验码通过安全表单提交到 `POST /api/v1/access/session`，由服务端写入 Secure、HttpOnly、SameSite Cookie；体验码不得进入 URL、前端构建、截图、录屏或日志。
+- 超过准入池立即返回 `429 + Retry-After`，不排队、不启动后台任务。
+- canary 失败立即关闭公网开关与映射；把最小实例恢复为 0 只能作为后续成本动作。
 
-生产环境文件必须位于 `/opt/hachimi/shared/.env.production`，权限设为 `0600`，不复制进 release 目录、镜像、CI 日志或聊天。应用启动时必须失败关闭并校验以下内容：
+## 5. 环境变量与秘密
+
+秘密只能通过 CloudBase 加密环境变量或秘密界面写入。不得进入仓库、镜像层、命令行历史、聊天、截图或日志。
+
+必需秘密：
+
+- `ARK_API_KEY`
+- `VOLC_ASR_API_KEY`
+- `JUDGE_ACCESS_CODE`
+- `ACCESS_COOKIE_SECRET`（生产新生成，不与体验码或 Provider Key 复用）
+
+关键非秘密配置：
 
 | 变量 | 生产要求 |
 | --- | --- |
-| `APP_ENV` | 必须为 `production` |
-| `ANALYSIS_PROVIDER` | 必须为 `cloud`；生产环境配置 `test` 时拒绝启动 |
-| `ARK_API_KEY` | 必填秘密，只传入后端 |
-| `ARK_MODEL_ID` / `ARK_VISUAL_MODEL_ID` / `ARK_BASE_URL` | 语音与视觉默认使用已验证 Mini 模型和官方地址；实际值写入发布事实 |
-| `VOLC_ASR_API_KEY` | 必填秘密，只传入后端 WebSocket 握手 |
-| `VOLC_ASR_RESOURCE_ID` / `VOLC_ASR_URL` | 与现有流式语音识别 2.0 权益一致；不得猜测小时版或并发版 |
-| `SOURCE_MANIFEST_PATH` | 指向容器内只读挂载的该 release 来源清单，例如 `/config/media-manifest.json` |
-| `SOURCE_MEDIA_ROOT` | 固定为 `/var/lib/hachimi/media` |
-| `PUBLIC_MEDIA_BASE_URL` | 受控 COS/CDN HTTPS 基地址；只与清单文件名拼接 |
-| `IMAGEIO_FFMPEG_EXE` | 固定为 `/opt/hachimi/bin/ffmpeg`；对应服务器只读挂载，文件必须完成版本、配置、许可和 SHA-256 审计 |
-| `FFMPEG_EXPECTED_SHA256` | 上述可执行文件的 64 位小写 SHA-256；必须与发布登记一致 |
-| `FFMPEG_EXPECTED_CONFIGURATION_SHA256` | `ffmpeg -version` 中完整、去除首尾空白后的 `configuration:` 行 SHA-256；必须与发布登记一致 |
-| `SMOKE_ANNOTATIONS_PATH` | 指向容器内只读挂载的该 release 人工 smoke 标注清单，例如 `/config/smoke-annotations.json`；不得包含转录或模型响应 |
-| `JUDGE_ACCESS_CODE` | 必填高熵秘密，不进入前端构建或 URL |
-| `ACCESS_COOKIE_SECRET` | 必填随机签名秘密，与体验码分离 |
-| `JUDGE_ANALYSIS_CONCURRENCY` | 容量验收后填写；未通过时为 `2` |
-| `PUBLIC_ANALYSIS_CONCURRENCY` | 容量验收后填写；未通过时为 `0` |
-| `CORS_ORIGINS` | 仅精确生产 HTTPS 域名；同源部署不允许 `*` |
+| `APP_ENV` | `production` |
+| `ANALYSIS_PROVIDER` | `cloud` |
+| `ARK_MODEL_ID` / `ARK_VISUAL_MODEL_ID` / `ARK_BASE_URL` | 使用候选版本实际验证值，发布记录只记模型 ID 与地址，不记 Key |
+| `VOLC_ASR_RESOURCE_ID` / `VOLC_ASR_URL` | 与现有豆包流式语音识别 2.0 权益一致 |
+| `LOCAL_UPLOAD_ENABLED` | `true`，但就绪和能力接口仍可失败关闭 |
+| `LOCAL_ANALYSIS_MAX_SECONDS` | 当前 CloudBase 基础计划值 `60`；后端冻结合同上限为 `300`，只能在对应切片合并并通过真实 Provider、恢复与清理门禁后提高 |
+| `LOCAL_UPLOAD_MAX_BYTES` | 与 CloudBase 和应用请求体上限协调，不能无界 |
 | `RUN_TIMEOUT_SECONDS` | `180` |
-| `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | `11.5`；单分支超出后取消并按证据决定部分成功或失败 |
-| `ANALYSIS_LATENCY_TARGET_MAX_SECONDS_PER_VIDEO_MINUTE` | `15`；真实 smoke 的发布门禁 |
 | `RUN_TTL_SECONDS` | `600` |
+| `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | 当前基线 `11.5`，变更需真实 smoke |
+| `ANALYSIS_LATENCY_TARGET_MAX_SECONDS_PER_VIDEO_MINUTE` | 当前 smoke 门禁 `15`，不是公网 SLA |
+| `JUDGE_ANALYSIS_CONCURRENCY` | 计划 `3`，必须通过三路真实并发后才开放 |
+| `PUBLIC_ANALYSIS_CONCURRENCY` | `0` |
+| `TRUSTED_PROXY_CIDRS` | CloudBase 实际、最小可信入口网段；禁止全网段 |
+| `CORS_ORIGINS` | 只允许精确同源 HTTPS 域名，不允许 `*` |
+| `WEB_STATIC_ROOT` | 构建后的 SPA 路径 |
+| `IMAGEIO_FFMPEG_EXE` | 审计后只读挂载的 FFmpeg 路径 |
+| `FFMPEG_EXPECTED_SHA256` | FFmpeg 文件 SHA-256 |
+| `FFMPEG_EXPECTED_CONFIGURATION_SHA256` | 完整 `configuration:` 行 SHA-256 |
+| `SOURCE_MANIFEST_PATH` / `SOURCE_MEDIA_ROOT` | 如启用受控来源，指向只读清单与缓存 |
+| `PUBLIC_MEDIA_BASE_URL` | 如启用受控来源，指向只读 HTTPS 媒体基址 |
+| `SMOKE_ANNOTATIONS_PATH` | 只读人工标注清单，不含转录或响应 |
 
-`HAKIMI_DEMO_VIDEO_PATH` 仅用于当前单视频本地开发，竞赛生产来源由清单和媒体根目录提供，生产环境不得同时依赖二者。Docker/服务器若需读取私有 GHCR，只配置最小 `read:packages` 凭据到 Docker credential store，不写进应用环境文件。
+检查秘密时只验证“存在、非空、权限正确”，不能回显值。本地 `.env.local` 可作为授权转移来源，但转移过程不得打印。GitHub Actions 不注入真实云 Key；真实 smoke 只在受控发布机或 CloudBase 私有路径运行。
 
-生产 FFmpeg 不从 `imageio-ffmpeg` wheel 或 GHCR 镜像分发。发布人须把经审核的可执行文件放在 `/opt/hachimi/shared/bin/ffmpeg`，设为不可由应用用户写入，并按 [`licenses/FFMPEG_RUNTIME.md`](../../licenses/FFMPEG_RUNTIME.md) 记录版本、完整配置行、可执行文件与配置行两个 SHA-256、适用许可证和对应源码位置。主管线使用 FFmpeg 生成整段 PCM 音频和瞬时视觉联系表，不再生成视频分析窗口；兼容路径仍保留内建 `mpeg4` 编码器。预期 LGPL 边界不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。生产就绪探针会执行、校验并锁定该二进制；如实际构建包含 GPL 组件，必须先完成相应分发义务，不能用“仅服务器使用”跳过审计。
+## 6. 媒体与 FFmpeg 门禁
 
-发布人检查环境文件时只检查“变量存在、权限正确、值不是空白”，不得把值输出到终端。GitHub Actions 不注入真实 Ark/ASR 密钥；真实云 smoke 只能在受控发布机或服务器执行。
+本地上传媒体由用户请求临时提供，不进入镜像或受控媒体缓存。受控快速体验若启用，则最终清单只登记团队有权展示的 2–3 条视频，并包含稳定 ID、标题、相对媒体路径、时长和 SHA-256。
 
-## 5. COS/CDN 媒体准备与哈希门禁
+- 客户端只能提交本地 multipart 或清单中的 `source_id`，不能提交 URL、对象键或服务器路径。
+- 对象存储／CDN 只允许受控前缀的只读 GET／HEAD 和 Range；服务器分析使用通过哈希的只读副本。
+- 清单、缓存和对象三方哈希必须一致；缺失、多余、符号链接、路径越界、传输不完整或哈希不符都阻止就绪。
+- 当前基础计划的 `assets_deferred_until_content_approval=true`。在素材、清单、公共基址与哈希审批前，不得把任何临时测试视频带入公网部署。
 
-### 5.1 来源清单
+FFmpeg 不进入 Git 或 GHCR 镜像。发布人必须记录版本、完整配置行、二进制与配置行两个 SHA-256、适用许可和源码位置；二进制以只读方式挂载。预期配置不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。如实际配置不同，先履行对应许可义务，再继续发布。
 
-版本化清单只登记 2–3 个团队授权来源。每项固定包含稳定 `id`、`title`、`media_path`、`duration_seconds` 和 `sha256`，且声明时长与实际媒体时长都必须大于 0 且不超过 60 秒；可附不参与下载的 `origin_url`。`media_path` 必须是无 `..` 的相对 POSIX 路径。完整 JSON Schema 以技术架构文档为准，部署脚本不得维护第二套字段名。
+## 7. 素材与权属
 
-- 浏览器播放地址：`PUBLIC_MEDIA_BASE_URL + media_path`。
-- 后端分析路径：`SOURCE_MEDIA_ROOT / media_path`。
-- 清单不能包含任意客户端 URL、COS 写密钥、带签名临时 URL 或本机绝对路径。
-- CDN/COS 仅开放清单前缀的只读 `GET`/`HEAD`，支持 Range，并返回正确的 `Content-Length`、`Content-Range` 和视频 MIME 类型。
+| 素材／依赖 | 发布要求 | 当前状态 |
+| --- | --- | --- |
+| 本地上传演示视频 | 团队自有或取得赛事展示授权；不进入 Git／镜像 | 待最终选定与登记 |
+| 受控快速体验视频 | 同上；对象、清单和缓存哈希一致 | 已暂缓接入 |
+| TrainPal 小猫教练 | 团队自制或获得明确赛事／Web 使用权；正式资产与代码 MIT 分开登记 | 形象资产制作中，不能用结构占位冒充最终资产 |
+| 结果海报资源 | 自制或可再分发 | 待登记 |
+| 字体 | 许可证允许 Web 使用／再分发；否则使用系统字体栈 | 系统字体优先 |
+| FFmpeg | 版本、配置、双哈希、许可与源码位置完整 | 待目标运行时审计 |
+| 项目代码 | `Hachimi Contributors` / MIT；第三方依赖另审 | 仓库既有许可 |
 
-### 5.2 同步步骤
+授权证据保存在团队受控位置，不把含个人信息的合同或聊天截图提交到 Git。未确认来源或授权范围不覆盖公开赛事展示的素材不能进入候选版本。
 
-应用镜像提供 `hakimi_analysis.sync_media` 命令，并由 CI 验证；服务器不依赖 Node、Python 或 uv 的宿主机安装，也不得用人工拷贝替代哈希校验：
+## 8. 构建与镜像验证
 
-```bash
-export HACHIMI_IMAGE="ghcr.io/happyjumpup/hachimi:<完整-git-sha>"
-docker run --rm \
-  --env-file /opt/hachimi/shared/.env.production \
-  --mount type=bind,src=/opt/hachimi/current/media-manifest.json,dst=/config/media-manifest.json,readonly \
-  --mount type=bind,src=/var/lib/hachimi/media,dst=/var/lib/hachimi/media \
-  "$HACHIMI_IMAGE" \
-  python -m hakimi_analysis.sync_media \
-  --manifest /config/media-manifest.json \
-  --target /var/lib/hachimi/media
+1. 在干净检出上安装锁定依赖并生成 API 类型，确认生成物无意外 diff。
+2. 运行 `pnpm check`、端到端测试和 CloudBase 基础预检。
+3. 构建同源多阶段镜像；运行镜像验证，确认非 root、只读运行、SPA history、API 404、健康接口和禁入文件。
+4. 审计镜像最终文件系统及各层，确认没有 `.env*`、媒体、音频、帧、转录、模型响应、Trace、源映射、云 Key、本机路径或 FFmpeg 二进制。
+5. 推送并记录不可变完整提交 SHA 与 registry digest；不能以 `latest` 作为发布或回滚依据。
+6. 保留至少一个上一版不可变镜像及兼容的非秘密配置快照。
+
+当前镜像路径继续使用仓库既有发布标识，例如 `ghcr.io/happyjumpup/hachimi:<full-sha>`。这是基础设施兼容路径，不得出现在用户产品命名中。
+
+## 9. CloudBase 部署顺序
+
+### 9.1 本地预检
+
+```powershell
+.\deploy\cloudbase\preflight.ps1
 ```
 
-同步器必须先下载到同目录临时文件；若 COS/CDN 返回 `Content-Length`，先确认实际落盘字节数与响应一致，再校验清单中的 SHA-256，最后原子替换。任一缺失、多余、符号链接、路径越界、传输长度异常或哈希不符都返回非零并阻止 `/ready`。字节数不是来源清单字段。同步完成后将缓存改为应用只读，原始视频不复制进镜像或仓库。
+预检只验证计划、预算和固定 CLI 命令面，不认证、不上传代码、不创建资源。通过预检不等于部署通过。
 
-发布前逐项验证：
+### 9.2 私有基础版本
 
-1. COS 对象哈希与清单一致。
-2. 服务器缓存哈希与清单一致。
-3. `/api/v1/sources` 只列清单 ID，不暴露服务器路径或对象写权限。
-4. `/api/v1/sources/{id}/media` 只对已登记 ID 返回 307 到受控 CDN URL；未知 ID 返回 404。
-5. 对每个 CDN 地址执行普通 GET 和 Range GET，移动端视频可拖动且演示片段能循环播放。
+1. 在 CloudBase 控制台确认目标账号、环境、服务、价格和附加资源成本。
+2. 使用不可变镜像 digest 通过已验证的 CloudBase CLI 3.6.4 命令创建 `trainpal-demo`；保留交互式最终确认，不增加 `--force` 或猜测的 dry-run 参数。
+3. 保持公网和 HTTP Access 关闭，配置非秘密值并无回显转移秘密。
+4. 接入已批准的媒体／FFmpeg 合同，通过内部 `/health`、`/ready`、真实分析、SSE、清理和本地上传门禁。
+5. 记录该版本 digest 与兼容配置快照，作为回滚基线。
 
-## 6. 发布步骤
+### 9.3 候选版本与 canary
 
-### 6.1 发布前门禁
+1. 构建不同不可变 digest 的候选版本，在公网仍关闭时部署为第二版本。
+2. 通过全部私有门禁并确认上一版本可回滚。
+3. 短时开启未公布公网 canary，依次验证公网健康／就绪、评委分析、第二浏览器、三路并发、超额 429、回滚、再前滚。
+4. 任何失败都立即关闭公网；全部通过才公告链接并在评审前把最小实例设为 1。
 
-- Issue #4–#7 已合入候选 SHA；PR 的 CI 全绿。
-- 在干净检出上运行 `pnpm install --frozen-lockfile`、`uv sync --project services/analysis-api --locked`、`pnpm api:generate`，并确认生成契约无 diff。
-- `pnpm check`、`pnpm test:e2e` 通过；CI 继续只用合成媒体和测试 Provider。
-- 服务器事实表已填写，DNS 指向目标主机，安全组和磁盘空间通过。
-- 受控媒体、Pet、字体和第三方依赖完成权属登记。
-- 当前与上一个可回滚的提交 SHA、镜像 digest 均已记录。
+CloudBase CLI 具体命令只从 [`deploy/cloudbase/README.md`](../../deploy/cloudbase/README.md) 复制，不在本手册维护第二套可能漂移的命令。
 
-### 6.2 构建与发布镜像
-
-GitHub Actions 必须从待发布提交构建多阶段镜像。推送前先将同一构建加载到 Runner，通过 [`deploy/verify-competition-image.sh`](../../deploy/verify-competition-image.sh) 检查非 root 用户、禁入文件、FFmpeg 发布边界、只读容器、SPA history、健康接口和 API 404，并验证 Compose 与 Caddy；全部通过后才登录 GHCR 并推送：
-
-```text
-ghcr.io/happyjumpup/hachimi:<完整 git-sha>
-```
-
-禁止以 `latest` 作为发布或回滚依据。工作流完成后记录仓库 SHA、镜像 digest 和 CI 链接；服务器拉取后再次核对 digest。镜像审计必须确认合并文件系统及最终镜像各层都没有 `.env*`、媒体、转录、帧、测试 Trace、源映射、云密钥、本机路径或 wheel 自带 FFmpeg 二进制。
-
-### 6.3 部署候选 SHA
-
-下列命令是操作顺序示例；将占位符换成事实表中的值，且不要把秘密放入命令行历史：
-
-```bash
-export HACHIMI_IMAGE="ghcr.io/happyjumpup/hachimi:<完整-git-sha>"
-cd /opt/hachimi/releases/<完整-git-sha>
-docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml config --quiet
-docker compose --env-file /opt/hachimi/shared/.env.production -f compose.yml pull
-```
-
-1. 将该 SHA 的 `compose.yml`、`Caddyfile`、媒体清单和人工 smoke 标注清单放入新的 release 目录并校验文件哈希。
-2. 切换 `/opt/hachimi/current` 到新 release，执行媒体同步与哈希校验。
-3. 运行 `docker compose up -d --remove-orphans`；不得使用 `--scale app`。
-4. 查看容器健康状态和脱敏启动日志，确认应用恰好一个 worker。
-5. 先从服务器本机检查 `/api/v1/health`、`/api/v1/ready`，再从公网域名检查 HTTPS。
-6. 就绪、SSE、媒体 Range、真实云 smoke 和完整评委流程均通过后才打开公共入口。
-
-### 6.4 健康与 SSE 验证
+## 10. 健康、就绪与真实 Provider smoke
 
 | 检查 | 通过条件 |
 | --- | --- |
-| `/api/v1/health` | 200，固定非敏感状态；不调用云提供方 |
-| `/api/v1/ready` | 200；生产 Provider、两项 API key、来源清单、全部媒体哈希、服务器 FFmpeg 可执行性/版本/双哈希/许可配置、SPA 入口、可信代理、临时目录和单实例配置均有效 |
-| 未就绪 | 503 + 脱敏错误码；可包含 `media_processor_unavailable`、`web_static_unavailable` 或 `proxy_configuration_invalid`，不得暴露路径、地址或密钥，也不得把缺密钥伪装成健康 |
-| SSE | 立即收到真实阶段/心跳，代理不聚合；连接超过常规 60 秒仍持续，终态或断开时运行被清理 |
-| 取消 | DELETE、切换视频或断开 SSE 后不再接纳迟到结果 |
+| `/api/v1/health` | 200，只证明进程存活，不调用 Provider |
+| `/api/v1/ready` | 200 且 `{"status":"ready"}`；真实 Provider、秘密存在性、可信代理、SPA、临时目录、FFmpeg、媒体清单和单实例配置有效 |
+| 未就绪 | 503 + 脱敏错误码，不暴露路径、地址、文件名、Key 或 Provider 正文 |
+| SSE | 真实阶段与心跳即时刷出；断线后客户端可按快照恢复，不把断线当取消 |
+| 显式取消 | DELETE 后不再接纳迟到结果，临时材料清理 |
+| 本地上传 | 能力接口、MIME、大小、时长与服务端验证一致；原视频不在终态后遗留 |
 
-就绪探针只验证本地配置和资源，不在每次探针请求中消耗 Ark/ASR。云端权限和真实响应由下一节 smoke 验证。
+真实 Provider smoke 必须使用团队授权视频和真实 Ark／豆包语音权益，至少覆盖：
 
-## 7. 真实云 smoke 与容量门
+- 有明确口播或字幕的视频；
+- 静音、音乐或弱语音但具有可识别视觉动作的视频；
+- 多动作或重复节奏视频；
+- 应合法返回证据不足的困难视频。
 
-### 7.1 真实云 smoke
+每个样本记录人工认可的动作别名和期望时间交集。通过要求：语义与人工标注相符、范围相交、不产生重量、分支／警告一致、覆盖状态诚实、临时目录恢复、云端临时文件删除。成功输出只保留 PASS、来源 ID、标注序号、阶段耗时、总耗时、模型／Skill 版本和脱敏请求 ID；不保存动作原文、转录、帧、提示、响应或 Trace。
 
-`pnpm smoke:cloud` 已按生产受控来源清单运行，不再接受硬编码的本地 `legacy-arm-workout`。发布前从 [`competition/smoke-annotations.example.json`](../../competition/smoke-annotations.example.json) 复制该 release 的 `smoke-annotations.json`，并遵循以下契约：
+当前短样本真实 smoke 只能证明既有路线的局部基线。它不能证明静音纯动作、多分钟视频、可定位覆盖缺口或生产准确率；这些未通过项必须继续作为已知限制。
 
-- `version` 固定为 `1`；`sources` 必须与媒体清单的来源 ID 完全一致，不能遗漏或额外增加来源。
-- 每个来源至少有一个 `checkpoint`，登记用于验收的参考秒数、动作名称人工认可别名和期望片段起止秒数；参考秒数不再传给主管线控制范围。
-- 清单可以登记公开的动作标注，但不得包含转录、提示词、帧、模型原始响应、密钥、体验码、本机路径或签名 URL。
-- 参考点和期望片段必须位于对应来源时长内；动作名称别名只用于确定性语义别名匹配，不额外调用模型判分。
+## 11. 容量门
 
-候选镜像在服务器上按同一只读来源/媒体/标注挂载执行：
+### 11.1 测试 Provider 负载
 
-```bash
-docker compose --env-file /opt/hachimi/shared/.env.production \
-  -f /opt/hachimi/current/compose.yml run --rm app \
-  python -m hakimi_analysis.cloud_smoke
-```
+在不接入公网的隔离测试环境，使用合成媒体和测试 Provider 验证静态页面、训练、限流和 50 会话。生产容器仍必须拒绝测试 Provider。记录成功率、预期 429、p50/p95、CPU、内存、网络和临时目录，不为未建立的指标编造阈值。
 
-命令对每个来源只执行一次整段真实管线，再用该来源的全部标注点验收候选。任一来源未覆盖、两个分支都未完成、缺失分支没有对应警告、候选依据与已完成分支矛盾、融合阶段缺失、动作语义别名不匹配、片段不相交、候选含重量字段、超过 15 秒/视频分钟或临时目录未恢复，均返回非零。每条演示视频至少设置一个团队人工标注点，并验证：
+### 11.2 真实 Provider 并发
 
-- Ark、豆包流式 ASR 2.0 和融合都使用真实 Provider；允许一个证据分支超预算后带警告部分成功，但不使用测试 Provider、缓存候选或预置结果。
-- 候选名称与人工标注语义一致，绝对片段与标注时间段相交，不产生重量。
-- 真实云命令通过后，再由真实 Web 验收确认候选可校正、可加入跨视频草稿且刷新后恢复。
-- 本地临时目录恢复到运行前状态；Ark 临时文件删除请求成功。
-- 成功输出只包含 `PASS`、来源 ID、标注点序号、阶段耗时、总耗时、模型/Skill 版本和脱敏后的提供方请求 ID；失败输出只增加脱敏错误码、来源 ID、标注点序号和允许的数值诊断。输出不保存动作名称、转录、候选原文、帧、提示词、原始响应或 Trace。
+只有以下条件全部通过，才保留 `JUDGE_ANALYSIS_CONCURRENCY=3`：
 
-任何一个提供方权限、权益、额度或清理校验失败都阻止发布。不得用 Mock 或快速体验方案替代真实云验收。
+- 三名独立评委会话同时完成真实分析；
+- 三条 SSE 不串流，第四条请求得到预期 429；
+- 全部临时材料清理；
+- 2 vCPU / 4 GiB 实例在观测窗口内无 OOM、无重启、无持续临时目录增长。
 
-### 7.2 50 会话负载
+任何一项失败都降低评委并发并重新 smoke；不能通过增加实例规避。公共并发始终为 0。
 
-使用同一候选镜像、测试 Provider 和合成媒体，在目标主机上启动只绑定 loopback 的隔离候选环境；通过 SSH 隧道从外部负载机在 30 秒内升至 50 个并发会话并保持 5 分钟，覆盖首页、来源列表、快速体验方案、训练、结果页和超额 429。隔离环境使用 `APP_ENV=test`、`ANALYSIS_PROVIDER=test`，不能接入公网 Caddy，测试后必须删除；生产容器仍必须拒绝测试 Provider。通过条件：
+## 12. 移动体验与演示验收
 
-- 无进程崩溃、无跨会话数据污染、无意外 5xx；预期的 429 单独统计。
-- 快速体验与本地训练在公共 AI 忙时仍可完成。
-- 记录 HTTP 成功率、429 数、p50/p95、CPU、内存和网络，不为尚未建立的延迟基线编造阈值。
-- 静态/训练流量下 CPU 峰值低于 80%，剩余内存高于 1 GB，磁盘与临时目录不持续增长。
+至少在一台 Android Chrome 和一台 iOS Safari 验证：
 
-### 7.3 三路真实 AI 容量
+- 首次 CloudBase 默认域名提示和页面进入；
+- 本地选片、上传、来源原始比例播放和浏览器前后台切换；
+- 真实分析阶段、离页恢复、失败重试和覆盖状态；
+- 方案摘要、动作 Bottom Sheet、用户字段编辑与 TrainPal 可选调整；
+- 次数型、时长型、休息、准备继续、刷新恢复与提前结束；
+- TrainPal 隐藏、低动效、素材失败和页面内休息召回；
+- 结果、海报、Web Share 与下载兜底；
+- 安全区、软键盘、固定主操作和至少 44 CSS px 触控目标。
 
-只有主机至少 4C/8GB，并且三名独立评委会话同时完成真实分析、三条 SSE 不串流、全部临时材料清理、CPU 峰值低于 80% 且剩余内存高于 1 GB，才可设置：
-
-```text
-JUDGE_ANALYSIS_CONCURRENCY=3
-PUBLIC_ANALYSIS_CONCURRENCY=1
-```
-
-否则发布配置固定为：
-
-```text
-JUDGE_ANALYSIS_CONCURRENCY=2
-PUBLIC_ANALYSIS_CONCURRENCY=0
-```
-
-超出容量立即返回用户安全的 `429` 和 `Retry-After`，不建立后台队列。公共实时 AI 关闭时，访客仍能进入明确标注的快速体验方案；评委码不得出现在网页源码、URL、截图或公共录屏中。
-
-## 8. 安全、日志与临时材料审计
-
-发布前后各执行一次：
-
-- 用 `git ls-files` 和镜像文件清单确认不存在 `.env`、视频/音频、帧、转录、模型响应、Trace、源映射或私有路径。
-- 检查 `/opt/hachimi/shared/.env.production` 为 `0600`，release、媒体目录和容器挂载遵循最小读写权限。
-- 检查应用日志仅含允许的运行 ID、来源 ID、阶段、耗时、版本、提供方请求 ID 和脱敏错误码。
-- 以只返回命中数量和文件名的审计方式检查日志；不得用会把密钥或转录值打印到终端的 `grep` 命令。
-- 在成功、取消、超时、Provider 失败各运行一次后，检查事实表记录的容器临时目录无遗留运行目录。
-- 确认 Caddy 访问日志不记录体验码、Cookie、请求正文或带签名媒体 URL。
-- 确认生产环境配置测试 Provider 时拒绝启动，客户端提交未知 `source_id` 或任意 URL 时失败关闭。
-
-发现密钥、体验码或原始内容进入日志/产物时，立即关闭入口、轮换对应凭据、删除受影响产物并重新构建；仅删除日志而不轮换凭据不算恢复完成。
-
-## 9. 素材与许可登记
-
-部署前将每一行由素材负责人和发布复核人签字。授权证据保存在团队受控位置，不把含个人信息的合同或聊天截图提交到 Git。
-
-| 素材/依赖 | 来源与权利人 | 授权或许可证依据 | 处理与发布位置 | SHA-256 | 状态/负责人 |
-| --- | --- | --- | --- | --- | --- |
-| 演示视频 1 | 部署时填写 | 团队自有或明确赛事展示授权 | COS 受控前缀；服务器只读缓存 | 部署时填写 | 部署时填写 |
-| 演示视频 2 | 部署时填写 | 团队自有或明确赛事展示授权 | COS 受控前缀；服务器只读缓存 | 部署时填写 | 部署时填写 |
-| 演示视频 3（如使用） | 部署时填写 | 团队自有或明确赛事展示授权 | COS 受控前缀；服务器只读缓存 | 部署时填写 | 部署时填写 |
-| 哈肌咪 Pet 五状态 | 团队确认拥有使用权；补记确认人和日期 | 赛事/Web 展示及优化使用确认 | 优化后透明 WebP；不从旧 GPL 代码复制组件 | 部署时填写 | 部署时填写 |
-| 完成海报装饰资源 | 部署时填写 | 自制或可再分发许可 | 前端构建资源 | 部署时填写 | 部署时填写 |
-| 中文字体 | 部署时填写 | 许可证允许 Web 使用/再分发；否则使用系统字体栈 | 前端或系统字体 | 部署时填写 | 部署时填写 |
-| 服务器管理的 FFmpeg | 部署时填写；不使用 wheel 内置二进制 | 记录完整配置行、适用许可证与对应源码位置；预期构建不含 `--enable-gpl`/`--enable-nonfree` | 服务器只读文件挂载；不进入 Git 或 GHCR | 可执行文件与配置行两个 SHA-256 | 部署时填写 |
-| 项目源代码 | Hachimi Contributors | MIT；第三方依赖许可证另审 | GHCR 镜像与 GitHub 仓库 | 发布 SHA | 部署时填写 |
-
-任何状态未确认、来源不明或授权范围不覆盖公开赛事展示的素材都不能进入候选版本。
-
-## 10. 五分钟评委演示脚本
-
-演示前用无痕/干净浏览器预置的只有评委访问级别，不预置 AI 候选。全程显示真实公网域名和真实阶段，不展示密钥或体验码。
+五分钟演示建议：
 
 | 时间 | 操作 | 讲解重点 |
 | --- | --- | --- |
-| 00:00–00:25 | 打开首页并选择受控视频 | 用户寻找的是可训练动作，而不是收藏整条视频 |
-| 00:25–01:35 | 选择视频，点击“分析视频动作” | 显式分析整段视频；真实 ASR 与视觉并行，只显示真实阶段 |
-| 01:35–02:10 | 预览、修正候选并加入草稿 | 用户最终确认；保留来源视频和演示时间段，不采信模型重量 |
-| 02:10–02:40 | 调整动作参数，补一个无视频自建动作并另存为 | 多来源/无视频动作可自由编排，方案不会被 Agent 擅自决定 |
-| 02:40–03:55 | 开始短训练，完成次数/时长组，经历休息并返回 | Pet 只陪伴不控制流程；休息按墙钟，动作离开页面暂停，支持隐藏 |
-| 03:55–04:25 | 完成训练，进入“我的训练”查看记录 | 保存实际完成量和方案快照；同设备刷新可恢复 |
-| 04:25–05:00 | 生成 1080×1920 海报并分享/下载 | 只展示方案名、时长、约卡路里、完成动作数和哈肌咪 |
+| 00:00–00:35 | 打开首页并选择团队授权的本地视频 | 当前真实入口是独立 Web 本地上传，“刷到就是练到”是价值主张 |
+| 00:35–01:35 | 输入评委访问会话并显式开始分析 | 真实 Provider、真实阶段、离页可恢复、无运行时 Mock |
+| 01:35–02:20 | 查看基础方案、处理一个待确认动作、编辑字段 | TrainPal 编译整份可执行提案，用户值高于全部规则 |
+| 02:20–02:55 | 可选“让 TrainPal 调整这次训练”或展示已保存差异 | 个性化是主动、可解释、可拒绝，不阻塞基础方案 |
+| 02:55–04:10 | 开始短训练，完成一组、休息并返回 | 来源片段减轻拖动，确定性引擎负责执行，TrainPal 提供要点与陪伴 |
+| 04:10–05:00 | 完成训练、查看约卡路里、成长反馈与分享 | 保存实际结果，同设备可恢复，海报不泄露来源或档案 |
 
-现场只运行一次真实 AI，避免把大部分时间消耗在第二次云调用。若真实分析超过预期，讲解受控来源、取消语义、隐私边界和训练草稿，等待真实终态；不能切换到假候选。
+如果某项冻结能力尚未接入候选版本，演示脚本必须删除该步骤，而不是用静态文案冒充。
 
-## 11. 录屏备份与现场降级
+## 13. 日志、隐私与安全审计
 
-在候选 SHA 冻结后录制一份真实公网完整闭环：
+- 用 `git ls-files` 和镜像层清单确认秘密、媒体、转录、响应和私有路径没有进入产物。
+- 日志只包含白名单字段；审计脚本只输出命中数量和文件名，不能把疑似秘密内容打印到终端。
+- 在成功、部分、证据不足、失败、取消和超时后检查临时目录无遗留。
+- Caddy 历史备选和 CloudBase 访问日志都不能记录体验码、Cookie、请求正文或带签名媒体 URL。
+- 未知来源 ID、任意 URL、非法本地来源 ID、越界区间或测试 Provider 在生产中都必须失败关闭。
+- 发现秘密或原始内容泄露时立即关闭公网、轮换凭据、删除受影响产物并重新构建；只删日志不算恢复。
 
-- 画面包含域名、版本短 SHA、真实阶段、候选校正、训练恢复、记录和海报。
-- 开始前确认页面和系统通知不显示体验码、Cookie、密钥、本机路径或个人账号信息。
-- 录屏只展示产品公开数据，不附转录、模型响应或开发者工具 Trace。
-- 将 MP4 保存在演示电脑和团队受控云盘各一份，记录 SHA-256 与录制时间，不提交 Git。
-- 现场网络或云提供方故障时，先明确说明“下面播放的是该版本预先完成的真实录屏”，再播放；不得把录屏称为现场实时结果。
-- 保留无需云调用的快速体验方案作为交互备份，让评委仍能亲手完成训练、Pet、记录和海报流程。
+## 14. 录屏与现场降级
 
-## 12. 已知限制
+候选冻结后录制一份真实公网完整闭环，画面包含默认域名、版本短 SHA、真实阶段、方案编辑、训练恢复、结果和海报。录屏不显示体验码、Cookie、Key、本机路径、转录、模型响应或开发者工具 Trace。
 
-对评委和团队统一披露：
+MP4 保存在演示电脑和团队受控云盘各一份，记录 SHA-256 与时间，不提交 Git。现场网络或 Provider 故障时明确说明“下面播放的是该版本预先完成的真实录屏”，再播放；同时使用明确标注的快速体验方案让评委亲手体验训练闭环。
 
-- 当前是 Web-first 竞赛版，不是抖音小程序；只支持 2–3 个不超过 60 秒的团队受控视频，不能上传视频或提交任意 URL。更长视频需要后续分块方案。
-- 动作分析依赖 Ark 与豆包流式 ASR 2.0，受网络、权益和额度影响；没有运行时 Mock 回退。
-- 单实例重启或 SSE 断开会取消正在进行的分析，不恢复后台任务。
-- 训练数据只在当前浏览器设备保存；无账号、跨设备同步或服务器备份。
-- “清除本机训练数据”通过同源 `BroadcastChannel` 和 clear epoch 协调当前已打开的本项目标签页，先停止待写与后续写入再清空；浏览器不支持该安全协调时会拒绝清除。该机制不跨浏览器、隐私窗口或设备同步。
-- 评委体验码是共享的容量入口，不是用户账号；公共实时 AI 可能因容量门关闭或返回繁忙。
-- 卡路里只显示单个近似值，不是医疗或精确能量测量；产品不提供伤病诊断、动作质量评分或训练处方。
-- Pet 使用固定优化后的哈肌咪，可隐藏但不可更换或上传自定义形象。
-- 真实样本和并发验证只覆盖本次登记素材与竞赛容量，不能外推为大规模生产可用性结论。
+## 15. 已知限制
 
-## 13. 上线、回滚与赛前检查单
+- 当前是独立 Web 与本地上传入口，不是平台分享直达；不得暗示已调用未开放的平台内容理解接口。
+- 当前 CloudBase 基础计划只声明最多 60 秒本地分析；后端冻结合同的 300 秒上限尚未进入本发布基线，提高能力前必须合并对应切片并通过分块、恢复、清理和真实 Provider 验证。
+- 现有 Provider 对静音纯动作、多动作召回和可定位部分覆盖仍缺少充分生产证据；测试 Provider 通过不能替代真实验收。
+- Analysis Run 留在单进程内存；实例替换会丢失进行中任务，用户只能重新发起。
+- 训练和个性化数据只在当前浏览器设备保存，无账号、服务器备份或跨设备同步。
+- CloudBase 默认域名可能出现访问确认、冷启动或平台流量限制；它是竞赛临时入口，不是正式生产域名。
+- 卡路里是近似值，不是医疗或精确能量测量；TrainPal 不提供伤病诊断、姿态评分或自动负重处方。
+- GYMTI 题目和正式小猫资产仍由团队补充；结构占位不能作为最终人格或素材交付。
 
-### 13.1 打开入口前
+## 16. 回滚与到期
 
-- [ ] 事实表、素材表、当前/上一个 SHA 与 digest 填写完整。
-- [ ] CI、`pnpm check`、E2E、`deploy/verify-competition-image.sh`、镜像逐层审计和安全审计全绿。
-- [ ] COS、服务器缓存与来源清单三方哈希一致，全部视频 Range 可播放。
-- [ ] `/api/v1/health`、`/api/v1/ready`、HTTPS、SSE 超时和断开取消通过。
-- [ ] 2–3 条来源真实云 smoke 通过，临时材料与 Ark 文件均清理。
-- [ ] 50 会话负载与三路/降级容量门已执行，生产并发值按实测填写。
-- [ ] Android Chrome 与 iOS Safari 完整流程通过。
-- [ ] 评委码未出现在前端、URL、日志和录屏；访客快速体验标识清楚。
-- [ ] 五分钟脚本走通，录屏双份可播放且哈希已记录。
-- [ ] 发布、重启、回滚到上一 SHA、再恢复当前 SHA 的演练均通过。
+### 回滚触发
 
-### 13.2 回滚触发条件
+出现以下任一情况立即关闭公网并回滚：`/ready` 持续失败、重复 5xx、SSE 串流／积压、训练主流程阻断、媒体哈希不符、临时文件持续增长、秘密或原始内容泄露、真实结果跨运行污染、实例因并发反复重启。
 
-出现以下任一情况立即停止公共实时 AI，并在无法快速恢复时回滚：`/api/v1/ready` 持续失败、重复 5xx、SSE 串流/积压、训练主流程阻断、媒体哈希不符、临时文件持续增长、密钥或原始内容泄露、真实 AI 结果跨运行污染。
+### 回滚步骤
 
-### 13.3 按 SHA 回滚
+1. 记录故障时间、当前 digest、配置修订、脱敏错误码和影响范围；不要先删除证据。
+2. 关闭公网开关与映射，停止新分析。
+3. 切换到上一不可变版本及其兼容非秘密配置快照。
+4. 验证内部健康／就绪、一个脱敏真实 smoke、本地上传与快速体验训练。
+5. 如需重新开放，重新执行完整未公布 canary；不能自动重试故障版本。
 
-1. 记录故障时间、当前 SHA/digest、脱敏错误码和影响范围；不要先删除日志或当前 release。
-2. 将 `PUBLIC_ANALYSIS_CONCURRENCY=0`，阻止新的公共真实分析；评委流程若存在数据污染则同时关闭评委入口。
-3. 将 `/opt/hachimi/current` 切回事实表记录的上一个已验证 release。
-4. 使用上一个完整 SHA 对应的 GHCR 镜像和 Caddy/Compose/媒体清单，执行 `config --quiet`、`pull`、媒体哈希校验和 `up -d --remove-orphans`。
-5. 依次验证 `/api/v1/health`、`/api/v1/ready`、来源列表、Range、SSE、一个脱敏真实云 smoke 和快速体验完整训练。
-6. 回滚通过后再按容量门恢复评委/公共入口，并记录结束时间；不要自动重试部署故障版本。
+服务器回滚没有浏览器数据迁移或清库步骤。禁止删除用户浏览器数据、媒体审批材料或仍用于审计的故障版本记录。
 
-浏览器训练数据位于 IndexedDB，服务器镜像回滚没有数据迁移或清库步骤。禁止为回滚删除 `/var/lib/hachimi/media`、生产环境文件或用户浏览器数据。
+CloudBase 总授权上限为人民币 300 元，精确窗口与估算以基础计划为准。非评审期最小实例保持 0；到确认演示结束或最大公网窗口先到者，关闭公网与映射、把最小实例恢复为 0，并复核或移除不再使用的计费资源。
 
-## 14. 关联决策
+## 17. 发布检查单
 
-- [Web-first 与受控视频源](../adr/0007-web-first-controlled-video-sources.md)
-- [显式、临时且可取消的分析管线](../adr/0008-explicit-transient-analysis-pipeline.md)
-- [豆包流式语音识别模型 2.0](../adr/0009-use-streaming-input-asr-2.md)
-- [显式整段视频分析与延迟预算](../adr/0012-explicit-full-source-analysis-with-latency-budget.md)
-- [Agent 不长期保存原始媒体](../adr/0006-agent-does-not-retain-raw-media.md)
-- [训练场次可恢复但不在后台训练](../adr/0003-training-sessions-are-recoverable.md)
-- [项目开发与验证入口](../../README.md)
+- [ ] 最终提交 SHA、镜像 digest、上一版本和兼容配置快照已记录。
+- [ ] CloudBase 基础预检、完整测试、镜像审计与素材权属全绿。
+- [ ] 最终媒体、清单、FFmpeg 和哈希接入，私有 `/ready` 通过。
+- [ ] 本地上传与受控快速体验均符合能力和清理边界。
+- [ ] 真实 Provider 样本覆盖口播、静音视觉、多动作和证据不足；输出已脱敏。
+- [ ] 三路评委并发与第四路 429 通过，无 OOM、串流或遗留。
+- [ ] Android Chrome 与 iOS Safari 主路径通过。
+- [ ] 公网 canary、第二浏览器、回滚、再前滚均有记录。
+- [ ] 体验码未进入 URL、构建、日志、截图或录屏。
+- [ ] 五分钟脚本与双份录屏通过；未实现能力已从讲解中删除。
+- [ ] 公告前已设置评审期最小实例；结束时间与关停负责人明确。
+
+## 18. 关联决策
+
+- [ADR-0011：单实例语义](../adr/0011-single-instance-competition-deployment.md)
+- [ADR-0013：本地视频优先与可恢复分析](../adr/0013-local-video-import-and-recoverable-analysis.md)
+- [ADR-0024：独立 Web 与可迁移愿景](../adr/0024-independent-web-is-current-while-platform-understanding-is-portable.md)
+- [ADR-0025：覆盖状态](../adr/0025-provider-declares-complete-partial-or-insufficient-coverage.md)
+- [ADR-0029：CloudBase Run 临时竞赛入口](../adr/0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md)

@@ -58,7 +58,6 @@ function candidate(sourceId: string): AnalysisCandidate {
       { type: 'visual', start_seconds: 41, end_seconds: 51 },
     ],
     needs_confirmation: false,
-    segment_role: 'follow_along',
   }
 }
 
@@ -68,7 +67,7 @@ describe('方案草稿 store', () => {
     vi.useFakeTimers()
   })
 
-  it('stores local source fingerprints, segment roles, and repeated actions in source order', async () => {
+  it('stores local source fingerprints and repeated actions in source order without legacy roles', async () => {
     const store = useDraftStore()
     await store.load(new MemoryDraftRepository())
     const sourceId = 'local:11111111-1111-4111-8111-111111111111'
@@ -78,9 +77,8 @@ describe('方案草稿 store', () => {
     const earlier = candidate(sourceId)
     earlier.id = 'earlier'
     earlier.segment = { start_seconds: 10, end_seconds: 20 }
-    earlier.segment_role = 'teaching_demo'
 
-    store.addCandidates([later, earlier], [], {
+    store.applyCandidateProposal([later, earlier], {
       [sourceId]: {
         title: '训练.mp4',
         origin_url: null,
@@ -93,7 +91,7 @@ describe('方案草稿 store', () => {
           durationSeconds: 60,
         },
       },
-    }, ['earlier'])
+    })
 
     expect(store.items.map((item) => item.segment.value?.start_seconds)).toEqual([10, 40])
     expect(store.items[0]!.sourceRef).toMatchObject({
@@ -101,10 +99,7 @@ describe('方案草稿 store', () => {
       kind: 'local',
       localMedia: { fileName: '训练.mp4', sizeBytes: 123 },
     })
-    expect(store.items.map((item) => item.segmentRole)).toEqual([
-      { value: 'teaching_demo', source: 'user' },
-      { value: 'follow_along', source: 'video' },
-    ])
+    expect(store.items.every((item) => !('segmentRole' in item))).toBe(true)
   })
 
   it('applies visible rule defaults and persists actions from multiple videos', async () => {
@@ -112,7 +107,7 @@ describe('方案草稿 store', () => {
     const store = useDraftStore()
     await store.load(repository)
 
-    store.addCandidates([candidate('video-a'), candidate('video-b')], [], {
+    store.applyCandidateProposal([candidate('video-a'), candidate('video-b')], {
       'video-a': {
         title: '来源视频 A',
         origin_url: 'https://www.douyin.com/video/123456',
@@ -141,6 +136,44 @@ describe('方案草稿 store', () => {
     await vi.advanceTimersByTimeAsync(301)
     expect(repository.saveCount).toBe(1)
     expect(repository.value?.items).toHaveLength(2)
+  })
+
+  it('keeps uncertain candidates pending and uses an editable rule placeholder when mode is missing', async () => {
+    const store = useDraftStore()
+    await store.load(new MemoryDraftRepository())
+    const uncertain = candidate('video-a')
+    uncertain.parameters.mode = null
+    uncertain.parameters.reps = null
+    uncertain.needs_confirmation = false
+
+    store.applyCandidateProposal([uncertain], {}, 'replace')
+
+    expect(store.items[0]).toMatchObject({
+      mode: 'reps',
+      confirmationStatus: 'pending',
+      reps: { value: 10, source: 'rule' },
+    })
+    store.updateMode(store.items[0]!.id, 'duration')
+    store.confirmItem(store.items[0]!.id)
+    expect(store.items[0]).toMatchObject({
+      mode: 'duration',
+      confirmationStatus: 'confirmed',
+      durationSeconds: { value: 30, source: 'rule' },
+    })
+  })
+
+  it('requires an explicit append or replace strategy for a proposal', async () => {
+    const store = useDraftStore()
+    await store.load(new MemoryDraftRepository())
+    store.addManualAction({ name: '已有动作', mode: 'reps' })
+
+    store.applyCandidateProposal([candidate('video-a')], {}, 'append')
+    expect(store.items.map((item) => item.name)).toEqual(['已有动作', '拖拽弯举'])
+
+    store.applyCandidateProposal([candidate('video-b')], {}, 'replace')
+    expect(store.plan.name).toBe('未命名方案')
+    expect(store.plan.linkedPlanId).toBeNull()
+    expect(store.items.map((item) => item.sourceRef?.sourceId)).toEqual(['video-b'])
   })
 
   it('supports manual actions, duplicate, reorder, delete, and reload', async () => {
@@ -185,7 +218,7 @@ describe('方案草稿 store', () => {
     const store = useDraftStore()
     await store.load(new MemoryDraftRepository())
 
-    store.addCandidates([candidate('video-a')], [], {
+    store.applyCandidateProposal([candidate('video-a')], {
       'video-a': { title: '来源视频 A', origin_url: 'javascript:alert(1)' },
     })
 

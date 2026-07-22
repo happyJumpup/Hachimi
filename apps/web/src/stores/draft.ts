@@ -16,6 +16,7 @@ import { toSafeOriginUrl } from '@/domain/source'
 
 type NumericField = 'sets' | 'reps' | 'durationSeconds' | 'restSeconds' | 'weightKg'
 type PersistState = 'idle' | 'pending' | 'saving' | 'saved' | 'failed'
+type ProposalStrategy = 'append' | 'replace'
 
 const emptyPlan = (): DraftPlan => ({
   id: 'current',
@@ -29,6 +30,16 @@ const id = (): string => globalThis.crypto?.randomUUID?.() ?? `item-${Date.now()
 
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
+const normalizePlan = (nextPlan: DraftPlan): DraftPlan => ({
+  ...cloneJson(nextPlan),
+  items: nextPlan.items.map((rawItem) => {
+    const { segmentRole: _legacySegmentRole, ...item } = rawItem as DraftItem & {
+      segmentRole?: unknown
+    }
+    return cloneJson(item)
+  }),
+})
+
 const sourced = <T>(value: T | null, source: SourcedValue<T>['source']): SourcedValue<T> => ({
   value,
   source,
@@ -41,14 +52,10 @@ type SourceSnapshot = Pick<SourceSummary, 'title' | 'origin_url'> & {
 
 const fromCandidate = (
   candidate: AnalysisCandidate,
-  segmentEdited = false,
   source?: SourceSnapshot,
-  roleEdited = false,
 ): DraftItem => {
-  const mode = candidate.parameters.mode
-  if (mode === null) {
-    throw new Error('candidate mode must be selected before adding it to the draft')
-  }
+  const modeMissing = candidate.parameters.mode === null
+  const mode: ActionMode = candidate.parameters.mode ?? 'reps'
   const isReps = mode === 'reps'
   return {
     id: id(),
@@ -62,12 +69,9 @@ const fromCandidate = (
     },
     segment: sourced(
       candidate.segment ? cloneJson(candidate.segment) : null,
-      candidate.segment ? (segmentEdited ? 'user' : 'video') : null,
+      candidate.segment ? 'video' : null,
     ),
-    segmentRole: sourced(
-      candidate.segment_role ?? 'unknown',
-      roleEdited ? 'user' : 'video',
-    ),
+    confirmationStatus: candidate.needs_confirmation || modeMissing ? 'pending' : 'confirmed',
     mode,
     sets: candidate.parameters.sets === null
       ? sourced(3, 'rule')
@@ -110,14 +114,17 @@ export const useDraftStore = defineStore('draft', () => {
 
   async function load(nextRepository: DraftRepository): Promise<void> {
     repository = nextRepository
-    plan.value = (await repository.load()) ?? emptyPlan()
+    const stored = await repository.load()
+    plan.value = stored ? normalizePlan(stored) : emptyPlan()
     persistState.value = plan.value.items.length ? 'saved' : 'idle'
     loaded.value = true
   }
 
   async function reload(): Promise<void> {
     if (!repository) return
-    plan.value = (await repository.load()) ?? emptyPlan()
+    const stored = await repository.load()
+    plan.value = stored ? normalizePlan(stored) : emptyPlan()
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
     persistState.value = plan.value.items.length ? 'saved' : 'idle'
   }
 
@@ -188,7 +195,8 @@ export const useDraftStore = defineStore('draft', () => {
       clearTimeout(persistTimer)
       persistTimer = undefined
     }
-    plan.value = cloneJson(nextPlan)
+    plan.value = normalizePlan(nextPlan)
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
   }
 
   function resetLocalState(keepSuspended = false): void {
@@ -208,26 +216,32 @@ export const useDraftStore = defineStore('draft', () => {
     schedulePersist()
   }
 
-  function addCandidates(
+  function applyCandidateProposal(
     candidates: AnalysisCandidate[],
-    editedSegmentIds: string[] = [],
     sources: Record<string, SourceSnapshot> = {},
-    editedRoleIds: string[] = [],
+    strategy: ProposalStrategy = 'append',
   ): void {
-    const edited = new Set(editedSegmentIds)
-    const roleEdited = new Set(editedRoleIds)
     const ordered = [...candidates].sort((left, right) => (
       left.segment.start_seconds - right.segment.start_seconds
       || left.segment.end_seconds - right.segment.end_seconds
     ))
-    plan.value.items.push(...ordered.map((candidate) =>
-      fromCandidate(
-        candidate,
-        edited.has(candidate.id),
-        sources[candidate.source_id],
-        roleEdited.has(candidate.id),
-      ),
-    ))
+    const proposalItems = ordered.map((candidate) =>
+      fromCandidate(candidate, sources[candidate.source_id]),
+    )
+    if (strategy === 'replace') {
+      plan.value.name = '未命名方案'
+      plan.value.linkedPlanId = null
+      plan.value.items = proposalItems
+    } else {
+      plan.value.items.push(...proposalItems)
+    }
+    schedulePersist()
+  }
+
+  function confirmItem(itemId: string): void {
+    const item = plan.value.items.find((entry) => entry.id === itemId)
+    if (!item || item.confirmationStatus !== 'pending') return
+    item.confirmationStatus = 'confirmed'
     schedulePersist()
   }
 
@@ -320,7 +334,8 @@ export const useDraftStore = defineStore('draft', () => {
     adoptPersistedPlan,
     resetLocalState,
     updatePlanName,
-    addCandidates,
+    applyCandidateProposal,
+    confirmItem,
     addManualAction,
     updateValue,
     updateName,
