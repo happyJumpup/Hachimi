@@ -10,6 +10,11 @@ export const SUPPORTED_LOCAL_MEDIA_TYPES = [
   'video/webm',
 ] as const
 
+// CloudBase rejects the complete HTTP request at 20 MB. Keep one megabyte of
+// headroom for multipart metadata even though the application itself accepts
+// files up to the larger limit advertised by /capabilities.
+export const CLOUDBASE_DEMO_UPLOAD_MAX_BYTES = 19_000_000
+
 export type LocalMediaValidation =
   | { ok: true }
   | {
@@ -32,9 +37,15 @@ const formatSizeLimit = (bytes: number): string => {
   return `${Number.isInteger(megabytes) ? megabytes : megabytes.toFixed(1)} MB`
 }
 
-export const validateLocalMediaFile = (
+export const effectiveLocalUploadMaxBytes = (
+  capabilities: AnalysisCapabilities,
+): number => Math.min(
+  capabilities.local_upload_max_bytes,
+  CLOUDBASE_DEMO_UPLOAD_MAX_BYTES,
+)
+
+export const validateLocalMediaUpload = (
   file: File,
-  durationSeconds: number,
   capabilities: AnalysisCapabilities,
 ): LocalMediaValidation => {
   if (!capabilities.local_upload_enabled) {
@@ -47,13 +58,28 @@ export const validateLocalMediaFile = (
       message: '请选择 MP4、MOV 或 WebM 视频',
     }
   }
-  if (file.size > capabilities.local_upload_max_bytes) {
+  if (file.size > effectiveLocalUploadMaxBytes(capabilities)) {
+    const platformEnvelopeIsLimiting = (
+      capabilities.local_upload_max_bytes > CLOUDBASE_DEMO_UPLOAD_MAX_BYTES
+    )
     return {
       ok: false,
       code: 'too_large',
-      message: `当前环境支持不超过 ${formatSizeLimit(capabilities.local_upload_max_bytes)} 的视频`,
+      message: platformEnvelopeIsLimiting
+        ? 'CloudBase 演示入口限制 20 MB；请先压缩视频再上传'
+        : `当前环境支持不超过 ${formatSizeLimit(capabilities.local_upload_max_bytes)} 的视频`,
     }
   }
+  return { ok: true }
+}
+
+export const validateLocalMediaFile = (
+  file: File,
+  durationSeconds: number,
+  capabilities: AnalysisCapabilities,
+): LocalMediaValidation => {
+  const uploadValidation = validateLocalMediaUpload(file, capabilities)
+  if (!uploadValidation.ok) return uploadValidation
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
     return { ok: false, code: 'invalid_duration', message: '无法读取这个视频的时长，请重新选择' }
   }

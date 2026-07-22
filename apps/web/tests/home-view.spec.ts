@@ -57,6 +57,10 @@ describe('TrainPal 首页', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('刷到的动作')
+    expect(wrapper.text()).toContain('最长 1 分钟')
+    expect(wrapper.text()).toContain('结果需要核对')
+    expect(wrapper.text()).toContain('20 MB 以内')
+    expect(wrapper.text()).not.toContain('25 MB')
     expect(wrapper.text()).toContain('原视频保存在当前设备；服务端临时副本只用于本次分析')
     expect(wrapper.get('video').attributes('src')).toBe('blob:home-fixture')
     expect(start).not.toHaveBeenCalled()

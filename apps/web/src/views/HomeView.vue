@@ -6,8 +6,8 @@ import { analysisClient, browserEventStreamFactory } from '@/api/client'
 import {
   localMediaAsFile,
   probeVideoDuration,
-  SUPPORTED_LOCAL_MEDIA_TYPES,
   validateLocalMediaFile,
+  validateLocalMediaUpload,
 } from '@/domain/local-media'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
@@ -42,12 +42,21 @@ const formatTime = (seconds: number): string => {
 
 const formatSize = (bytes: number): string => `${(bytes / 1_000_000).toFixed(1)} MB`
 
+const formatDurationLimit = (seconds: number): string => {
+  const whole = Math.max(0, Math.floor(seconds))
+  const minutes = Math.floor(whole / 60)
+  const remainder = whole % 60
+  if (!minutes) return `${remainder} 秒`
+  if (!remainder) return `${minutes} 分钟`
+  return `${minutes} 分 ${remainder} 秒`
+}
+
 const capabilityCopy = computed(() => {
   const capability = analysis.capabilities
   if (analysis.capabilitiesLoading) return '正在读取当前分析能力…'
   if (!capability) return '暂时无法确认本地视频能力'
   if (!capability.local_upload_enabled) return '当前环境暂不支持本地视频分析'
-  return `当前支持最长 ${formatTime(capability.local_analysis_max_seconds)} · ${(capability.local_upload_max_bytes / 1_000_000).toFixed(0)} MB`
+  return `最长 ${formatDurationLimit(capability.local_analysis_max_seconds)} · 结果需要核对 · 云端演示请压缩到 20 MB 以内`
 })
 
 const initialize = async (): Promise<void> => {
@@ -79,12 +88,9 @@ const chooseFile = async (event: Event): Promise<void> => {
     importError.value = '还没有读取到分析能力，请稍后重试'
     return
   }
-  if (!SUPPORTED_LOCAL_MEDIA_TYPES.includes(file.type as typeof SUPPORTED_LOCAL_MEDIA_TYPES[number])) {
-    importError.value = '请选择 MP4、MOV 或 WebM 视频'
-    return
-  }
-  if (file.size > capability.local_upload_max_bytes) {
-    importError.value = `这个文件超过当前 ${(capability.local_upload_max_bytes / 1_000_000).toFixed(0)} MB 上限`
+  const uploadValidation = validateLocalMediaUpload(file, capability)
+  if (!uploadValidation.ok) {
+    importError.value = uploadValidation.message
     return
   }
 
