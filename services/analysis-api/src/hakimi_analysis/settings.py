@@ -62,7 +62,8 @@ class Settings(BaseSettings):
     provider_canary_receipt_json: str = ""
     provider_conformance_report_json: str = ""
     deployment_commit_sha: str = ""
-    local_upload_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
+    local_upload_max_bytes: int = Field(default=19 * 1024 * 1024, ge=1)
+    analysis_max_source_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
     analysis_speech_timeout_seconds: float = Field(default=45.0, gt=0)
     analysis_evidence_deadline_seconds: float = Field(default=170.0, gt=0)
     analysis_cleanup_reserve_seconds: float = Field(default=10.0, ge=0)

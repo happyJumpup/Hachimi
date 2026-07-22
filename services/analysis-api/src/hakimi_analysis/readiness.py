@@ -15,11 +15,17 @@ from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.provider_contracts import PromptContractError, PromptContractRegistry
 from hakimi_analysis.provider_profile import ProviderProfile
 from hakimi_analysis.release_gates import (
+    QWEN_VISUAL_MODEL_ID,
+    SEED_LITE_VISUAL_MODEL_ID,
+    SEED_MINI_VISUAL_MODEL_ID,
+    SPEECH_MODEL_ID,
+    load_immutable_build_commit,
+    provider_config_sha256,
     validate_five_minute_canary_receipt,
     validate_five_minute_canary_receipt_json,
     validate_provider_conformance_report_json,
 )
-from hakimi_analysis.settings import Settings
+from hakimi_analysis.settings import PROJECT_ROOT, Settings
 from hakimi_analysis.sources import SourceCatalog
 
 FFMPEG_VERSION_TIMEOUT_SECONDS = 5
@@ -39,12 +45,13 @@ FFMPEG_RECEIPT_KEYS = {
     "configuration_line",
     "configuration_sha256",
 }
-PRODUCTION_SPEECH_MODEL_ID = "doubao-seed-2-0-mini-260428"
+PRODUCTION_SPEECH_MODEL_ID = SPEECH_MODEL_ID
 PRODUCTION_VISUAL_MODEL_IDS = {
-    "doubao-seed-2-0-mini-260428",
-    "doubao-seed-2-0-lite-260428",
+    SEED_MINI_VISUAL_MODEL_ID,
+    SEED_LITE_VISUAL_MODEL_ID,
 }
-PRODUCTION_FALLBACK_MODEL_ID = "qwen3-vl-flash-2026-01-22"
+PRODUCTION_FALLBACK_MODEL_ID = QWEN_VISUAL_MODEL_ID
+IMMUTABLE_BUILD_METADATA_PATH = PROJECT_ROOT / "build-metadata.json"
 
 
 def validate_ffmpeg_runtime(
@@ -153,6 +160,7 @@ class ProductionReadiness:
         duration_probe: Callable[[Path], float] | None = None,
         ffmpeg_receipt_probe: Callable[[Path, Path], bool] | None = None,
         fallback_probe: Callable[[], bool] | None = None,
+        build_commit_probe: Callable[[], str | None] | None = None,
         cache_seconds: float = 5,
     ) -> None:
         self._settings = settings
@@ -162,6 +170,9 @@ class ProductionReadiness:
         self._duration_probe = duration_probe or probe_duration_sync
         self._ffmpeg_receipt_probe = ffmpeg_receipt_probe or validate_ffmpeg_build_receipt
         self._fallback_probe = fallback_probe
+        self._build_commit_probe = build_commit_probe or (
+            lambda: load_immutable_build_commit(IMMUTABLE_BUILD_METADATA_PATH)
+        )
         self._cache_seconds = cache_seconds
         self._cache_lock = Lock()
         self._cached_at: float | None = None
@@ -270,19 +281,18 @@ class ProductionReadiness:
             return "web_static_unavailable"
         if not self._temp_storage_available():
             return "temp_storage_unavailable"
-        if not self._competition_profile_valid(
-            visual_prompt_sha256=contracts.visual.prompt_sha256
-        ):
+        if not self._competition_profile_valid(contracts=contracts):
             return "competition_configuration_invalid"
         return None
 
-    def _competition_profile_valid(self, *, visual_prompt_sha256: str) -> bool:
+    def _competition_profile_valid(self, *, contracts: PromptContractRegistry) -> bool:
         try:
             profile = ProviderProfile.from_settings(self._settings)
         except ValueError:
             return False
         return (
             self._settings.local_upload_enabled
+            and self._settings.local_upload_max_bytes == 19 * 1024 * 1024
             and profile.max_source_seconds == 300
             and profile.max_source_bytes == 256 * 1024 * 1024
             and profile.visual_attempt_timeout_seconds == 20
@@ -299,41 +309,72 @@ class ProductionReadiness:
             and profile.public_concurrency == 0
             and not self._settings.trusted_proxy_cidr_list
             and self._published_capability_valid(
-                visual_prompt_sha256=visual_prompt_sha256
+                contracts=contracts
             )
         )
 
-    def _published_capability_valid(self, *, visual_prompt_sha256: str) -> bool:
+    def _published_capability_valid(self, *, contracts: PromptContractRegistry) -> bool:
         published = self._settings.published_analysis_max_seconds
         if published == 60:
             return True
         if published != 300 or not self._settings.visual_fallback_enabled:
             return False
+        build_commit_sha = self._build_commit_probe()
+        if (
+            build_commit_sha is None
+            or self._settings.deployment_commit_sha != build_commit_sha
+        ):
+            return False
         conformance_report = self._settings.provider_conformance_report_json.strip()
         conformance_sha256 = validate_provider_conformance_report_json(
             conformance_report,
-            expected_prompt_sha256=visual_prompt_sha256,
+            expected_prompt_sha256=contracts.visual.prompt_sha256,
             expected_primary_model_id=self._settings.ark_visual_model_id,
             expected_fallback_model_id=self._settings.qwen_visual_model_id,
         )
         if conformance_sha256 is None:
             return False
+        provider_config_digest = provider_config_sha256(
+            ark_base_url=self._settings.ark_base_url,
+            ark_speech_model_id=self._settings.ark_model_id,
+            ark_visual_model_id=self._settings.ark_visual_model_id,
+            qwen_base_url=self._settings.qwen_base_url,
+            qwen_visual_model_id=self._settings.qwen_visual_model_id,
+            asr_resource_id=self._settings.volc_asr_resource_id,
+            asr_url=self._settings.volc_asr_url,
+            visual_fallback_enabled=self._settings.visual_fallback_enabled,
+            cos_region=self._settings.cos_region,
+            cos_bucket=self._settings.cos_bucket,
+            cos_object_prefix=self._settings.cos_object_prefix,
+            cos_signed_url_ttl_seconds=self._settings.cos_signed_url_ttl_seconds,
+            cos_lifecycle_days=self._settings.cos_lifecycle_days,
+        )
         receipt_json = self._settings.provider_canary_receipt_json.strip()
         return (
             validate_five_minute_canary_receipt_json(
                 receipt_json,
-                expected_commit_sha=self._settings.deployment_commit_sha,
+                expected_commit_sha=build_commit_sha,
                 expected_primary_model_id=self._settings.ark_visual_model_id,
                 expected_fallback_model_id=self._settings.qwen_visual_model_id,
                 expected_conformance_report_sha256=conformance_sha256,
+                expected_visual_prompt_sha256=contracts.visual.prompt_sha256,
+                expected_speech_prompt_sha256=contracts.speech.prompt_sha256,
+                expected_asr_context_sha256=contracts.asr_context.request_sha256,
+                expected_asr_hotwords_sha256=contracts.asr_context.content_sha256,
+                expected_provider_config_sha256=provider_config_digest,
             )
             if receipt_json
             else validate_five_minute_canary_receipt(
                 self._settings.provider_canary_receipt_path,
-                expected_commit_sha=self._settings.deployment_commit_sha,
+                expected_commit_sha=build_commit_sha,
                 expected_primary_model_id=self._settings.ark_visual_model_id,
                 expected_fallback_model_id=self._settings.qwen_visual_model_id,
                 expected_conformance_report_sha256=conformance_sha256,
+                expected_visual_prompt_sha256=contracts.visual.prompt_sha256,
+                expected_speech_prompt_sha256=contracts.speech.prompt_sha256,
+                expected_asr_context_sha256=contracts.asr_context.request_sha256,
+                expected_asr_hotwords_sha256=contracts.asr_context.content_sha256,
+                expected_provider_config_sha256=provider_config_digest,
             )
         )
 

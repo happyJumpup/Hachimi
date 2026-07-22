@@ -343,3 +343,155 @@ def test_separate_teaching_demos_of_same_action_keep_one_best_reference() -> Non
     assert candidates[0].segment == Segment(start_seconds=30, end_seconds=40)
     assert candidates[0].parameters.sets == 4
     assert candidates[0].parameters.reps == 12
+
+
+def test_separate_teaching_speech_merges_complementary_parameters_and_evidence() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="杠铃卧推",
+                sets=4,
+                start_seconds=10,
+                end_seconds=18,
+                evidence_text="杠铃卧推做四组",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+            SpeechSignal(
+                action_name="杠铃卧推",
+                reps=10,
+                start_seconds=40,
+                end_seconds=48,
+                evidence_text="每组做十次",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+        ],
+        visual_segments=[],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].parameters.sets == 4
+    assert candidates[0].parameters.reps == 10
+    assert {
+        (evidence.start_seconds, evidence.end_seconds)
+        for evidence in candidates[0].evidence
+    } == {(10, 18), (40, 48)}
+
+
+def test_generic_and_specific_compatible_names_form_one_specific_candidate() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="卧推",
+                start_seconds=10,
+                end_seconds=20,
+                evidence_text="开始卧推",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+        visual_segments=[
+            VisualSegment(
+                action_name="杠铃卧推",
+                start_seconds=11,
+                end_seconds=19,
+                visual_cue="使用杠铃完成卧推",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].name == "杠铃卧推"
+    assert candidates[0].needs_confirmation is False
+
+
+def test_explicit_equipment_conflict_is_not_merged_by_time_overlap() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="杠铃卧推",
+                start_seconds=10,
+                end_seconds=20,
+                evidence_text="杠铃卧推",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+        visual_segments=[
+            VisualSegment(
+                action_name="哑铃卧推",
+                start_seconds=11,
+                end_seconds=19,
+                visual_cue="双手持哑铃卧推",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            )
+        ],
+    )
+
+    assert [candidate.name for candidate in candidates] == ["杠铃卧推", "哑铃卧推"]
+
+
+def test_generic_name_cannot_bridge_conflicting_equipment_groups() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="卧推",
+                start_seconds=10,
+                end_seconds=20,
+                evidence_text="卧推示范",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+            SpeechSignal(
+                action_name="杠铃卧推",
+                sets=4,
+                start_seconds=30,
+                end_seconds=40,
+                evidence_text="杠铃卧推四组",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+            SpeechSignal(
+                action_name="哑铃卧推",
+                reps=10,
+                start_seconds=50,
+                end_seconds=60,
+                evidence_text="哑铃卧推十次",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+        ],
+        visual_segments=[],
+    )
+
+    assert [candidate.name for candidate in candidates] == ["杠铃卧推", "哑铃卧推"]
+    assert candidates[0].parameters.sets == 4
+    assert candidates[1].parameters.reps == 10
+
+
+def test_overlapping_different_speech_actions_do_not_share_parameters() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="深蹲",
+                sets=4,
+                start_seconds=10,
+                end_seconds=20,
+                evidence_text="深蹲做四组",
+            ),
+            SpeechSignal(
+                action_name="硬拉",
+                reps=10,
+                start_seconds=12,
+                end_seconds=19,
+                evidence_text="硬拉做十次",
+            ),
+        ],
+        visual_segments=[],
+    )
+
+    assert [candidate.name for candidate in candidates] == ["深蹲", "硬拉"]
+    assert candidates[0].parameters.sets == 4
+    assert candidates[0].parameters.reps is None
+    assert candidates[1].parameters.sets is None
+    assert candidates[1].parameters.reps == 10

@@ -9,7 +9,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import Field, model_validator
 
-from hakimi_analysis.fusion import fuse_candidates
+from hakimi_analysis.fusion import CandidateFusionResult, fuse_candidate_evidence
 from hakimi_analysis.media import (
     AnalysisWindow,
     PreparedMedia,
@@ -219,8 +219,8 @@ class EvidenceReconciler:
         source_id: str,
         speech_signals: list[SpeechSignal],
         visual_segments: list[VisualSegment],
-    ) -> list[AnalysisCandidate]:
-        return fuse_candidates(
+    ) -> CandidateFusionResult:
+        return fuse_candidate_evidence(
             source_id=source_id,
             speech_signals=speech_signals,
             visual_segments=visual_segments,
@@ -238,7 +238,13 @@ class EvidenceReconciler:
             end_seconds=offset + source.analysis_duration_seconds,
         )
         actions = [
-            self._action(candidate, offset=offset)
+            self._action(
+                candidate,
+                offset=offset,
+                parameter_evidence=output.candidate_parameter_evidence.get(
+                    candidate.id, {}
+                ),
+            )
             for candidate in output.candidates
         ]
         actions.sort(key=lambda action: (action.source_clip.start_seconds, action.id))
@@ -294,26 +300,49 @@ class EvidenceReconciler:
             empty_reason=output.empty_reason,
         )
 
-    def _action(self, candidate: AnalysisCandidate, *, offset: float) -> ContentAction:
+    def _action(
+        self,
+        candidate: AnalysisCandidate,
+        *,
+        offset: float,
+        parameter_evidence: dict[str, list[EvidenceSpan]],
+    ) -> ContentAction:
         source_clip = _offset_segment(candidate.segment, offset)
         evidence: list[ContentEvidence] = []
         type_counts = {EvidenceType.SPEECH: 0, EvidenceType.VISUAL: 0}
+        evidence_ids_by_span: dict[tuple[EvidenceType, float, float], list[str]] = {}
         for span in candidate.evidence:
             type_counts[span.type] += 1
+            evidence_id = (
+                f"{candidate.id}-{span.type.value}-{type_counts[span.type]:03d}"
+            )
             evidence.append(
                 ContentEvidence(
-                    id=(
-                        f"{candidate.id}-{span.type.value}-"
-                        f"{type_counts[span.type]:03d}"
-                    ),
+                    id=evidence_id,
                     type=span.type,
                     segment=_offset_segment(span, offset),
                 )
             )
+            evidence_ids_by_span.setdefault(
+                (span.type, span.start_seconds, span.end_seconds), []
+            ).append(evidence_id)
         all_ids = [item.id for item in evidence]
-        speech_ids = [item.id for item in evidence if item.type == EvidenceType.SPEECH]
-        parameter_evidence = {
-            field_name: speech_ids if getattr(candidate.parameters, field_name) is not None else []
+
+        def evidence_ids(spans: list[EvidenceSpan]) -> list[str]:
+            ids: list[str] = []
+            for span in spans:
+                matches = evidence_ids_by_span.get(
+                    (span.type, span.start_seconds, span.end_seconds), []
+                )
+                if not matches:
+                    raise ValueError("parameter evidence is absent from candidate evidence")
+                for evidence_id in matches:
+                    if evidence_id not in ids:
+                        ids.append(evidence_id)
+            return ids
+
+        parameter_evidence_ids = {
+            field_name: evidence_ids(parameter_evidence.get(field_name, []))
             for field_name in ("sets", "reps", "duration_seconds", "rest_seconds")
         }
         return ContentAction(
@@ -325,7 +354,7 @@ class EvidenceReconciler:
             field_evidence=FieldEvidence(
                 name=all_ids,
                 segment=all_ids,
-                **parameter_evidence,
+                **parameter_evidence_ids,
             ),
             needs_confirmation=candidate.needs_confirmation,
         )

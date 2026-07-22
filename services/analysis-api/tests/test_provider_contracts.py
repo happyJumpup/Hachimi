@@ -483,3 +483,53 @@ async def test_ark_speech_result_is_validated_as_json() -> None:
 
     assert result.signals[0].sets == 3
     assert result.signals[0].reps == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("start_seconds", "end_seconds"),
+    [(14.9, 28), (20, 35.1)],
+)
+@respx.mock
+async def test_ark_speech_rejects_any_timestamp_outside_the_window(
+    start_seconds: float,
+    end_seconds: float,
+) -> None:
+    respx.post("https://ark.example/api/v3/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp-speech-out-of-range",
+                "output_text": json.dumps(
+                    {
+                        "signals": [
+                            {
+                                "action_name": "杠铃卧推",
+                                "sets": None,
+                                "reps": None,
+                                "duration_seconds": None,
+                                "rest_seconds": None,
+                                "start_seconds": start_seconds,
+                                "end_seconds": end_seconds,
+                                "evidence_text": "杠铃卧推示范",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+    )
+    async with httpx.AsyncClient() as http_client:
+        client = ArkResponsesClient(
+            api_key="test-ark-key",
+            model_id="doubao-test",
+            base_url="https://ark.example/api/v3",
+            http_client=http_client,
+        )
+        with pytest.raises(ProviderSchemaError):
+            await client.understand_speech(
+                transcript={"text": "杠铃卧推示范", "utterances": []},
+                window=Segment(start_seconds=15, end_seconds=35),
+                instructions="speech prompt contract",
+            )

@@ -11,6 +11,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 from hakimi_analysis.models import Transcript, TranscriptUtterance, TranscriptWord
+from hakimi_analysis.provider_contracts import serialize_asr_hotword_context
 from hakimi_analysis.providers.base import ProviderError
 
 _FULL_CLIENT_REQUEST = 0b0001
@@ -155,11 +156,7 @@ def _config_frame(hotwords: tuple[str, ...]) -> bytes:
         "request": request,
     }
     if hotwords:
-        request["context"] = json.dumps(
-            {"hotwords": [{"word": word} for word in hotwords]},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
+        request["context"] = serialize_asr_hotword_context(hotwords)
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     compressed = gzip.compress(encoded)
     header = _header(

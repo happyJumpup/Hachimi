@@ -8,7 +8,12 @@ from time import monotonic
 from typing import Any, Protocol
 from uuid import uuid4
 
-from hakimi_analysis.fusion import fuse_candidates
+from hakimi_analysis.fusion import (
+    CandidateFusionResult,
+    action_name_can_join_group,
+    fuse_candidate_evidence,
+    preferred_action_name,
+)
 from hakimi_analysis.media import (
     AnalysisWindow,
     LocalMediaProcessor,
@@ -17,7 +22,6 @@ from hakimi_analysis.media import (
     PreparedVisualChunk,
 )
 from hakimi_analysis.models import (
-    AnalysisCandidate,
     AnalysisWarning,
     CoverageGap,
     CoverageGapReason,
@@ -140,7 +144,7 @@ class OrchestratedAnalysisPipeline:
         max_attempts_per_visual_provider: int = 2,
         max_visual_calls: int = 12,
         candidate_reconciler: Callable[
-            [str, list[SpeechSignal], list[VisualSegment]], list[AnalysisCandidate]
+            [str, list[SpeechSignal], list[VisualSegment]], CandidateFusionResult
         ]
         | None = None,
         clock: Callable[[], float] = monotonic,
@@ -181,7 +185,7 @@ class OrchestratedAnalysisPipeline:
         self._evidence_deadline_seconds = evidence_deadline_seconds
         self._cleanup_reserve_seconds = cleanup_reserve_seconds
         self._candidate_reconciler = candidate_reconciler or (
-            lambda source_id, speech, visual: fuse_candidates(
+            lambda source_id, speech, visual: fuse_candidate_evidence(
                 source_id=source_id,
                 speech_signals=speech,
                 visual_segments=visual,
@@ -273,10 +277,12 @@ class OrchestratedAnalysisPipeline:
                 "stage.changed",
                 {"reconciler_version": "deterministic-v1"},
             )
+            reconciliation = self._candidate_reconciler(
+                source.id, speech_signals, visual_segments
+            )
             return PipelineOutput(
-                candidates=self._candidate_reconciler(
-                    source.id, speech_signals, visual_segments
-                ),
+                candidates=reconciliation.candidates,
+                candidate_parameter_evidence=reconciliation.parameter_evidence,
                 warnings=warnings,
                 coverage_status=(
                     CoverageStatus.PARTIAL if coverage_gaps else CoverageStatus.COMPLETE
@@ -556,14 +562,27 @@ def _offset_visual_segments(
 
 
 def deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSegment]:
-    grouped: dict[str, list[VisualSegment]] = {}
+    grouped: list[list[VisualSegment]] = []
     ungrouped: list[VisualSegment] = []
     for segment in sorted(segments, key=lambda item: (item.start_seconds, item.end_seconds)):
         action_key = _normalized_visual_action(segment.action_name)
         if not action_key:
             ungrouped.append(segment)
             continue
-        action_segments = grouped.setdefault(action_key, [])
+        action_segments = next(
+            (
+                group
+                for group in grouped
+                if action_name_can_join_group(
+                    [item.action_name or "" for item in group],
+                    segment.action_name,
+                )
+            ),
+            None,
+        )
+        if action_segments is None:
+            action_segments = []
+            grouped.append(action_segments)
         if segment.segment_role == SegmentRole.TEACHING_DEMO:
             teaching_index = next(
                 (
@@ -575,23 +594,43 @@ def deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSeg
             )
             if teaching_index is not None:
                 existing = action_segments[teaching_index]
-                action_segments[teaching_index] = max(
+                selected = max(
                     (existing, segment),
                     key=lambda item: (
                         item.end_seconds - item.start_seconds,
                         item.visual_cue,
                     ),
                 )
+                action_segments[teaching_index] = selected.model_copy(
+                    update={
+                        "action_name": preferred_action_name(
+                            existing.action_name or "",
+                            segment.action_name,
+                        )
+                    }
+                )
                 continue
-        if action_segments and segment.start_seconds <= action_segments[-1].end_seconds:
-            previous = action_segments[-1]
+        overlapping_index = next(
+            (
+                index
+                for index in range(len(action_segments) - 1, -1, -1)
+                if segment.start_seconds <= action_segments[index].end_seconds
+                and action_segments[index].start_seconds <= segment.end_seconds
+            ),
+            None,
+        )
+        if overlapping_index is not None:
+            previous = action_segments[overlapping_index]
             role = (
                 previous.segment_role
                 if previous.segment_role == segment.segment_role
                 else SegmentRole.UNKNOWN
             )
-            action_segments[-1] = VisualSegment(
-                action_name=previous.action_name,
+            action_segments[overlapping_index] = VisualSegment(
+                action_name=preferred_action_name(
+                    previous.action_name or "",
+                    segment.action_name,
+                ),
                 start_seconds=min(previous.start_seconds, segment.start_seconds),
                 end_seconds=max(previous.end_seconds, segment.end_seconds),
                 visual_cue=previous.visual_cue,
@@ -600,7 +639,7 @@ def deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSeg
             continue
         action_segments.append(segment)
     return sorted(
-        [segment for action_segments in grouped.values() for segment in action_segments]
+        [segment for action_segments in grouped for segment in action_segments]
         + ungrouped,
         key=lambda item: (
             item.start_seconds,

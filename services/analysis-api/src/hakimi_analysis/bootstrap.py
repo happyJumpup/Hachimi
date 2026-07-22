@@ -302,7 +302,7 @@ def build_default_app() -> FastAPI:
         local_upload_enabled=settings.local_upload_enabled,
         local_analysis_max_seconds=settings.published_analysis_max_seconds,
         accepted_local_analysis_max_seconds=profile.max_source_seconds,
-        local_upload_max_bytes=profile.max_source_bytes,
+        local_upload_max_bytes=settings.local_upload_max_bytes,
         local_upload_temp_root=temp_root,
     )
 

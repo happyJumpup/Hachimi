@@ -29,7 +29,7 @@ class ProviderProfile:
         profile = cls(
             profile_version="five-minute-production-v1",
             max_source_seconds=settings.local_analysis_max_seconds,
-            max_source_bytes=settings.local_upload_max_bytes,
+            max_source_bytes=settings.analysis_max_source_bytes,
             visual_chunk_seconds=settings.analysis_visual_chunk_seconds,
             visual_overlap_seconds=settings.analysis_visual_overlap_seconds,
             max_visual_chunks=settings.analysis_max_visual_chunks,

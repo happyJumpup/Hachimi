@@ -212,7 +212,7 @@ def create_app(
     local_upload_enabled: bool = True,
     local_analysis_max_seconds: float = 300,
     accepted_local_analysis_max_seconds: float | None = None,
-    local_upload_max_bytes: int = 256 * 1024 * 1024,
+    local_upload_max_bytes: int = 19 * 1024 * 1024,
     local_upload_temp_root: Path | None = None,
     local_duration_probe: Callable[[Path], float] | None = None,
 ) -> FastAPI:

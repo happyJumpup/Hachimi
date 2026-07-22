@@ -7,6 +7,7 @@ import pytest
 from hakimi_analysis.provider_contracts import (
     PromptContractError,
     PromptContractRegistry,
+    serialize_asr_hotword_context,
 )
 from hakimi_analysis.provider_profile import ProviderProfile
 from hakimi_analysis.settings import Settings
@@ -94,6 +95,9 @@ def test_prompt_contract_registry_loads_semantically_compatible_contracts(
     assert registry.visual.input_media_type == "continuous_silent_mp4"
     assert registry.visual.time_coordinate == "chunk_relative"
     assert "contact sheet" not in registry.visual.prompt.casefold()
+    assert registry.asr_context.request_sha256 == hashlib.sha256(
+        serialize_asr_hotword_context(registry.asr_context.hotwords).encode("utf-8")
+    ).hexdigest()
     assert registry.asr_context.hotwords == ("罗马尼亚硬拉", "蝴蝶机反向飞鸟")
 
 

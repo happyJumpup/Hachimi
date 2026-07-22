@@ -8,6 +8,7 @@ from hakimi_analysis.models import (
     AnalysisWarning,
     CoverageGap,
     CoverageStatus,
+    EvidenceSpan,
     RunStage,
 )
 from hakimi_analysis.sources import VideoSource
@@ -18,6 +19,9 @@ EmitCallback = Callable[[RunStage, str, dict[str, object]], Awaitable[None]]
 @dataclass(slots=True)
 class PipelineOutput:
     candidates: list[AnalysisCandidate] = field(default_factory=list)
+    candidate_parameter_evidence: dict[
+        str, dict[str, list[EvidenceSpan]]
+    ] = field(default_factory=dict)
     warnings: list[AnalysisWarning] = field(default_factory=list)
     empty_reason: Literal["no_evidence", "insufficient_evidence"] | None = None
     coverage_status: CoverageStatus = CoverageStatus.COMPLETE

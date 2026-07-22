@@ -10,6 +10,7 @@ import pytest
 from hakimi_analysis.access import AccessManager
 from hakimi_analysis.app import create_app
 from hakimi_analysis.readiness import ProductionReadiness
+from hakimi_analysis.release_gates import provider_config_sha256
 from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog, VideoSource
 
@@ -157,6 +158,7 @@ def configured_readiness(
     include_ffmpeg_receipt: bool = True,
     ffmpeg_audit_passes: bool = True,
     fallback_probe: Callable[[], bool] | None = None,
+    build_commit_probe: Callable[[], str | None] | None = None,
     settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
@@ -292,6 +294,7 @@ def configured_readiness(
             duration_probe=lambda _: 60,
             ffmpeg_receipt_probe=lambda *_: ffmpeg_audit_passes,
             fallback_probe=fallback_probe,
+            build_commit_probe=build_commit_probe,
         ),
         media_path,
     )
@@ -372,7 +375,8 @@ async def test_production_ready_rejects_legacy_hashes_without_signed_build_recei
     [
         ("local_upload_enabled", False),
         ("local_analysis_max_seconds", 299),
-        ("local_upload_max_bytes", 128 * 1024 * 1024),
+        ("local_upload_max_bytes", 18 * 1024 * 1024),
+        ("analysis_max_source_bytes", 128 * 1024 * 1024),
         ("analysis_chunk_timeout_seconds", 19),
         ("analysis_speech_timeout_seconds", 44),
         ("analysis_evidence_deadline_seconds", 169),
@@ -444,6 +448,11 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
     visual_prompt_sha256 = hashlib.sha256(
         b"Inspect the complete continuous silent MP4 chunk."
     ).hexdigest()
+    speech_prompt_sha256 = hashlib.sha256(
+        b"Extract explicit timestamped exercise evidence."
+    ).hexdigest()
+    asr_hotwords_sha256 = "1427ce1771632a8e36ffa09e22b1a1e7761ce7e03280d1974f7c279beabc522f"
+    asr_context_sha256 = "a4d08572450c2fab43417165a663dd5349ed32c25cf6dfab278655ddd361223c"
 
     def route(name: str, model_id: str) -> dict[str, object]:
         return {
@@ -480,6 +489,44 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
         separators=(",", ":"),
     )
     conformance_sha256 = hashlib.sha256(conformance_report.encode()).hexdigest()
+    fallback_settings = {
+        "visual_fallback_enabled": True,
+        "qwen_api_key": "qwen-key",
+        "cos_secret_id": "cos-id",
+        "cos_secret_key": "cos-key",
+        "cos_region": "ap-guangzhou",
+        "cos_bucket": "private-bucket-123",
+        "published_analysis_max_seconds": 300,
+        "deployment_commit_sha": commit_sha,
+        "provider_conformance_report_json": conformance_report,
+    }
+    configured_settings = Settings(
+        _env_file=None,
+        visual_fallback_enabled=True,
+        qwen_api_key="qwen-key",
+        cos_secret_id="cos-id",
+        cos_secret_key="cos-key",
+        cos_region="ap-guangzhou",
+        cos_bucket="private-bucket-123",
+        published_analysis_max_seconds=300,
+        deployment_commit_sha=commit_sha,
+        provider_conformance_report_json=conformance_report,
+    )
+    provider_config_digest = provider_config_sha256(
+        ark_base_url=configured_settings.ark_base_url,
+        ark_speech_model_id=configured_settings.ark_model_id,
+        ark_visual_model_id=configured_settings.ark_visual_model_id,
+        qwen_base_url=configured_settings.qwen_base_url,
+        qwen_visual_model_id=configured_settings.qwen_visual_model_id,
+        asr_resource_id=configured_settings.volc_asr_resource_id,
+        asr_url=configured_settings.volc_asr_url,
+        visual_fallback_enabled=configured_settings.visual_fallback_enabled,
+        cos_region=configured_settings.cos_region,
+        cos_bucket=configured_settings.cos_bucket,
+        cos_object_prefix=configured_settings.cos_object_prefix,
+        cos_signed_url_ttl_seconds=configured_settings.cos_signed_url_ttl_seconds,
+        cos_lifecycle_days=configured_settings.cos_lifecycle_days,
+    )
     receipt = tmp_path / "provider-canary.json"
     receipt.write_text(
         json.dumps(
@@ -502,25 +549,55 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
                 "primary_model_id": primary_model,
                 "fallback_model_id": fallback_model,
                 "provider_conformance_report_sha256": conformance_sha256,
+                "five_minute_median_seconds": 70.0,
+                "five_minute_max_seconds": 110.0,
+                "fallback_fault_max_seconds": 140.0,
+                "seed_mini_visual_model_id": primary_model,
+                "seed_lite_visual_model_id": "doubao-seed-2-0-lite-260428",
+                "qwen_visual_model_id": fallback_model,
+                "speech_model_id": primary_model,
+                "visual_prompt_sha256": visual_prompt_sha256,
+                "speech_prompt_sha256": speech_prompt_sha256,
+                "asr_context_sha256": asr_context_sha256,
+                "asr_hotwords_sha256": asr_hotwords_sha256,
+                "provider_config_sha256": provider_config_digest,
             }
         ),
         encoding="utf-8",
     )
-    fallback_settings = {
-        "visual_fallback_enabled": True,
-        "qwen_api_key": "qwen-key",
-        "cos_secret_id": "cos-id",
-        "cos_secret_key": "cos-key",
-        "cos_region": "ap-guangzhou",
-        "cos_bucket": "private-bucket-123",
-        "published_analysis_max_seconds": 300,
-        "deployment_commit_sha": commit_sha,
-        "provider_conformance_report_json": conformance_report,
-    }
     blocked, _ = configured_readiness(
         tmp_path / "blocked",
         settings_overrides=fallback_settings,
         fallback_probe=lambda: True,
+        build_commit_probe=lambda: commit_sha,
+    )
+    missing_build_identity, _ = configured_readiness(
+        tmp_path / "missing-build-identity",
+        settings_overrides={
+            **fallback_settings,
+            "provider_canary_receipt_path": receipt,
+        },
+        fallback_probe=lambda: True,
+    )
+    mismatched_build_identity, _ = configured_readiness(
+        tmp_path / "mismatched-build-identity",
+        settings_overrides={
+            **fallback_settings,
+            "deployment_commit_sha": "b" * 40,
+            "provider_canary_receipt_path": receipt,
+        },
+        fallback_probe=lambda: True,
+        build_commit_probe=lambda: commit_sha,
+    )
+    drifted_provider_config, _ = configured_readiness(
+        tmp_path / "drifted-provider-config",
+        settings_overrides={
+            **fallback_settings,
+            "qwen_base_url": "https://different-qwen.example/v1",
+            "provider_canary_receipt_path": receipt,
+        },
+        fallback_probe=lambda: True,
+        build_commit_probe=lambda: commit_sha,
     )
     released, _ = configured_readiness(
         tmp_path / "released",
@@ -529,9 +606,13 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
             "provider_canary_receipt_path": receipt,
         },
         fallback_probe=lambda: True,
+        build_commit_probe=lambda: commit_sha,
     )
 
     assert blocked.check() == "competition_configuration_invalid"
+    assert missing_build_identity.check() == "competition_configuration_invalid"
+    assert mismatched_build_identity.check() == "competition_configuration_invalid"
+    assert drifted_provider_config.check() == "competition_configuration_invalid"
     assert released.check() is None
 
 

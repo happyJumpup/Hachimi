@@ -434,7 +434,7 @@ async def _run_visual_sample(
         sample.id,
         [],
         deduplicated,
-    )
+    ).candidates
     return [
         VisualSegment(
             action_name=candidate.name,

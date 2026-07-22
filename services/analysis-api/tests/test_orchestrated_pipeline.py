@@ -14,6 +14,7 @@ from hakimi_analysis.models import (
     CoverageStatus,
     RunStage,
     Segment,
+    SegmentRole,
     SpeechSignal,
     SpeechUnderstandingResult,
     Transcript,
@@ -24,6 +25,7 @@ from hakimi_analysis.models import (
 from hakimi_analysis.orchestration import (
     OrchestratedAnalysisPipeline,
     build_visual_chunks,
+    deduplicate_visual_segments,
 )
 from hakimi_analysis.provider_contracts import PromptContractRegistry
 from hakimi_analysis.providers.base import ProviderError
@@ -335,6 +337,35 @@ class RangeLocalArk(FakeArk):
         )
 
 
+class SplitParameterArk(FakeArk):
+    async def understand_speech(self, **kwargs: object) -> SpeechUnderstandingResult:
+        del kwargs
+        return SpeechUnderstandingResult(
+            signals=[
+                SpeechSignal(
+                    action_name="杠铃卧推",
+                    sets=4,
+                    start_seconds=5,
+                    end_seconds=10,
+                    evidence_text="杠铃卧推做四组",
+                    segment_role=SegmentRole.TEACHING_DEMO,
+                ),
+                SpeechSignal(
+                    action_name="卧推",
+                    reps=10,
+                    start_seconds=20,
+                    end_seconds=25,
+                    evidence_text="每组做十次",
+                    segment_role=SegmentRole.TEACHING_DEMO,
+                ),
+            ]
+        )
+
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
+        del kwargs
+        return VisualLocalizationResult(segments=[])
+
+
 class BlockingVisualArk(FakeArk):
     def __init__(self) -> None:
         super().__init__()
@@ -396,6 +427,51 @@ def test_visual_chunk_windows_cover_the_complete_source_with_bounded_overlap() -
         AnalysisWindow(start_seconds=50, end_seconds=110, expanded=False),
         AnalysisWindow(start_seconds=100, end_seconds=130, expanded=False),
     ]
+
+
+def test_visual_deduplication_merges_generic_and_specific_names() -> None:
+    segments = deduplicate_visual_segments(
+        [
+            VisualSegment(
+                action_name="卧推",
+                start_seconds=50,
+                end_seconds=59,
+                visual_cue="仰卧推起",
+            ),
+            VisualSegment(
+                action_name="杠铃卧推",
+                start_seconds=55,
+                end_seconds=63,
+                visual_cue="杠铃下放后推起",
+            ),
+        ]
+    )
+
+    assert len(segments) == 1
+    assert segments[0].action_name == "杠铃卧推"
+    assert segments[0].start_seconds == 50
+    assert segments[0].end_seconds == 63
+
+
+def test_visual_deduplication_keeps_conflicting_equipment_separate() -> None:
+    segments = deduplicate_visual_segments(
+        [
+            VisualSegment(
+                action_name="杠铃卧推",
+                start_seconds=50,
+                end_seconds=59,
+                visual_cue="杠铃推起",
+            ),
+            VisualSegment(
+                action_name="哑铃卧推",
+                start_seconds=55,
+                end_seconds=63,
+                visual_cue="哑铃推起",
+            ),
+        ]
+    )
+
+    assert [segment.action_name for segment in segments] == ["杠铃卧推", "哑铃卧推"]
 
 
 @pytest.mark.asyncio
@@ -460,6 +536,33 @@ async def test_content_understanding_provider_returns_absolute_evidence_referenc
         "speech": "empty",
         "visual": "complete",
     }
+
+
+@pytest.mark.asyncio
+async def test_content_understanding_preserves_parameter_specific_evidence(
+    tmp_path: Path,
+) -> None:
+    ark = SplitParameterArk()
+    provider = ContentUnderstandingProvider(
+        media=FakeMediaProcessor(tmp_path),
+        transcriber=FakeAsr(),
+        interpreter=ark,
+        visual_locator=ark,
+        contracts=contracts(),
+    )
+
+    result = await provider.analyze(AnalysisRequest(source=source(tmp_path)), no_op_emit)
+
+    action = result.actions[0]
+    assert action.name == "杠铃卧推"
+    assert action.parameters.sets == 4
+    assert action.parameters.reps == 10
+    assert action.field_evidence.sets == ["candidate-1-speech-001"]
+    assert action.field_evidence.reps == ["candidate-1-speech-002"]
+    assert action.field_evidence.duration_seconds == []
+    assert action.field_evidence.rest_seconds == []
+
+
 def test_prompt_contract_registry_loads_the_two_provider_contracts() -> None:
     registry = contracts()
 

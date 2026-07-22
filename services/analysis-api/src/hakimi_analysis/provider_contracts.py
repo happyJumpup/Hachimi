@@ -29,6 +29,7 @@ class AsrContextContract:
     request_field: str
     mode: str
     content_sha256: str
+    request_sha256: str
     hotwords: tuple[str, ...]
 
 
@@ -102,7 +103,18 @@ def _load_asr_context(root: Path) -> AsrContextContract:
         request_field=raw["request_field"],
         mode=raw["mode"],
         content_sha256=digest,
+        request_sha256=hashlib.sha256(
+            serialize_asr_hotword_context(hotwords).encode("utf-8")
+        ).hexdigest(),
         hotwords=hotwords,
+    )
+
+
+def serialize_asr_hotword_context(hotwords: tuple[str, ...]) -> str:
+    return json.dumps(
+        {"hotwords": [{"word": word} for word in hotwords]},
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
 
 
@@ -191,4 +203,5 @@ __all__ = [
     "PromptContract",
     "PromptContractError",
     "PromptContractRegistry",
+    "serialize_asr_hotword_context",
 ]

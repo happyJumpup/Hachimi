@@ -63,7 +63,8 @@ def test_local_analysis_defaults_to_300_seconds_and_has_a_300_second_hard_cap() 
     assert settings.local_upload_enabled is True
     assert settings.local_analysis_max_seconds == 300
     assert settings.published_analysis_max_seconds == 60
-    assert settings.local_upload_max_bytes == 256 * 1024 * 1024
+    assert settings.local_upload_max_bytes == 19 * 1024 * 1024
+    assert settings.analysis_max_source_bytes == 256 * 1024 * 1024
 
     configured = Settings(_env_file=None, local_analysis_max_seconds=300)
     assert configured.local_analysis_max_seconds == 300

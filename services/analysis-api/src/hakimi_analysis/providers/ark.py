@@ -75,8 +75,8 @@ class ArkResponsesClient:
         )
         for signal in result.signals:
             if (
-                signal.start_seconds < window.start_seconds - 0.5
-                or signal.end_seconds > window.end_seconds + 0.5
+                signal.start_seconds < window.start_seconds
+                or signal.end_seconds > window.end_seconds
             ):
                 raise ProviderSchemaError("语音理解时间超出分析窗口")
         return result
