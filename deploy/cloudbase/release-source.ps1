@@ -362,7 +362,11 @@ try {
         if ($parent) {
             New-Item -ItemType Directory -Path $parent -Force | Out-Null
         }
-        Set-Content -LiteralPath $OutputPath -Value $json -Encoding utf8NoBOM
+        [IO.File]::WriteAllText(
+            [IO.Path]::GetFullPath($OutputPath),
+            $json,
+            [Text.UTF8Encoding]::new($false)
+        )
     }
     $json
 } finally {
