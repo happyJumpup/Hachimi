@@ -111,10 +111,11 @@
     "pricing_source": "https://cloud.tencent.com/document/product/1243/90265",
     "assumed_ccu_price_cny_per_hour": 0.22,
     "ccu_per_warm_instance": 2,
-    "maximum_public_window_hours": 18,
+    "maximum_public_window_hours": 52,
     "maximum_warm_hours": 18,
     "estimated_compute_ceiling_cny": 7.92,
-    "demo_end_must_be_confirmed_before_public_enable": true,
+    "estimated_continuous_compute_ceiling_cny": 22.88,
+    "confirmed_demo_end": "2026-07-25T00:00:00+08:00",
     "unpriced_resources_require_console_confirmation": true,
     "purchase_requires_fresh_confirmation": true
   },

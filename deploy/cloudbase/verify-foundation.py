@@ -215,7 +215,8 @@ def validate(plan: dict[str, Any]) -> None:
             "maximum_public_window_hours",
             "maximum_warm_hours",
             "estimated_compute_ceiling_cny",
-            "demo_end_must_be_confirmed_before_public_enable",
+            "estimated_continuous_compute_ceiling_cny",
+            "confirmed_demo_end",
             "unpriced_resources_require_console_confirmation",
             "purchase_requires_fresh_confirmation",
         },
@@ -367,10 +368,23 @@ def validate(plan: dict[str, Any]) -> None:
         fail("unexpected compute cost ceiling")
     if calculated_compute_ceiling > budget["hard_ceiling"]:
         fail("estimated compute ceiling exceeds the authorized budget")
-    if budget.get("maximum_public_window_hours") != 18:
-        fail("public access window must remain bounded to 18 hours")
-    if budget.get("demo_end_must_be_confirmed_before_public_enable") is not True:
-        fail("demo end must be confirmed before public access is enabled")
+    if budget.get("maximum_public_window_hours") != 52:
+        fail("public access window must remain bounded to 52 hours")
+    continuous_compute_ceiling = (
+        budget.get("assumed_ccu_price_cny_per_hour", 0)
+        * budget.get("ccu_per_warm_instance", 0)
+        * budget.get("maximum_public_window_hours", 0)
+    )
+    if round(continuous_compute_ceiling, 2) != budget.get(
+        "estimated_continuous_compute_ceiling_cny"
+    ):
+        fail("continuous compute ceiling does not match the pricing assumptions")
+    if budget.get("estimated_continuous_compute_ceiling_cny") != 22.88:
+        fail("unexpected continuous compute cost ceiling")
+    if continuous_compute_ceiling > budget["hard_ceiling"]:
+        fail("continuous compute ceiling exceeds the authorized budget")
+    if budget.get("confirmed_demo_end") != "2026-07-25T00:00:00+08:00":
+        fail("unexpected confirmed demo end")
     if budget.get("unpriced_resources_require_console_confirmation") is not True:
         fail("unpriced resources must require console confirmation")
     if budget.get("purchase_requires_fresh_confirmation") is not True:
