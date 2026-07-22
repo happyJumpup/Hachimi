@@ -114,6 +114,7 @@ WORKDIR /workspace
 COPY --from=api-builder /workspace/services/analysis-api/.venv services/analysis-api/.venv
 COPY --from=ffmpeg-builder /opt/trainpal/ffmpeg /opt/trainpal/ffmpeg
 COPY services/analysis-api/src services/analysis-api/src
+COPY services/analysis-api/provider-contracts services/analysis-api/provider-contracts
 COPY skills skills
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY licenses licenses

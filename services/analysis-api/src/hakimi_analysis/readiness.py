@@ -12,7 +12,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from hakimi_analysis.media import probe_duration_sync
-from hakimi_analysis.orchestration import SkillRepository
+from hakimi_analysis.provider_contracts import PromptContractError, PromptContractRegistry
+from hakimi_analysis.provider_profile import ProviderProfile
 from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import SourceCatalog
 
@@ -137,17 +138,19 @@ class ProductionReadiness:
         settings: Settings,
         catalog: SourceCatalog,
         temp_root: Path,
-        skills_root: Path,
+        contracts_root: Path,
         duration_probe: Callable[[Path], float] | None = None,
         ffmpeg_receipt_probe: Callable[[Path, Path], bool] | None = None,
+        fallback_probe: Callable[[], bool] | None = None,
         cache_seconds: float = 5,
     ) -> None:
         self._settings = settings
         self._catalog = catalog
         self._temp_root = temp_root
-        self._skills_root = skills_root
+        self._contracts_root = contracts_root
         self._duration_probe = duration_probe or probe_duration_sync
         self._ffmpeg_receipt_probe = ffmpeg_receipt_probe or validate_ffmpeg_build_receipt
+        self._fallback_probe = fallback_probe
         self._cache_seconds = cache_seconds
         self._cache_lock = Lock()
         self._cached_at: float | None = None
@@ -183,6 +186,15 @@ class ProductionReadiness:
             return "provider_configuration_invalid"
         if asr_url.scheme != "wss" or not asr_url.netloc:
             return "provider_configuration_invalid"
+        if self._settings.visual_fallback_enabled:
+            qwen_url = urlparse(self._settings.qwen_base_url)
+            if (
+                qwen_url.scheme != "https"
+                or not qwen_url.netloc
+                or self._fallback_probe is None
+                or not self._fallback_probe()
+            ):
+                return "visual_fallback_configuration_invalid"
         controlled_source_values = (
             self._settings.source_manifest_path,
             self._settings.source_media_root,
@@ -215,9 +227,16 @@ class ProductionReadiness:
         if controlled_sources_configured and not self._catalog.validate_media(self._duration_probe):
             return "media_cache_invalid"
         try:
-            SkillRepository.load(self._skills_root)
-        except (OSError, ValueError):
-            return "skill_configuration_invalid"
+            visual_model_ids: tuple[str, ...] = (self._settings.ark_visual_model_id,)
+            if self._settings.visual_fallback_enabled:
+                visual_model_ids += (self._settings.qwen_visual_model_id,)
+            PromptContractRegistry.load(
+                self._contracts_root,
+                speech_model_id=self._settings.ark_model_id,
+                visual_model_ids=visual_model_ids,
+            )
+        except (OSError, PromptContractError):
+            return "prompt_contract_invalid"
         if (
             self._settings.judge_access_code is None
             or self._settings.access_cookie_secret is None
@@ -239,16 +258,26 @@ class ProductionReadiness:
         return None
 
     def _competition_profile_valid(self) -> bool:
+        try:
+            profile = ProviderProfile.from_settings(self._settings)
+        except ValueError:
+            return False
         return (
             self._settings.local_upload_enabled
-            and self._settings.local_analysis_max_seconds == 300
-            and self._settings.local_upload_max_bytes == 256 * 1024 * 1024
-            and self._settings.analysis_chunk_timeout_seconds == 20
-            and self._settings.analysis_visual_chunk_seconds == 60
-            and self._settings.analysis_visual_overlap_seconds == 10
-            and self._settings.run_timeout_seconds == 180
-            and self._settings.judge_analysis_concurrency == 3
-            and self._settings.public_analysis_concurrency == 0
+            and profile.max_source_seconds == 300
+            and profile.max_source_bytes == 256 * 1024 * 1024
+            and profile.visual_attempt_timeout_seconds == 20
+            and profile.speech_timeout_seconds == 45
+            and profile.evidence_deadline_seconds == 170
+            and profile.cleanup_reserve_seconds == 10
+            and profile.visual_chunk_seconds == 60
+            and profile.visual_overlap_seconds == 10
+            and profile.max_visual_chunks == 6
+            and profile.max_attempts_per_visual_provider == 2
+            and profile.max_visual_calls == 12
+            and profile.run_timeout_seconds == 180
+            and profile.judge_concurrency == 3
+            and profile.public_concurrency == 0
             and not self._settings.trusted_proxy_cidr_list
         )
 

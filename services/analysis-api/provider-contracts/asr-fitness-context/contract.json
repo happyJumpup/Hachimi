@@ -1,0 +1,6 @@
+{
+  "contract_version": "asr-fitness-context-v1",
+  "request_field": "request.context",
+  "mode": "hotwords",
+  "content_sha256": "4a94aefd46234692ab9889f57d57cbb15b756eb2439968ebf6692da3ae900732"
+}

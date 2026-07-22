@@ -1,7 +1,6 @@
 import asyncio
 import subprocess
 import sys
-from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -74,9 +73,7 @@ async def create_colour_transition_video(path: Path) -> None:
     assert process.returncode == 0, stderr.decode("utf-8", errors="replace")
 
 
-def test_full_source_prepares_when_event_loop_has_no_async_subprocess_support(
-    tmp_path: Path,
-) -> None:
+def test_full_source_prepares_without_async_subprocess_support(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     asyncio.run(create_synthetic_video(source))
     processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
@@ -90,10 +87,7 @@ def test_full_source_prepares_when_event_loop_has_no_async_subprocess_support(
     async def prepare() -> None:
         async with processor.prepare_source(source, duration_seconds=2) as prepared:
             assert prepared.audio_path.is_file()
-            assert prepared.contact_sheet_ready is not None
-            await prepared.contact_sheet_ready
-            assert prepared.contact_sheet_path is not None
-            assert prepared.contact_sheet_path.is_file()
+            assert prepared.video_path == source
 
     try:
         loop.run_until_complete(prepare())
@@ -102,146 +96,64 @@ def test_full_source_prepares_when_event_loop_has_no_async_subprocess_support(
 
 
 @pytest.mark.asyncio
-async def test_prepared_media_is_bounded_and_removed_after_use(tmp_path: Path) -> None:
+async def test_prepare_source_extracts_one_audio_and_cleans_transient_media(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source.mp4"
     await create_synthetic_video(source)
-    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
-
-    duration = await processor.probe_duration(source)
-    assert 1.9 <= duration <= 2.1
-
-    prepared_directory: Path | None = None
-    async with processor.prepare(
-        source,
-        AnalysisWindow(start_seconds=0.25, end_seconds=1.75, expanded=False),
-    ) as prepared:
-        prepared_directory = prepared.directory
-        assert prepared.video_path.is_file()
-        assert prepared.audio_path.is_file()
-        assert prepared.window.start_seconds == 0.25
-
-    assert prepared_directory is not None
-    assert not prepared_directory.exists()
-
-
-@pytest.mark.asyncio
-async def test_full_source_reuses_video_and_only_cleans_transient_audio(tmp_path: Path) -> None:
-    source = tmp_path / "source.mp4"
-    await create_synthetic_video(source)
-    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    runs = tmp_path / "runs"
+    processor = LocalMediaProcessor(temp_root=runs)
 
     prepared_directory: Path | None = None
     async with processor.prepare_source(source, duration_seconds=2) as prepared:
         prepared_directory = prepared.directory
+        assert prepared.window == AnalysisWindow(0, 2, False)
         assert prepared.video_path == source
         assert prepared.audio_path.is_file()
-        assert prepared.contact_sheet_path is not None
-        assert prepared.contact_sheet_ready is not None
-        await prepared.contact_sheet_ready
-        assert prepared.contact_sheet_path.is_file()
-        assert prepared.contact_sheet_timestamps[0] == 0
-        assert prepared.contact_sheet_timestamps[-1] < 2
-        assert prepared.window == AnalysisWindow(
-            start_seconds=0,
-            end_seconds=2,
-            expanded=False,
-        )
+        assert set(prepared.directory.iterdir()) == {prepared.audio_path}
 
-    assert source.is_file()
-    assert prepared_directory is not None
-    assert not prepared_directory.exists()
+    assert prepared_directory is not None and not prepared_directory.exists()
+    assert list(runs.iterdir()) == []
 
 
 @pytest.mark.asyncio
-async def test_full_source_sampling_covers_the_supported_sixty_seconds(
+async def test_prepare_source_maps_the_requested_source_range_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
     processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
-    captured: dict[str, float | int] = {}
+    observed: list[AnalysisWindow] = []
 
     async def fake_audio(
-        _source_path: Path,
+        source_path: Path,
         output_path: Path,
-        _window: AnalysisWindow,
+        window: AnalysisWindow,
     ) -> None:
+        assert source_path == source
+        observed.append(window)
         output_path.write_bytes(b"audio")
 
-    async def fake_contact_sheet(
-        _source_path: Path,
-        output_path: Path,
-        *,
-        frame_interval_seconds: float,
-        frame_count: int,
-    ) -> None:
-        captured.update(interval=frame_interval_seconds, count=frame_count)
-        output_path.write_bytes(b"image")
-
     monkeypatch.setattr(processor, "_extract_audio", fake_audio)
-    monkeypatch.setattr(processor, "_extract_contact_sheet", fake_contact_sheet)
+    async with processor.prepare_source(
+        source,
+        duration_seconds=10,
+        start_seconds=20,
+    ) as prepared:
+        assert prepared.window == AnalysisWindow(0, 10, False)
 
-    async with processor.prepare_source(source, duration_seconds=60) as prepared:
-        assert prepared.contact_sheet_ready is not None
-        await prepared.contact_sheet_ready
-        timestamps = prepared.contact_sheet_timestamps
-
-    assert len(timestamps) == 18
-    assert captured == {"interval": 60 / 18, "count": 18}
-    assert max(second - first for first, second in pairwise(timestamps)) <= 3.5
-    assert 60 - timestamps[-1] <= 3.5
+    assert observed == [AnalysisWindow(20, 30, False)]
 
 
 @pytest.mark.asyncio
-async def test_full_source_yields_audio_while_contact_sheet_finishes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_full_source_rejects_duration_beyond_the_profile(tmp_path: Path) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
-    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
-    release_contact_sheet = asyncio.Event()
-
-    async def fake_audio(
-        _source_path: Path,
-        output_path: Path,
-        _window: AnalysisWindow,
-    ) -> None:
-        output_path.write_bytes(b"audio")
-
-    async def fake_contact_sheet(
-        _source_path: Path,
-        output_path: Path,
-        *,
-        frame_interval_seconds: float,
-        frame_count: int,
-    ) -> None:
-        del frame_interval_seconds, frame_count
-        await release_contact_sheet.wait()
-        output_path.write_bytes(b"image")
-
-    monkeypatch.setattr(processor, "_extract_audio", fake_audio)
-    monkeypatch.setattr(processor, "_extract_contact_sheet", fake_contact_sheet)
-
-    async with processor.prepare_source(source, duration_seconds=30) as prepared:
-        assert prepared.audio_path.is_file()
-        assert prepared.contact_sheet_path is not None
-        assert prepared.contact_sheet_ready is not None
-        assert not prepared.contact_sheet_ready.done()
-        assert not prepared.contact_sheet_path.exists()
-        release_contact_sheet.set()
-        await prepared.contact_sheet_ready
-        assert prepared.contact_sheet_path.is_file()
-
-
-@pytest.mark.asyncio
-async def test_full_source_analysis_rejects_video_beyond_supported_duration(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "source.mp4"
-    source.write_bytes(b"source")
-    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    processor = LocalMediaProcessor(
+        temp_root=tmp_path / "runs",
+        max_source_duration_seconds=60,
+    )
 
     with pytest.raises(MediaProcessingError):
         async with processor.prepare_source(source, duration_seconds=60.1):
@@ -249,7 +161,7 @@ async def test_full_source_analysis_rejects_video_beyond_supported_duration(
 
 
 @pytest.mark.asyncio
-async def test_visual_window_uses_builtin_mpeg4_encoder_for_accurate_seeking(
+async def test_visual_chunk_uses_the_frozen_continuous_mp4_profile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -281,7 +193,7 @@ async def test_visual_window_uses_builtin_mpeg4_encoder_for_accurate_seeking(
 
 
 @pytest.mark.asyncio
-async def test_visual_window_starts_at_requested_non_keyframe_content(tmp_path: Path) -> None:
+async def test_visual_chunk_starts_at_requested_non_keyframe_content(tmp_path: Path) -> None:
     source = tmp_path / "colour-transition.mp4"
     output = tmp_path / "window.mp4"
     await create_colour_transition_video(source)
@@ -299,20 +211,18 @@ async def test_visual_window_starts_at_requested_non_keyframe_content(tmp_path: 
         reader.close()
 
     assert 0.4 <= float(metadata["duration"]) <= 0.6
-    red = first_frame[0]
-    blue = first_frame[2]
-    assert blue > 180
-    assert red < 80
+    assert first_frame[2] > 180
+    assert first_frame[0] < 80
 
 
 @pytest.mark.asyncio
-async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
+async def test_prepare_source_cancellation_stops_ffmpeg_and_removes_temp_media(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
-    both_started = asyncio.Event()
+    started = asyncio.Event()
     processes: list[subprocess.Popen[bytes]] = []
     real_popen = subprocess.Popen
 
@@ -323,37 +233,29 @@ async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
             stderr=subprocess.PIPE,
         )
         processes.append(process)
-        if len(processes) == 2:
-            both_started.set()
+        started.set()
         return process
 
     monkeypatch.setattr(subprocess, "Popen", create_blocking_process)
     processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
-    prepared_directories: list[Path] = []
 
     async def prepare() -> None:
-        async with processor.prepare(
-            source,
-            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
-        ) as prepared:
-            prepared_directories.append(prepared.directory)
-            raise AssertionError("cancelled extraction must not yield prepared media")
+        async with processor.prepare_source(source, duration_seconds=1):
+            raise AssertionError("cancelled extraction must not yield media")
 
     task = asyncio.create_task(prepare())
-    await asyncio.wait_for(both_started.wait(), timeout=1)
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(started.wait(), timeout=1)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await task
+        await asyncio.wait_for(task, timeout=1)
 
-    assert len(processes) == 2
-    assert all(process.returncode is not None for process in processes)
+    assert len(processes) == 1
+    assert processes[0].returncode is not None
     assert not any((tmp_path / "runs").iterdir())
-    assert prepared_directories == []
 
 
 @pytest.mark.asyncio
-async def test_command_timeout_stops_ffmpeg_and_removes_prepared_media(
+async def test_prepare_source_timeout_stops_ffmpeg_and_removes_temp_media(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -378,19 +280,16 @@ async def test_command_timeout_stops_ffmpeg_and_removes_prepared_media(
     )
 
     with pytest.raises(MediaProcessingError, match="extraction timed out"):
-        async with processor.prepare(
-            source,
-            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
-        ):
-            raise AssertionError("timed-out extraction must not yield prepared media")
+        async with processor.prepare_source(source, duration_seconds=1):
+            pass
 
-    assert len(processes) == 2
-    assert all(process.returncode is not None for process in processes)
+    assert len(processes) == 1
+    assert processes[0].returncode is not None
     assert not any((tmp_path / "runs").iterdir())
 
 
 @pytest.mark.asyncio
-async def test_kill_failure_uses_native_fallback_and_removes_prepared_media(
+async def test_kill_failure_uses_native_fallback_and_cleans_temp_media(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,78 +324,24 @@ async def test_kill_failure_uses_native_fallback_and_removes_prepared_media(
         def kill(self) -> None:
             raise OSError("simulated termination failure")
 
-        def wait(self, timeout: float | None = None) -> int:
-            return self._child.wait(timeout=timeout)
-
-    def create_unstoppable_process(*_args: Any, **_kwargs: Any) -> KillFailsProcess:
-        return KillFailsProcess()
-
     monkeypatch.setattr(media_module, "PROCESS_STOP_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr(subprocess, "Popen", create_unstoppable_process)
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: KillFailsProcess())
     processor = LocalMediaProcessor(
         temp_root=tmp_path / "runs",
         command_timeout_seconds=0.05,
     )
 
-    async def prepare() -> None:
-        async with processor.prepare(
-            source,
-            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
-        ):
-            raise AssertionError("timed-out extraction must not yield prepared media")
-
     with pytest.raises(MediaProcessingError, match="extraction timed out"):
-        await asyncio.wait_for(prepare(), timeout=1)
+        async with processor.prepare_source(source, duration_seconds=1):
+            pass
 
-    assert len(children) == 2
-    assert all(child.returncode is not None for child in children)
+    assert len(children) == 1
+    assert children[0].returncode is not None
     assert not any((tmp_path / "runs").iterdir())
 
 
 @pytest.mark.asyncio
-async def test_failed_extraction_stops_the_other_ffmpeg_process(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = tmp_path / "source.mp4"
-    source.write_bytes(b"source")
-    processes: list[subprocess.Popen[bytes]] = []
-    real_popen = subprocess.Popen
-    call_count = 0
-
-    def create_test_process(*_args: Any, **_kwargs: Any) -> subprocess.Popen[bytes]:
-        nonlocal call_count
-        call_count += 1
-        code = (
-            "import sys, time; time.sleep(0.1); sys.exit(1)"
-            if call_count == 1
-            else "import time; time.sleep(30)"
-        )
-        process = real_popen(
-            (sys.executable, "-c", code),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        processes.append(process)
-        return process
-
-    monkeypatch.setattr(subprocess, "Popen", create_test_process)
-    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
-
-    with pytest.raises(MediaProcessingError):
-        async with processor.prepare(
-            source,
-            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
-        ):
-            raise AssertionError("failed extraction must not yield prepared media")
-
-    assert len(processes) == 2
-    assert all(process.returncode is not None for process in processes)
-    assert not any((tmp_path / "runs").iterdir())
-
-
-@pytest.mark.asyncio
-async def test_visual_chunk_preserves_the_continuous_video_instead_of_a_sparse_sheet(
+async def test_visual_chunk_preserves_continuous_video_and_source_offset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -516,11 +361,7 @@ async def test_visual_chunk_preserves_the_continuous_video_instead_of_a_sparse_s
         extracted_windows.append(window)
         output_path.write_bytes(b"continuous-video-chunk")
 
-    async def reject_sparse_sheet(*_args: object, **_kwargs: object) -> None:
-        raise AssertionError("visual chunks must not be converted to sparse contact sheets")
-
     monkeypatch.setattr(processor, "_extract_video", extract_video)
-    monkeypatch.setattr(processor, "_extract_contact_sheet", reject_sparse_sheet)
     window = AnalysisWindow(start_seconds=50, end_seconds=110, expanded=False)
 
     prepared = await processor.prepare_visual_chunk(
@@ -531,6 +372,4 @@ async def test_visual_chunk_preserves_the_continuous_video_instead_of_a_sparse_s
     )
 
     assert prepared.video_path.read_bytes() == b"continuous-video-chunk"
-    assert extracted_windows == [
-        AnalysisWindow(start_seconds=60, end_seconds=120, expanded=False)
-    ]
+    assert extracted_windows == [AnalysisWindow(60, 120, False)]

@@ -196,7 +196,6 @@ class SuccessfulCloudPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
         self._calls.append(source.id)
@@ -235,11 +234,7 @@ class SuccessfulCloudPipeline:
             "stage.changed",
             {"skill_version": "1.4.0"},
         )
-        legacy_trigger = (
-            trigger_seconds
-            if trigger_seconds is not None
-            else (45 if source.id.endswith("01") else 30)
-        )
+        legacy_trigger = 45 if source.id.endswith("01") else 30
         start, end = self._candidate_segment or (legacy_trigger - 4, legacy_trigger + 6)
         if self._leave_temp_file and self._temp_root is not None:
             self._temp_root.mkdir(parents=True, exist_ok=True)

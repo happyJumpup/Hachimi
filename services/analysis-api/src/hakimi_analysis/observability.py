@@ -11,6 +11,17 @@ ALLOWED_LOG_FIELDS = frozenset(
         "skill_version",
         "provider_request_id",
         "error_code",
+        "provider",
+        "adapter_version",
+        "chunk_index",
+        "attempt",
+        "input_bytes",
+        "queue_ms",
+        "media_ms",
+        "inference_ms",
+        "reconcile_ms",
+        "cleanup_ms",
+        "fallback_reason",
     }
 )
 

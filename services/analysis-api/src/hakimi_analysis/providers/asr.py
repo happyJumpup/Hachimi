@@ -36,6 +36,7 @@ class VolcAsrClient:
         chunk_duration_ms: int = 4000,
         pace_audio: bool = True,
         retry_delays: tuple[float, ...] = (1.0, 2.0),
+        hotwords: tuple[str, ...] = (),
     ) -> None:
         if chunk_duration_ms <= 0:
             raise ValueError("chunk_duration_ms must be positive")
@@ -45,6 +46,7 @@ class VolcAsrClient:
         self._chunk_duration_ms = chunk_duration_ms
         self._pace_audio = pace_audio
         self._retry_delays = retry_delays
+        self._hotwords = hotwords
 
     async def recognize(
         self,
@@ -108,7 +110,7 @@ class VolcAsrClient:
             provider_request_id = (
                 response.headers.get("X-Tt-Logid") if response is not None else None
             )
-            await websocket.send(_config_frame())
+            await websocket.send(_config_frame(self._hotwords))
             await _receive_frame(websocket, provider_request_id)
 
             receive_task = asyncio.create_task(
@@ -133,7 +135,14 @@ class VolcAsrClient:
         )
 
 
-def _config_frame() -> bytes:
+def _config_frame(hotwords: tuple[str, ...]) -> bytes:
+    request: dict[str, Any] = {
+        "model_name": "bigmodel",
+        "enable_itn": True,
+        "enable_punc": True,
+        "show_utterances": True,
+        "result_type": "full",
+    }
     payload = {
         "user": {"uid": "hachimi-analysis"},
         "audio": {
@@ -143,14 +152,14 @@ def _config_frame() -> bytes:
             "bits": 16,
             "channel": 1,
         },
-        "request": {
-            "model_name": "bigmodel",
-            "enable_itn": True,
-            "enable_punc": True,
-            "show_utterances": True,
-            "result_type": "full",
-        },
+        "request": request,
     }
+    if hotwords:
+        request["context"] = json.dumps(
+            {"hotwords": [{"word": word} for word in hotwords]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     compressed = gzip.compress(encoded)
     header = _header(

@@ -473,11 +473,10 @@ async def _run_source(
             pipeline = pipeline_builder(settings, http_client, temp_root=temp_root)
             try:
                 async with asyncio.timeout(settings.run_timeout_seconds):
-                    result = await pipeline.analyze(
-                        source,
-                        None,
-                        recorder.emit,
-                    )
+                        result = await pipeline.analyze(
+                            source,
+                            recorder.emit,
+                        )
             except (PipelineFailure, ProviderError) as error:
                 caught = SmokeFailure(error.code)
             except TimeoutError:

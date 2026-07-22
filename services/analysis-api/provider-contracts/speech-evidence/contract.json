@@ -1,0 +1,8 @@
+{
+  "contract_version": "1.0.0",
+  "input_media_type": "timestamped_transcript",
+  "time_coordinate": "analysis_range_relative",
+  "output_schema": "SpeechUnderstandingResult.v1",
+  "compatible_model_families": ["doubao-seed-2.0"],
+  "prompt_sha256": "d61b91ea9373c6397d9e814a6b63be8d42effb51e1de684ed7e679ad11a41a57"
+}

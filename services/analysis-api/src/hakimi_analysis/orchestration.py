@@ -8,7 +8,7 @@ from time import monotonic
 from typing import Any, Protocol
 from uuid import uuid4
 
-from hakimi_analysis.fusion import CandidateFusionSkill
+from hakimi_analysis.fusion import fuse_candidates
 from hakimi_analysis.media import (
     AnalysisWindow,
     LocalMediaProcessor,
@@ -31,8 +31,13 @@ from hakimi_analysis.models import (
     VisualSegment,
 )
 from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
+from hakimi_analysis.provider_contracts import PromptContractRegistry
 from hakimi_analysis.providers.base import ProviderError
 from hakimi_analysis.sources import VideoSource
+from hakimi_analysis.visual_routing import (
+    DirectVisualProvider,
+    SequentialVisualRouter,
+)
 
 
 class MediaProcessor(Protocol):
@@ -42,7 +47,6 @@ class MediaProcessor(Protocol):
         duration_seconds: float,
         *,
         start_seconds: float = 0,
-        include_contact_sheet: bool = True,
     ) -> AbstractAsyncContextManager[PreparedMedia]: ...
 
     async def prepare_visual_chunk(
@@ -81,42 +85,6 @@ class ArkAnalyzer(Protocol):
         window: Segment,
         instructions: str,
     ) -> VisualLocalizationResult: ...
-
-@dataclass(frozen=True, slots=True)
-class SkillRepository:
-    speech_instructions: str
-    speech_version: str
-    visual_instructions: str
-    visual_version: str
-    fusion_instructions: str
-    fusion_version: str
-
-    @classmethod
-    def load(cls, skills_root: Path) -> "SkillRepository":
-        speech_path = skills_root / "training-speech-understanding" / "SKILL.md"
-        visual_path = skills_root / "visual-action-localization" / "SKILL.md"
-        fusion_path = skills_root / "candidate-fusion" / "SKILL.md"
-        speech_instructions = speech_path.read_text(encoding="utf-8")
-        visual_instructions = visual_path.read_text(encoding="utf-8")
-        fusion_instructions = fusion_path.read_text(encoding="utf-8")
-        return cls(
-            speech_instructions=speech_instructions,
-            speech_version=_skill_version(speech_instructions),
-            visual_instructions=visual_instructions,
-            visual_version=_skill_version(visual_instructions),
-            fusion_instructions=fusion_instructions,
-            fusion_version=_skill_version(fusion_instructions),
-        )
-
-
-def _skill_version(instructions: str) -> str:
-    for line in instructions.splitlines():
-        if line.startswith("version:"):
-            version = line.partition(":")[2].strip()
-            if version:
-                return version
-    raise ValueError("Skill contract is missing a version")
-
 
 @dataclass(slots=True)
 class VisualChunkResults:
@@ -159,54 +127,67 @@ class OrchestratedAnalysisPipeline:
         media: MediaProcessor,
         asr: SpeechRecognizer,
         ark: ArkAnalyzer,
-        skills: SkillRepository,
-        evidence_timeout_seconds: float = 11.5,
+        contracts: PromptContractRegistry,
+        visual_router: SequentialVisualRouter | None = None,
+        speech_timeout_seconds: float = 45,
         visual_chunk_timeout_seconds: float | None = None,
         visual_chunk_seconds: float = 60,
         visual_overlap_seconds: float = 10,
+        evidence_deadline_seconds: float = 170,
         run_timeout_seconds: float = 180,
-        completion_margin_seconds: float = 10,
+        cleanup_reserve_seconds: float = 10,
+        max_attempts_per_visual_provider: int = 2,
+        max_visual_calls: int = 12,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self._media = media
         self._asr = asr
         self._ark = ark
-        self._skills = skills
-        self._evidence_timeout_seconds = evidence_timeout_seconds
+        self._visual_router = visual_router or SequentialVisualRouter(
+            primary=DirectVisualProvider(ark),
+            attempt_timeout_seconds=(
+                20
+                if visual_chunk_timeout_seconds is None
+                else visual_chunk_timeout_seconds
+            ),
+            max_attempts_per_provider=max_attempts_per_visual_provider,
+            max_visual_calls=max_visual_calls,
+            clock=clock,
+        )
+        self._contracts = contracts
+        self._speech_timeout_seconds = speech_timeout_seconds
         self._visual_chunk_timeout_seconds = (
-            evidence_timeout_seconds
+            20
             if visual_chunk_timeout_seconds is None
             else visual_chunk_timeout_seconds
         )
         self._visual_chunk_seconds = visual_chunk_seconds
         self._visual_overlap_seconds = visual_overlap_seconds
-        if run_timeout_seconds <= 0 or completion_margin_seconds < 0:
-            raise ValueError("run budget and completion margin must be valid")
-        if completion_margin_seconds >= run_timeout_seconds:
-            raise ValueError("completion margin must be shorter than the run budget")
+        if (
+            run_timeout_seconds <= 0
+            or evidence_deadline_seconds <= 0
+            or cleanup_reserve_seconds < 0
+            or speech_timeout_seconds <= 0
+        ):
+            raise ValueError("provider budgets must be positive")
+        if evidence_deadline_seconds + cleanup_reserve_seconds > run_timeout_seconds:
+            raise ValueError("evidence deadline must leave the cleanup reserve")
         self._run_timeout_seconds = run_timeout_seconds
-        self._completion_margin_seconds = completion_margin_seconds
+        self._evidence_deadline_seconds = evidence_deadline_seconds
+        self._cleanup_reserve_seconds = cleanup_reserve_seconds
         self._clock = clock
         build_visual_chunks(
             1,
             chunk_seconds=self._visual_chunk_seconds,
             overlap_seconds=self._visual_overlap_seconds,
         )
-        self._fusion = CandidateFusionSkill(
-            instructions=skills.fusion_instructions,
-            version=skills.fusion_version,
-        )
 
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del trigger_seconds
-        evidence_deadline = (
-            self._clock() + self._run_timeout_seconds - self._completion_margin_seconds
-        )
+        evidence_deadline = self._clock() + self._evidence_deadline_seconds
         await emit(
             RunStage.PREPARING_MEDIA,
             "stage.changed",
@@ -217,7 +198,6 @@ class OrchestratedAnalysisPipeline:
                 source.path,
                 source.analysis_duration_seconds,
                 start_seconds=source.analysis_start_seconds,
-                include_contact_sheet=False,
             ) as prepared:
                 speech_task = asyncio.create_task(
                     self._timed_speech_branch(prepared, emit, deadline=evidence_deadline)
@@ -279,10 +259,10 @@ class OrchestratedAnalysisPipeline:
             await emit(
                 RunStage.FUSING_CANDIDATES,
                 "stage.changed",
-                {"skill_version": self._fusion.version},
+                {"reconciler_version": "deterministic-v1"},
             )
             return PipelineOutput(
-                candidates=self._fusion.run(
+                candidates=fuse_candidates(
                     source_id=source.id,
                     speech_signals=speech_signals,
                     visual_segments=visual_segments,
@@ -317,7 +297,7 @@ class OrchestratedAnalysisPipeline:
         if remaining_seconds <= 0:
             return ProviderError("timeout", "run budget exhausted before speech", retryable=True)
         try:
-            async with asyncio.timeout(min(self._evidence_timeout_seconds, remaining_seconds)):
+            async with asyncio.timeout(min(self._speech_timeout_seconds, remaining_seconds)):
                 return await self._speech_branch(prepared, emit)
         except TimeoutError:
             return ProviderError("timeout", "speech evidence budget exceeded", retryable=True)
@@ -342,6 +322,7 @@ class OrchestratedAnalysisPipeline:
         segments: list[VisualSegment] = []
         successful_windows: list[AnalysisWindow] = []
         failures: list[tuple[AnalysisWindow, ProviderError]] = []
+        route_state = self._visual_router.new_run_state()
         for index, window in enumerate(windows, start=1):
             remaining_seconds = deadline - self._clock()
             if remaining_seconds < self._visual_chunk_timeout_seconds:
@@ -361,22 +342,23 @@ class OrchestratedAnalysisPipeline:
                 },
             )
             try:
-                async with asyncio.timeout(
-                    min(self._visual_chunk_timeout_seconds, remaining_seconds)
-                ):
+                async with asyncio.timeout(remaining_seconds):
                     chunk = await self._media.prepare_visual_chunk(
                         source.path,
                         window,
                         prepared.directory,
                         source_offset_seconds=source.analysis_start_seconds,
                     )
-                    result = await self._ark.locate_visual(
+                    result = await self._visual_router.locate_visual(
                         video_path=chunk.video_path,
                         window=Segment(
-                            start_seconds=window.start_seconds,
-                            end_seconds=window.end_seconds,
+                            start_seconds=0,
+                            end_seconds=window.duration_seconds,
                         ),
-                        instructions=self._skills.visual_instructions,
+                        instructions=self._contracts.visual.prompt,
+                        state=route_state,
+                        deadline=deadline,
+                        chunk_index=index,
                     )
             except TimeoutError:
                 timeout_error = ProviderError(
@@ -394,7 +376,9 @@ class OrchestratedAnalysisPipeline:
                 )
                 failures.append((window, unexpected_error))
             else:
-                segments.extend(result.segments)
+                segments.extend(
+                    _offset_visual_segments(result.segments, window.start_seconds)
+                )
                 successful_windows.append(window)
                 processed_seconds = _covered_seconds(successful_windows)
                 await emit(
@@ -421,7 +405,10 @@ class OrchestratedAnalysisPipeline:
         await emit(
             RunStage.ANALYZING_EVIDENCE,
             "branch.started",
-            {"branch": "speech", "skill_version": self._skills.speech_version},
+            {
+                "branch": "speech",
+                "contract_version": self._contracts.speech.contract_version,
+            },
         )
         transcript = await self._asr.recognize(
             audio_path=prepared.audio_path,
@@ -452,7 +439,7 @@ class OrchestratedAnalysisPipeline:
                 ],
             },
             window=window,
-            instructions=self._skills.speech_instructions,
+            instructions=self._contracts.speech.prompt,
         )
         await emit(
             RunStage.ANALYZING_EVIDENCE,
@@ -541,6 +528,23 @@ def _normalized_visual_action(name: str | None) -> str:
     return "".join(character for character in name.casefold() if character.isalnum())
 
 
+def _offset_visual_segments(
+    segments: list[VisualSegment],
+    offset_seconds: float,
+) -> list[VisualSegment]:
+    if offset_seconds == 0:
+        return segments
+    return [
+        segment.model_copy(
+            update={
+                "start_seconds": segment.start_seconds + offset_seconds,
+                "end_seconds": segment.end_seconds + offset_seconds,
+            }
+        )
+        for segment in segments
+    ]
+
+
 def _deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSegment]:
     grouped: dict[str, list[VisualSegment]] = {}
     ungrouped: list[VisualSegment] = []
@@ -581,6 +585,5 @@ def _deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSe
 __all__ = [
     "LocalMediaProcessor",
     "OrchestratedAnalysisPipeline",
-    "SkillRepository",
     "build_visual_chunks",
 ]

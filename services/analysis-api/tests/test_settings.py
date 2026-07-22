@@ -18,7 +18,7 @@ def test_test_provider_is_allowed_only_in_test_environment() -> None:
 
 def test_analysis_capacity_has_safe_production_defaults() -> None:
     settings = Settings(_env_file=None)
-    assert settings.judge_analysis_concurrency == 2
+    assert settings.judge_analysis_concurrency == 3
     assert settings.public_analysis_concurrency == 0
 
 
@@ -31,17 +31,22 @@ def test_default_development_cors_origins_match_vite_loopback_hosts() -> None:
     ]
 
 
-def test_analysis_evidence_budget_has_a_bounded_positive_default() -> None:
+def test_content_provider_budget_has_a_bounded_five_minute_default() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.analysis_evidence_timeout_seconds == 11.5
+    assert settings.analysis_speech_timeout_seconds == 45.0
+    assert settings.analysis_evidence_deadline_seconds == 170.0
+    assert settings.analysis_cleanup_reserve_seconds == 10.0
     assert settings.analysis_chunk_timeout_seconds == 20.0
     assert settings.analysis_visual_chunk_seconds == 60.0
     assert settings.analysis_visual_overlap_seconds == 10.0
+    assert settings.analysis_max_visual_chunks == 6
+    assert settings.analysis_max_attempts_per_visual_provider == 2
+    assert settings.analysis_max_visual_calls == 12
     assert settings.analysis_latency_target_max_seconds_per_video_minute == 15.0
 
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, analysis_evidence_timeout_seconds=0)
+        Settings(_env_file=None, analysis_speech_timeout_seconds=0)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, analysis_latency_target_max_seconds_per_video_minute=0)
     with pytest.raises(ValidationError):
@@ -124,3 +129,24 @@ def test_secret_values_are_redacted_from_settings_repr() -> None:
     assert "asr-secret-value" not in representation
     assert "judge-secret-value" not in representation
     assert "cookie-secret-value" not in representation
+
+
+def test_visual_fallback_is_fail_closed_without_qwen_and_private_cos() -> None:
+    assert Settings(_env_file=None).visual_fallback_enabled is False
+
+    with pytest.raises(ValidationError, match="visual fallback"):
+        Settings(_env_file=None, visual_fallback_enabled=True)
+
+    settings = Settings(
+        _env_file=None,
+        visual_fallback_enabled=True,
+        qwen_api_key="qwen-key",
+        cos_secret_id="cos-id",
+        cos_secret_key="cos-key",
+        cos_region="ap-guangzhou",
+        cos_bucket="private-bucket-123",
+    )
+
+    assert settings.qwen_visual_model_id == "qwen3-vl-flash-2026-01-22"
+    assert settings.cos_signed_url_ttl_seconds == 600
+    assert settings.cos_lifecycle_days == 1

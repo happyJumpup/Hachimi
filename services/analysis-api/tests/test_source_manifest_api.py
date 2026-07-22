@@ -17,7 +17,6 @@ class EmptyPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
         emit: object,
     ) -> PipelineOutput:
         return PipelineOutput(candidates=[], empty_reason="no_evidence")

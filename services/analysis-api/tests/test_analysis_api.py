@@ -29,7 +29,6 @@ class SuccessfulPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> PipelineOutput:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
@@ -57,16 +56,15 @@ class SuccessfulPipeline:
 
 class TriggerCapturePipeline:
     def __init__(self) -> None:
-        self.received_trigger: float | None | object = object()
+        self.called = False
 
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
         del source, emit
-        self.received_trigger = trigger_seconds
+        self.called = True
         return PipelineOutput(candidates=[], empty_reason="no_evidence")
 
 
@@ -74,7 +72,6 @@ class SlowPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> PipelineOutput:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
@@ -86,7 +83,6 @@ class SecretFailurePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> PipelineOutput:
         raise PipelineFailure(
@@ -100,10 +96,9 @@ class PartialCoveragePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del source, trigger_seconds, emit
+        del source, emit
         return PipelineOutput(
             coverage_status=CoverageStatus.PARTIAL,
             processed_seconds=44,
@@ -122,10 +117,9 @@ class InsufficientCoveragePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del source, trigger_seconds, emit
+        del source, emit
         return PipelineOutput(
             empty_reason="insufficient_evidence",
             coverage_status=CoverageStatus.INSUFFICIENT,
@@ -149,10 +143,9 @@ class ProvisionalProgressPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del source, trigger_seconds
+        del source
         await emit(
             RunStage.ANALYZING_EVIDENCE,
             "visual_chunk.completed",
@@ -167,10 +160,9 @@ class InconsistentPartialCoveragePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del source, trigger_seconds, emit
+        del source, emit
         return PipelineOutput(
             coverage_status=CoverageStatus.PARTIAL,
             processed_seconds=45,
@@ -509,7 +501,7 @@ async def test_legacy_trigger_is_recorded_but_never_forwarded_to_analysis(
 
     assert created.status_code == 202
     assert completed["trigger_seconds"] == 999
-    assert pipeline.received_trigger is None
+    assert pipeline.called is True
 
 
 @pytest.mark.asyncio

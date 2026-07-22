@@ -24,7 +24,6 @@ class SlowPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> PipelineOutput:
         await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
@@ -36,7 +35,6 @@ class ImmediatePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float,
         emit: EmitCallback,
     ) -> PipelineOutput:
         return PipelineOutput(candidates=[], empty_reason="no_evidence")

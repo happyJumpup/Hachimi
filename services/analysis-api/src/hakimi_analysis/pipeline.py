@@ -50,7 +50,6 @@ class AnalysisPipeline(Protocol):
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput: ...
 

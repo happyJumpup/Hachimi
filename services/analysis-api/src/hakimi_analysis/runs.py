@@ -178,11 +178,10 @@ class AnalysisRunManager:
             async with asyncio.timeout(self._timeout_seconds):
                 output = await self._pipeline.analyze(
                     source,
-                    None,
                     emit,
                 )
             _validate_pipeline_candidates(output.candidates, source)
-            candidates = _offset_candidates(output.candidates, source.analysis_start_seconds)
+            candidates = output.candidates
             processed_seconds, coverage_gaps = _coverage_for_source(output, source)
             await self._notify_terminal(record)
             record.view.status = RunStatus.COMPLETED
@@ -357,41 +356,12 @@ def _progress_data(view: AnalysisRunView) -> dict[str, object]:
     }
 
 
-def _offset_candidates(
-    candidates: list[AnalysisCandidate],
-    offset_seconds: float,
-) -> list[AnalysisCandidate]:
-    if offset_seconds == 0:
-        return candidates
-    return [
-        candidate.model_copy(
-            update={
-                "segment": candidate.segment.model_copy(
-                    update={
-                        "start_seconds": candidate.segment.start_seconds + offset_seconds,
-                        "end_seconds": candidate.segment.end_seconds + offset_seconds,
-                    }
-                ),
-                "evidence": [
-                    span.model_copy(
-                        update={
-                            "start_seconds": span.start_seconds + offset_seconds,
-                            "end_seconds": span.end_seconds + offset_seconds,
-                        }
-                    )
-                    for span in candidate.evidence
-                ],
-            }
-        )
-        for candidate in candidates
-    ]
-
-
 def _validate_pipeline_candidates(
     candidates: list[AnalysisCandidate],
     source: VideoSource,
 ) -> None:
-    duration_seconds = source.analysis_duration_seconds
+    start_seconds = source.analysis_start_seconds
+    end_seconds = start_seconds + source.analysis_duration_seconds
     for candidate in candidates:
         if candidate.source_id != source.id:
             raise PipelineFailure(
@@ -399,14 +369,14 @@ def _validate_pipeline_candidates(
                 "candidate source does not match the requested source",
                 retryable=True,
             )
-        if not _span_is_within_duration(candidate.segment, duration_seconds):
+        if not _span_is_within_range(candidate.segment, start_seconds, end_seconds):
             raise PipelineFailure(
                 "schema_error",
                 "candidate segment is outside the requested range",
                 retryable=True,
             )
         for evidence in candidate.evidence:
-            if not _span_is_within_duration(evidence, duration_seconds):
+            if not _span_is_within_range(evidence, start_seconds, end_seconds):
                 raise PipelineFailure(
                     "schema_error",
                     "candidate evidence is outside the requested range",
@@ -414,11 +384,16 @@ def _validate_pipeline_candidates(
                 )
 
 
-def _span_is_within_duration(span: Segment, duration_seconds: float) -> bool:
+def _span_is_within_range(
+    span: Segment,
+    start_seconds: float,
+    end_seconds: float,
+) -> bool:
     return (
         math.isfinite(span.start_seconds)
         and math.isfinite(span.end_seconds)
-        and span.end_seconds <= duration_seconds
+        and start_seconds <= span.start_seconds
+        and span.end_seconds <= end_seconds
     )
 
 
@@ -435,8 +410,13 @@ def _coverage_for_source(
             "partial analysis coverage is outside the requested range",
             retryable=True,
         )
+    range_start_seconds = source.analysis_start_seconds
+    range_end_seconds = range_start_seconds + duration_seconds
     for gap in output.coverage_gaps:
-        if gap.end_seconds > duration_seconds:
+        if (
+            gap.start_seconds < range_start_seconds
+            or gap.end_seconds > range_end_seconds
+        ):
             raise PipelineFailure(
                 "schema_error",
                 "partial analysis gap is outside the requested range",
@@ -454,18 +434,4 @@ def _coverage_for_source(
             "partial analysis coverage does not match the requested range",
             retryable=True,
         )
-    offset_seconds = source.analysis_start_seconds
-    if offset_seconds == 0:
-        return output.processed_seconds, output.coverage_gaps
-    return (
-        output.processed_seconds,
-        [
-            gap.model_copy(
-                update={
-                    "start_seconds": gap.start_seconds + offset_seconds,
-                    "end_seconds": gap.end_seconds + offset_seconds,
-                }
-            )
-            for gap in output.coverage_gaps
-        ],
-    )
+    return output.processed_seconds, output.coverage_gaps

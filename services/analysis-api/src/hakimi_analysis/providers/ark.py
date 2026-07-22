@@ -91,8 +91,10 @@ class ArkResponsesClient:
         video_bytes = await self._read_inline_video(video_path)
         video_url = "data:video/mp4;base64," + base64.b64encode(video_bytes).decode("ascii")
         metadata = {
-            "window": window.model_dump(mode="json"),
-            "time_rule": "Return absolute source-video seconds within this window.",
+            "chunk_duration_seconds": window.end_seconds - window.start_seconds,
+            "time_rule": (
+                "Return seconds relative to this chunk in 0..chunk_duration_seconds."
+            ),
         }
         result = await self._structured_response(
             instructions=instructions,
@@ -106,39 +108,6 @@ class ArkResponsesClient:
                     "type": "input_text",
                     "text": json.dumps(metadata, ensure_ascii=False),
                 },
-            ],
-            result_type=VisualLocalizationResult,
-            schema_name="visual_action_localization",
-            model_id=self._visual_model_id,
-        )
-        _validate_visual_result(result, window)
-        return result
-
-    async def locate_visual_contact_sheet(
-        self,
-        *,
-        image_path: Path,
-        frame_times_seconds: tuple[float, ...],
-        window: Segment,
-        instructions: str,
-    ) -> VisualLocalizationResult:
-        image_bytes = await asyncio.to_thread(image_path.read_bytes)
-        image_url = "data:image/jpeg;base64," + base64.b64encode(image_bytes).decode("ascii")
-        metadata = {
-            "analysis_scope": "full_source",
-            "window": window.model_dump(mode="json"),
-            "contact_sheet": {
-                "columns": 4,
-                "frame_times_seconds": list(frame_times_seconds),
-                "order": "row_major",
-            },
-            "time_rule": "Return approximate absolute source-video seconds.",
-        }
-        result = await self._structured_response(
-            instructions=instructions,
-            content=[
-                {"type": "input_image", "image_url": image_url},
-                {"type": "input_text", "text": json.dumps(metadata, ensure_ascii=False)},
             ],
             result_type=VisualLocalizationResult,
             schema_name="visual_action_localization",

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,7 @@ async def test_production_ready_fails_closed_without_real_provider_configuration
         settings=settings,
         catalog=EmptySourceCatalog(),
         temp_root=tmp_path / "analysis-runs",
-        skills_root=tmp_path / "skills",
+        contracts_root=tmp_path / "provider-contracts",
     )
     app = create_app(app_env="production", readiness=readiness)
 
@@ -68,7 +69,7 @@ async def test_production_does_not_start_analysis_while_not_ready(tmp_path: Path
         settings=settings,
         catalog=EmptySourceCatalog(),
         temp_root=tmp_path / "analysis-runs",
-        skills_root=tmp_path / "skills",
+        contracts_root=tmp_path / "provider-contracts",
     )
     source_path = tmp_path / "source.mp4"
     source_path.write_bytes(b"not-read")
@@ -115,7 +116,7 @@ async def test_access_session_does_not_claim_analysis_is_available_while_not_rea
         settings=settings,
         catalog=EmptySourceCatalog(),
         temp_root=tmp_path / "analysis-runs",
-        skills_root=tmp_path / "skills",
+        contracts_root=tmp_path / "provider-contracts",
     )
     access = AccessManager(
         cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
@@ -155,13 +156,14 @@ def configured_readiness(
     include_ffmpeg: bool = True,
     include_ffmpeg_receipt: bool = True,
     ffmpeg_audit_passes: bool = True,
+    fallback_probe: Callable[[], bool] | None = None,
     settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
     media_path = media_root / "arm-01.mp4"
     manifest_path = tmp_path / "sources.json"
     if controlled_sources:
-        media_root.mkdir()
+        media_root.mkdir(parents=True)
         media_path.write_bytes(b"team-owned-video")
         manifest_path.write_text(
             json.dumps(
@@ -181,15 +183,57 @@ def configured_readiness(
             ),
             encoding="utf-8",
         )
-    skills_root = tmp_path / "skills"
-    for skill_name in (
-        "training-speech-understanding",
-        "visual-action-localization",
-        "candidate-fusion",
-    ):
-        skill_dir = skills_root / skill_name
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text("version: 1.0.0\n", encoding="utf-8")
+    contracts_root = tmp_path / "provider-contracts"
+    prompt_contracts = (
+        (
+            "speech-evidence",
+            "Extract explicit timestamped exercise evidence.",
+            "timestamped_transcript",
+            "analysis_range_relative",
+            "SpeechUnderstandingResult.v1",
+            ["doubao-seed-2.0"],
+        ),
+        (
+            "visual-evidence",
+            "Inspect the complete continuous silent MP4 chunk.",
+            "continuous_silent_mp4",
+            "chunk_relative",
+            "VisualLocalizationResult.v1",
+            ["doubao-seed-2.0", "qwen3-vl"],
+        ),
+    )
+    for name, prompt, input_media, clock, schema, families in prompt_contracts:
+        contract_dir = contracts_root / name
+        contract_dir.mkdir(parents=True)
+        (contract_dir / "PROMPT.md").write_text(prompt, encoding="utf-8")
+        (contract_dir / "contract.json").write_text(
+            json.dumps(
+                {
+                    "contract_version": "1.0.0",
+                    "input_media_type": input_media,
+                    "time_coordinate": clock,
+                    "output_schema": schema,
+                    "compatible_model_families": families,
+                    "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    asr_context_root = contracts_root / "asr-fitness-context"
+    asr_context_root.mkdir(parents=True)
+    hotwords = "罗马尼亚硬拉\n蝴蝶机反向飞鸟\n"
+    (asr_context_root / "HOTWORDS.txt").write_text(hotwords, encoding="utf-8")
+    (asr_context_root / "contract.json").write_text(
+        json.dumps(
+            {
+                "contract_version": "asr-fitness-context-v1",
+                "request_field": "request.context",
+                "mode": "hotwords",
+                "content_sha256": hashlib.sha256(hotwords.encode("utf-8")).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     web_static_root = tmp_path / "web-dist"
     if include_web_root:
         web_static_root.mkdir()
@@ -244,9 +288,10 @@ def configured_readiness(
             settings=settings,
             catalog=catalog,
             temp_root=tmp_path / "analysis-runs",
-            skills_root=skills_root,
+            contracts_root=contracts_root,
             duration_probe=lambda _: 60,
             ffmpeg_receipt_probe=lambda *_: ffmpeg_audit_passes,
+            fallback_probe=fallback_probe,
         ),
         media_path,
     )
@@ -329,9 +374,15 @@ async def test_production_ready_rejects_legacy_hashes_without_signed_build_recei
         ("local_analysis_max_seconds", 299),
         ("local_upload_max_bytes", 128 * 1024 * 1024),
         ("analysis_chunk_timeout_seconds", 19),
+        ("analysis_speech_timeout_seconds", 44),
+        ("analysis_evidence_deadline_seconds", 169),
+        ("analysis_cleanup_reserve_seconds", 9),
         ("analysis_visual_chunk_seconds", 50),
         ("analysis_visual_overlap_seconds", 5),
-        ("run_timeout_seconds", 179),
+        ("analysis_max_visual_chunks", 5),
+        ("analysis_max_attempts_per_visual_provider", 1),
+        ("analysis_max_visual_calls", 11),
+        ("run_timeout_seconds", 181),
         ("judge_analysis_concurrency", 2),
         ("public_analysis_concurrency", 1),
         ("trusted_proxy_cidrs", "10.0.0.0/8"),
@@ -348,6 +399,40 @@ def test_production_ready_rejects_competition_profile_drift(
     )
 
     assert readiness.check() == "competition_configuration_invalid"
+
+
+def test_production_ready_rejects_prompt_contract_hash_drift(tmp_path: Path) -> None:
+    readiness, _ = configured_readiness(tmp_path)
+    (tmp_path / "provider-contracts" / "visual-evidence" / "PROMPT.md").write_text(
+        "Inspect a legacy row-major contact sheet.",
+        encoding="utf-8",
+    )
+
+    assert readiness.check() == "prompt_contract_invalid"
+
+
+def test_production_ready_verifies_enabled_qwen_cos_fallback(tmp_path: Path) -> None:
+    fallback_settings = {
+        "visual_fallback_enabled": True,
+        "qwen_api_key": "qwen-key",
+        "cos_secret_id": "cos-id",
+        "cos_secret_key": "cos-key",
+        "cos_region": "ap-guangzhou",
+        "cos_bucket": "private-bucket-123",
+    }
+    not_ready, _ = configured_readiness(
+        tmp_path / "not-ready",
+        settings_overrides=fallback_settings,
+        fallback_probe=lambda: False,
+    )
+    ready, _ = configured_readiness(
+        tmp_path / "ready",
+        settings_overrides=fallback_settings,
+        fallback_probe=lambda: True,
+    )
+
+    assert not_ready.check() == "visual_fallback_configuration_invalid"
+    assert ready.check() is None
 
 
 @pytest.mark.asyncio

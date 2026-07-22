@@ -1,0 +1,8 @@
+{
+  "contract_version": "1.0.0",
+  "input_media_type": "continuous_silent_mp4",
+  "time_coordinate": "chunk_relative",
+  "output_schema": "VisualLocalizationResult.v1",
+  "compatible_model_families": ["doubao-seed-2.0", "qwen3-vl"],
+  "prompt_sha256": "5ff0322bfdcf1ed5fe592801c0e21b61fd744ebf5ff28eb558cf20d70838afee"
+}

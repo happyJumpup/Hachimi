@@ -90,6 +90,7 @@ async def test_asr_maps_word_timestamps_to_the_source_video_clock(tmp_path: Path
             url=f"ws://127.0.0.1:{port}/api/v3/sauc/bigmodel_nostream",
             chunk_duration_ms=100,
             pace_audio=False,
+            hotwords=("罗马尼亚硬拉", "蝴蝶机反向飞鸟"),
         )
         transcript = await client.recognize(
             audio_path=audio,
@@ -121,6 +122,16 @@ async def test_asr_maps_word_timestamps_to_the_source_video_clock(tmp_path: Path
             "enable_punc": True,
             "show_utterances": True,
             "result_type": "full",
+            "context": json.dumps(
+                {
+                    "hotwords": [
+                        {"word": "罗马尼亚硬拉"},
+                        {"word": "蝴蝶机反向飞鸟"},
+                    ]
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
         },
     }
     assert b"".join(observed["audio_packets"]) == pcm_bytes
@@ -297,7 +308,7 @@ async def test_cancelling_asr_closes_the_stream(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
+async def test_ark_inline_video_uses_chunk_relative_clock_without_remote_file_upload(
     tmp_path: Path,
 ) -> None:
     video = tmp_path / "window.mp4"
@@ -318,8 +329,8 @@ async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
                                         "segments": [
                                             {
                                                 "action_name": "Drag Curl",
-                                                "start_seconds": 41,
-                                                "end_seconds": 51,
+                                                "start_seconds": 26,
+                                                "end_seconds": 36,
                                                 "visual_cue": "哑铃沿躯干后拉",
                                             }
                                         ]
@@ -343,7 +354,7 @@ async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
         )
         result = await client.locate_visual(
             video_path=video,
-            window=Segment(start_seconds=15, end_seconds=54),
+            window=Segment(start_seconds=0, end_seconds=39),
             instructions="visual skill contract",
         )
 
@@ -360,70 +371,9 @@ async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
     encoded_video = content[0]["video_url"].partition(",")[2]
     assert base64.b64decode(encoded_video) == b"video-bytes"
     metadata = json.loads(content[1]["text"])
-    assert metadata["window"] == {"start_seconds": 15.0, "end_seconds": 54.0}
-    assert len(respx.calls) == 1
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_ark_contact_sheet_uses_visual_model_without_file_upload(
-    tmp_path: Path,
-) -> None:
-    image = tmp_path / "contact-sheet.jpg"
-    image.write_bytes(b"jpeg-test-bytes")
-    response = respx.post("https://ark.example/api/v3/responses").mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "resp-contact-sheet",
-                "output_text": json.dumps(
-                    {
-                        "segments": [
-                            {
-                                "action_name": "Drag Curl",
-                                "start_seconds": 41,
-                                "end_seconds": 51,
-                                "visual_cue": "dumbbell movement",
-                            }
-                        ]
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-        )
-    )
-
-    async with httpx.AsyncClient() as http_client:
-        client = ArkResponsesClient(
-            api_key="test-ark-key",
-            model_id="doubao-lite-test",
-            visual_model_id="doubao-mini-test",
-            base_url="https://ark.example/api/v3",
-            http_client=http_client,
-        )
-        result = await client.locate_visual_contact_sheet(
-            image_path=image,
-            frame_times_seconds=(0, 5, 10),
-            window=Segment(start_seconds=0, end_seconds=55),
-            instructions="visual skill contract",
-        )
-
-    assert result.segments[0].action_name == "Drag Curl"
-    response_payload = json.loads(response.calls[0].request.content)
-    assert response_payload["model"] == "doubao-mini-test"
-    assert response_payload["store"] is False
-    assert response_payload["thinking"] == {"type": "disabled"}
-    content = response_payload["input"][0]["content"]
-    assert content[0]["type"] == "input_image"
-    assert content[0]["image_url"].startswith("data:image/jpeg;base64,")
-    metadata = json.loads(content[1]["text"])
-    assert metadata["analysis_scope"] == "full_source"
-    assert "legacy_trigger_seconds" not in metadata
-    assert "trigger_seconds" not in metadata
-    assert metadata["contact_sheet"] == {
-        "columns": 4,
-        "frame_times_seconds": [0, 5, 10],
-        "order": "row_major",
+    assert metadata == {
+        "chunk_duration_seconds": 39.0,
+        "time_rule": "Return seconds relative to this chunk in 0..chunk_duration_seconds.",
     }
     assert len(respx.calls) == 1
 

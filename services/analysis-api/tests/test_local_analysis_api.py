@@ -61,25 +61,25 @@ class RelativeCandidatePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del trigger_seconds, emit
+        del emit
         self.source = source
         assert source.path.is_file()
+        offset = source.analysis_start_seconds
         return PipelineOutput(
             candidates=[
                 AnalysisCandidate(
                     id="candidate-local",
                     name="深蹲",
                     source_id=source.id,
-                    segment=Segment(start_seconds=1, end_seconds=3),
+                    segment=Segment(start_seconds=offset + 1, end_seconds=offset + 3),
                     parameters=CandidateParameters(),
                     evidence=[
                         EvidenceSpan(
                             type=EvidenceType.VISUAL,
-                            start_seconds=1.25,
-                            end_seconds=2.75,
+                            start_seconds=offset + 1.25,
+                            end_seconds=offset + 2.75,
                         )
                     ],
                     needs_confirmation=False,
@@ -96,10 +96,9 @@ class BlockingCapturePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del trigger_seconds, emit
+        del emit
         self.sources.append(source)
         try:
             await asyncio.Event().wait()
@@ -116,10 +115,9 @@ class SecretFailureCapturePipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del trigger_seconds, emit
+        del emit
         self.source = source
         raise PipelineFailure(
             "provider_error",
@@ -136,10 +134,9 @@ class RealMediaEmptyPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del trigger_seconds, emit
+        del emit
         self.source_path = source.path
         async with self._media.prepare_source(
             source.path,
@@ -147,10 +144,6 @@ class RealMediaEmptyPipeline:
             start_seconds=source.analysis_start_seconds,
         ) as prepared:
             assert prepared.audio_path.is_file()
-            assert prepared.contact_sheet_ready is not None
-            await prepared.contact_sheet_ready
-            assert prepared.contact_sheet_path is not None
-            assert prepared.contact_sheet_path.is_file()
         return PipelineOutput(candidates=[], empty_reason="no_evidence")
 
 
@@ -169,23 +162,26 @@ class CandidateBoundaryPipeline:
     async def analyze(
         self,
         source: VideoSource,
-        trigger_seconds: float | None,
         emit: EmitCallback,
     ) -> PipelineOutput:
-        del trigger_seconds, emit
+        del emit
+        offset = source.analysis_start_seconds
         return PipelineOutput(
             candidates=[
                 AnalysisCandidate(
                     id="candidate-local",
                     name="深蹲",
                     source_id=self._candidate_source_id or source.id,
-                    segment=Segment(start_seconds=1, end_seconds=self._segment_end_seconds),
+                    segment=Segment(
+                        start_seconds=offset + 1,
+                        end_seconds=offset + self._segment_end_seconds,
+                    ),
                     parameters=CandidateParameters(),
                     evidence=[
                         EvidenceSpan(
                             type=EvidenceType.VISUAL,
-                            start_seconds=1.25,
-                            end_seconds=self._evidence_end_seconds,
+                            start_seconds=offset + 1.25,
+                            end_seconds=offset + self._evidence_end_seconds,
                         )
                     ],
                     needs_confirmation=True,
