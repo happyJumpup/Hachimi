@@ -106,6 +106,22 @@ async def test_valid_access_code_upgrades_the_existing_session_to_judge() -> Non
 
 
 @pytest.mark.asyncio
+async def test_development_accepts_the_vite_ip_loopback_origin() -> None:
+    app = create_app(access=access_manager())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:18002"
+    ) as client:
+        response = await client.post(
+            "/api/v1/access/session",
+            json={"access_code": "judge-demo-code"},
+            headers={"Origin": "http://127.0.0.1:5173"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["tier"] == "judge"
+
+
+@pytest.mark.asyncio
 async def test_invalid_access_code_has_one_safe_failure_response() -> None:
     app = create_app(access=access_manager())
     async with httpx.AsyncClient(

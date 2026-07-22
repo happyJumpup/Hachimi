@@ -58,9 +58,21 @@ export const useAccessStore = defineStore('access', () => {
       loaded.value = true
       return true
     } catch (error) {
-      errorMessage.value = error instanceof AnalysisApiError && error.status === 401
-        ? '体验码无效'
-        : '体验码校验失败，请稍后重试'
+      if (!(error instanceof AnalysisApiError)) {
+        errorMessage.value = '体验码校验失败，请稍后重试'
+      } else if (error.status === 401) {
+        errorMessage.value = '体验码无效'
+      } else if (error.status === 403) {
+        errorMessage.value = '当前页面来源无效，请从正式入口重新打开'
+      } else if (error.status === 429) {
+        errorMessage.value = error.retryAfterSeconds === null
+          ? '体验码尝试过于频繁，请稍后重试'
+          : `体验码尝试过于频繁，请 ${error.retryAfterSeconds} 秒后重试`
+      } else if (error.status === 422) {
+        errorMessage.value = '体验码格式无效'
+      } else {
+        errorMessage.value = '体验码校验失败，请稍后重试'
+      }
       return false
     } finally {
       pending.value = false

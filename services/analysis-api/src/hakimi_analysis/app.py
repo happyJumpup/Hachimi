@@ -245,7 +245,11 @@ def create_app(
         "provider_configuration_invalid" if app_env == "production" else None
     )
     if cors_origins is None:
-        resolved_cors_origins = [] if app_env == "production" else ["http://localhost:5173"]
+        resolved_cors_origins = (
+            []
+            if app_env == "production"
+            else ["http://localhost:5173", "http://127.0.0.1:5173"]
+        )
     else:
         resolved_cors_origins = cors_origins
     if app_env == "production":

@@ -22,6 +22,15 @@ def test_analysis_capacity_has_safe_production_defaults() -> None:
     assert settings.public_analysis_concurrency == 0
 
 
+def test_default_development_cors_origins_match_vite_loopback_hosts() -> None:
+    settings = Settings(_env_file=None)
+
+    assert settings.cors_origin_list == [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+
 def test_analysis_evidence_budget_has_a_bounded_positive_default() -> None:
     settings = Settings(_env_file=None)
 

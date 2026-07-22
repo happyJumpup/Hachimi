@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     judge_analysis_concurrency: int = Field(default=2, ge=0)
     public_analysis_concurrency: int = Field(default=0, ge=0)
     trusted_proxy_cidrs: str = ""
-    cors_origins: str = "http://localhost:5173"
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     run_ttl_seconds: int = Field(default=600, ge=1)
     run_timeout_seconds: int = Field(default=180, ge=1)
     local_upload_enabled: bool = True

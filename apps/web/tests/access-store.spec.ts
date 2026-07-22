@@ -66,4 +66,50 @@ describe('access store', () => {
     expect(store.tier).toBe('public')
     expect(store.errorMessage).toBe('体验码无效')
   })
+
+  it.each([
+    [403, null, '当前页面来源无效，请从正式入口重新打开'],
+    [429, 75, '体验码尝试过于频繁，请 75 秒后重试'],
+    [429, null, '体验码尝试过于频繁，请稍后重试'],
+    [422, null, '体验码格式无效'],
+  ] as const)(
+    'maps access upgrade status %s to an actionable message',
+    async (status, retryAfterSeconds, expectedMessage) => {
+      const client: AccessClient = {
+        getSession: async () => ({
+          tier: 'public',
+          can_analyze: false,
+          retry_after_seconds: null,
+        }),
+        upgrade: async () => {
+          throw new AnalysisApiError('safe server error', status, retryAfterSeconds)
+        },
+      }
+      const store = useAccessStore()
+
+      await expect(store.upgrade('submitted-code', client)).resolves.toBe(false)
+
+      expect(store.tier).toBe('public')
+      expect(store.pending).toBe(false)
+      expect(store.errorMessage).toBe(expectedMessage)
+    },
+  )
+
+  it('keeps the generic retry message for network failures', async () => {
+    const client: AccessClient = {
+      getSession: async () => ({
+        tier: 'public',
+        can_analyze: false,
+        retry_after_seconds: null,
+      }),
+      upgrade: async () => {
+        throw new TypeError('network unavailable')
+      },
+    }
+    const store = useAccessStore()
+
+    await expect(store.upgrade('submitted-code', client)).resolves.toBe(false)
+
+    expect(store.errorMessage).toBe('体验码校验失败，请稍后重试')
+  })
 })
