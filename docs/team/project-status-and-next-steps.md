@@ -51,7 +51,7 @@ TrainPal 是独立 Web、用户可见的唯一 Agent 和小猫教练的统一身
 - 次数／时长训练、休息墙钟、刷新恢复、提前结束、卡路里约值、结果与分享已有基线。
 - 当前 production 配置使用真实 `cloud` Provider；Ark、豆包流式语音识别 2.0 与确定性媒体／融合路径已经接入，测试 Provider 在非测试环境拒绝启动。
 - 移动体验 Brief、TrainPal 身份、个性化、来源节奏、三个 Skill、任务幂等、覆盖状态、移动页面与视觉 ADR 已冻结。
-- Vue design v1、七猫动效与 GYMTI v1 已合入五分钟后端；最终候选的 OpenAPI 已从运行时重新生成，公开候选没有 `segment_role`。整仓门禁为 Web 200、API 261、Playwright 20/20，Ruff、严格 mypy、ESLint、Vue typecheck、生产构建和 PowerShell／Git Bash 双镜像审计均通过；CloudBase 候选结果仍以 PR #9 和最终发布回执为准。
+- Vue design v1、七猫动效与 GYMTI v1 已合入五分钟后端；最终候选的 OpenAPI 已从运行时重新生成，公开候选没有 `segment_role`。独立发布审查额外修复了“已有 PUBLIC 稳定版无法安全创建私有候选”的 P1：新候选请求从 0% 灰度开始，现有访问类型原样保留；私有验证必须匹配候选 `/health` 的精确提交、轮询确认一次性请求头路由，并在异常路径恢复且验证稳定版 100%／候选 0%。本地门禁计数和 CloudBase 实测结果以 PR #9 与最终发布回执为准。
 - CloudBase 当前公开配置复用版本 B 的同一镜像，2 vCPU / 4 GiB、单 worker、最小/最大实例 `1/1`；匿名分析并发为 0，评委分析并发为 3。
 
 Provider 生产化任务已提交候选 `d742268`，但交接结论明确要求不切生产：缺少真实 Qwen 预检／合同验证、目标 COS 生命周期与清理、五分钟 Precision／Recall／F1、稳定 `complete`、版本 C 公网 Canary 和 B→C→B→C 回滚。当前没有可以据此宣布的 Seed／Qwen 质量冠军。

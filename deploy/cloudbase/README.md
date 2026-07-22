@@ -48,6 +48,7 @@
 
 ```text
 APP_ENV=production
+APP_RELEASE_SHA=<injected-by-release-source.ps1>
 ANALYSIS_PROVIDER=cloud
 LOCAL_UPLOAD_ENABLED=true
 LOCAL_ANALYSIS_MAX_SECONDS=300
@@ -108,9 +109,9 @@ docker build --tag trainpal-five-minute:local .
 
    不使用 `--force`。交互页必须再次核对目标服务、访问方式和价格影响。源码构建日志通过后，先验证容器、签名 FFmpeg、`/health`、`/ready`、SSE 和一条真实短视频；版本 A 及其兼容环境配置必须保留。
 
-3. 最终前端提交后，重新生成 OpenAPI 类型、跑完整前端/E2E 和窄屏检查，再从精确候选 SHA 部署私有候选。源码包路线已验证；不再依赖失败的 GHCR 拉取路线。
+3. 最终前端提交后，重新生成 OpenAPI 类型、跑完整前端/E2E 和窄屏检查，再从精确候选 SHA 部署 `GRAY` 候选。若稳定版已经公开，`release-source.ps1` 必须严格保留现有 `OA + PUBLIC` 访问配置，并让候选从 0% 流量开始；普通公网请求继续由稳定版处理。源码包路线已验证；不再依赖失败的 GHCR 拉取路线。
 
-4. 全部私有门槛通过后才打开短时公网 Canary：第二浏览器可浏览；评委码真实分析成功；三个并发成功、第四个稳定 429；终态无媒体残留；实际完成 B→A→B 回滚。任一门槛失败就关闭入口，不发布评委链接。
+4. 候选构建完成后，先用一次性随机请求头把审查请求定向到 0% 候选，稳定版仍是无请求头流量的默认版本。私有门槛覆盖 `/health`、`/ready`、SPA、匿名 GYMTI 本地降级、评委码真实分析、SSE 和清理；无论通过或失败都先恢复稳定版 100% 的普通流量。全部私有门槛和 CI 通过后才打开短时公网 Canary：第二浏览器可浏览；三个并发成功、第四个稳定 429；终态无媒体残留；实际完成候选→稳定版→候选回滚。任一门槛失败就恢复稳定版，不发布新链接。
 
 5. 仅在评委使用时把最小实例数设为 1，其余时间恢复 0。费用接近 300 元时先把真实分析并发归零；到最晚关闭时间禁用公共入口并缩容。
 
@@ -140,13 +141,37 @@ CloudBase HTTP Access 的平台限制是 20 MB 请求体和 60 秒单次 HTTP �
 ```
 
 `release-source.ps1` archives an exact clean Git commit, preserves production
-secrets in memory, enforces the five-minute runtime profile, and submits an
-OA-only gray source release. Its optional receipt contains names and hashes,
-never environment values.
+secrets in memory, enforces the five-minute runtime profile, and requests an
+initially zero-traffic gray source release. It validates and preserves the
+service's existing OA or OA + PUBLIC access policy instead of silently changing
+public reachability, and injects `APP_RELEASE_SHA` so the candidate can prove its
+immutable Git identity. Its optional receipt records the requested zero-traffic
+policy, names, and hashes; actual traffic is verified after deployment rather
+than inferred from the update request.
+
+For an already-public stable version, run the transactional private canary only
+after the gray candidate is running. The wrapper generates the route token in
+memory, passes it to the probe over standard input, verifies the exact candidate
+commit returned by `/health`, and restores verified stable 100 / candidate 0
+traffic in `finally`:
+
+```powershell
+.\deploy\cloudbase\run-private-canary.ps1 `
+  -EnvironmentId $env:TRAINPAL_CLOUDBASE_ENV_ID `
+  -ExpectedStableVersion 'trainpal-demo-009' `
+  -ExpectedCandidateCommitSha '<full-lowercase-git-sha>' `
+  -Media '<temporary-authorized-sample>' `
+  -OutputDirectory '<private-directory-outside-the-repository>'
+```
 
 `private-canary.py` signs the private CloudBase HTTP API, reads the judge code
-from Windows Credential Manager, verifies anonymous denial, uploads one local
+from Windows Credential Manager, requires the route header and exact expected
+commit, carries the header on health, JSON, upload, and SSE requests, verifies
+anonymous analysis denial and anonymous GYMTI local fallback, uploads one local
 video, consumes SSE, and emits only aggregate result counts and coverage state.
+Do not invoke it directly for a release gate; `run-private-canary.ps1` owns the
+enable / probe / restore transaction and treats unverified recovery as a release
+failure.
 
 `public-canary.py` uses four independent browser-style sessions against an
 operator-supplied HTTPS base URL, verifies anonymous denial, submits the same

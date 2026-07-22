@@ -29,6 +29,24 @@ const collectStyleSources = (directory: string): StyleSource[] =>
 
 const styleSources = collectStyleSources(sourceRoot)
 
+const relativeLuminance = (hex: string): number => {
+  const channels = hex.match(/[0-9a-f]{2}/gi)?.map((channel) => Number.parseInt(channel, 16) / 255)
+  if (!channels || channels.length !== 3) throw new Error(`Invalid RGB color: ${hex}`)
+  const [red, green, blue] = channels.map((channel) => (
+    channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  )) as [number, number, number]
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+const contrastRatio = (foreground: string, background: string): number => {
+  const foregroundLuminance = relativeLuminance(foreground)
+  const backgroundLuminance = relativeLuminance(background)
+  return (
+    (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
+    / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05)
+  )
+}
+
 describe('web experience design contract', () => {
   it('keeps explicit auxiliary type at 11px or larger', () => {
     const violations = styleSources.flatMap(({ file, css }) => {
@@ -72,6 +90,16 @@ describe('web experience design contract', () => {
     expect(baseStyles).toMatch(/--tp-secondary\s*:\s*#A5BA63/i)
     expect(baseStyles).toMatch(/--tp-training-canvas\s*:\s*#0E1311/i)
     expect(baseStyles).toMatch(/--tp-focus\s*:\s*#2459D6/i)
+  })
+
+  it('keeps muted text readable on every light semantic surface', () => {
+    const baseStyles = readFileSync(resolve(sourceRoot, 'styles/base.css'), 'utf8')
+    const muted = baseStyles.match(/--tp-muted\s*:\s*(#[0-9a-f]{6})/i)?.[1]
+
+    expect(muted).toBeDefined()
+    for (const background of ['#F3EFE5', '#FFFDF8', '#FFF9ED', '#EAE6DC']) {
+      expect(contrastRatio(muted ?? '', background), `${muted} on ${background}`).toBeGreaterThanOrEqual(4.5)
+    }
   })
 
   it('keeps the keyboard focus ring at 2px with a 3px offset', () => {

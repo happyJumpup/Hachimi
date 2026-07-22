@@ -222,6 +222,7 @@ def create_app(
     local_duration_probe: Callable[[Path], float] | None = None,
     gymti_service: GymtiService | None = None,
     gymti_llm_enabled: bool = False,
+    release_sha: str | None = None,
 ) -> FastAPI:
     if (
         not math.isfinite(local_analysis_max_seconds)
@@ -231,6 +232,8 @@ def create_app(
         raise ValueError("local analysis limit must be between 0 and 300 seconds")
     if local_upload_max_bytes < 1:
         raise ValueError("local upload byte limit must be positive")
+    if release_sha is not None and re.fullmatch(r"[0-9a-f]{40}", release_sha) is None:
+        raise ValueError("release SHA must be a full lowercase Git commit SHA")
     duration_probe = local_duration_probe or probe_duration_sync
     source_catalog = catalog or EmptySourceCatalog()
     resolved_pipeline: AnalysisPipeline
@@ -302,7 +305,10 @@ def create_app(
 
     @app.get("/api/v1/health")
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        payload = {"status": "ok"}
+        if release_sha is not None:
+            payload["release_sha"] = release_sha
+        return payload
 
     @app.get("/api/v1/capabilities", response_model=CapabilitiesView)
     async def capabilities(response: Response) -> CapabilitiesView:

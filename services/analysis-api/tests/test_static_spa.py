@@ -7,6 +7,19 @@ from hakimi_analysis.app import create_app
 
 
 @pytest.mark.asyncio
+async def test_health_exposes_the_immutable_release_identity_when_configured() -> None:
+    release_sha = "a" * 40
+    app = create_app(release_sha=release_sha)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        health = await client.get("/api/v1/health")
+
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok", "release_sha": release_sha}
+
+
+@pytest.mark.asyncio
 async def test_configured_web_root_serves_spa_routes_and_built_assets(tmp_path: Path) -> None:
     web_root = tmp_path / "dist"
     assets_root = web_root / "assets"

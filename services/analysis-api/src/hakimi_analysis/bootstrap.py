@@ -286,4 +286,5 @@ def build_default_app() -> FastAPI:
         local_upload_temp_root=temp_root,
         gymti_service=build_gymti_service(settings, http_client),
         gymti_llm_enabled=settings.gymti_llm_enabled,
+        release_sha=settings.app_release_sha,
     )

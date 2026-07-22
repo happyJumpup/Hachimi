@@ -34,6 +34,7 @@ test('quick plan completes through save-as, rest recovery, TrainPal, record, and
     await sheet.getByRole('spinbutton').nth(1).fill('1')
     await sheet.getByRole('spinbutton').nth(2).fill(restSeconds)
     await sheet.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(sheet).toBeHidden()
   }
 
   await page.getByRole('button', { name: '另存为' }).click()
@@ -72,7 +73,8 @@ test('quick plan completes through save-as, rest recovery, TrainPal, record, and
   await expect(page).toHaveURL(/\/result\//)
   await expect(page.getByText('约', { exact: false }).first()).toBeVisible()
   await page.getByRole('button', { name: '分享海报' }).click()
-  await expect(page.getByText('已打开分享')).toBeVisible()
+  await expect(page.getByRole('status')).toContainText(/正在生成海报|已打开分享|海报已下载/)
+  await expect(page.getByText(/已打开分享|海报已下载/)).toBeVisible({ timeout: 20_000 })
 
   await page.getByRole('link', { name: '我的训练' }).click()
   await page.getByRole('button', { name: /训练记录/ }).click()

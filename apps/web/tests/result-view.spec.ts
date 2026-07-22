@@ -12,6 +12,18 @@ import { useLibraryStore } from '@/stores/library'
 import { useTrainingStore } from '@/stores/training'
 import ResultView from '@/views/ResultView.vue'
 
+const posterMocks = vi.hoisted(() => ({
+  deliver: vi.fn(async () => 'shared' as const),
+  download: vi.fn(),
+  render: vi.fn(async () => new Blob(['poster'], { type: 'image/png' })),
+}))
+
+vi.mock('@/features/experience/poster', () => ({
+  deliverCompletionPoster: posterMocks.deliver,
+  downloadCompletionPoster: posterMocks.download,
+  renderCompletionPoster: posterMocks.render,
+}))
+
 const makeRecord = (): TrainingRecord => ({
   id: 'record-1',
   outcome: 'completed',
@@ -119,6 +131,23 @@ describe('训练结果', () => {
     expect(context.wrapper.get('.result-metrics').text()).toContain('约 4')
     expect(context.wrapper.get('.action-results').attributes('open')).toBeUndefined()
     expect(context.wrapper.findAll('footer button')).toHaveLength(1)
+  })
+
+  it('announces poster generation while the asynchronous share is pending', async () => {
+    let completeShare: ((result: 'shared') => void) | undefined
+    posterMocks.deliver.mockImplementationOnce(
+      () => new Promise((resolve) => { completeShare = resolve }),
+    )
+    const context = await setup()
+
+    await context.wrapper.get('.poster-actions button').trigger('click')
+
+    expect(context.wrapper.get('[role="status"]').text()).toContain('正在生成海报')
+    expect(context.wrapper.get('.poster-actions button').attributes('disabled')).toBeDefined()
+
+    completeShare?.('shared')
+    await flushPromises()
+    expect(context.wrapper.get('[role="status"]').text()).toContain('已打开分享')
   })
 
   it('renders the completed motion from the immutable record style snapshot', async () => {

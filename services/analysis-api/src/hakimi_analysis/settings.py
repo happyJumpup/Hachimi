@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "test", "production"] = "development"
+    app_release_sha: str | None = None
     analysis_provider: Literal["cloud", "test"] = "cloud"
     ark_api_key: SecretStr | None = None
     ark_model_id: str = "doubao-seed-2-0-mini-260428"
@@ -111,6 +112,15 @@ class Settings(BaseSettings):
         if re.fullmatch(r"[0-9a-f]{64}", normalized) is None:
             raise ValueError("expected a 64-character SHA-256 digest")
         return normalized
+
+    @field_validator("app_release_sha")
+    @classmethod
+    def validate_optional_release_sha(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+            raise ValueError("release SHA must be a full lowercase Git commit SHA")
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -33,7 +33,9 @@ test('video result becomes a base plan, resolves uncertainty, and restores from 
     page.locator('.action-sheet').getByRole('textbox', { name: '动作名称' }),
   ).toHaveValue('拖拽弯举')
   await expect(page.locator('.action-sheet').getByText('规则补全', { exact: true }).first()).toBeVisible()
-  await page.locator('.action-sheet').getByRole('button', { name: '确认并加入' }).click()
+  const firstConfirmationSheet = page.locator('.action-sheet')
+  await firstConfirmationSheet.getByRole('button', { name: '确认并加入' }).click()
+  await expect(firstConfirmationSheet).toBeHidden()
 
   await page.getByRole('link', { name: '返回首页' }).click()
   await page.getByText('暂时没有合适视频？使用受控示例', { exact: true }).click()
@@ -47,7 +49,9 @@ test('video result becomes a base plan, resolves uncertainty, and restores from 
   await expect(page.getByText(/合成测试来源/)).toBeVisible()
 
   await page.locator('.plan-card').nth(1).locator('.action-summary').click()
-  await page.locator('.action-sheet').getByRole('button', { name: '确认并加入' }).click()
+  const secondConfirmationSheet = page.locator('.action-sheet')
+  await secondConfirmationSheet.getByRole('button', { name: '确认并加入' }).click()
+  await expect(secondConfirmationSheet).toBeHidden()
 
   await page.reload()
   await expect(page.locator('.plan-card')).toHaveCount(2)
@@ -71,6 +75,7 @@ test('video result becomes a base plan, resolves uncertainty, and restores from 
     await sheet.getByRole('spinbutton').nth(1).fill(target)
     await sheet.getByRole('spinbutton').nth(2).fill('0')
     await sheet.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(sheet).toBeHidden()
   }
 
   await page.getByRole('button', { name: '开始训练' }).click()

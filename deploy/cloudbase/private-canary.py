@@ -5,6 +5,7 @@ import ctypes
 import hashlib
 import hmac
 import json
+import re
 import sys
 import time
 from ctypes import wintypes
@@ -117,10 +118,19 @@ class SignedGatewayClient:
         service_name: str,
         credential: TemporaryCredential,
         timeout_seconds: float,
+        routing_header_name: str | None = None,
+        routing_header_value: str | None = None,
     ) -> None:
+        if bool(routing_header_name) != bool(routing_header_value):
+            raise CanaryError("routing header pair must be provided together")
         self._host = f"{environment_id}.api.tcloudbasegateway.com"
         self._service_name = service_name
         self._credential = credential
+        self._routing_headers = (
+            {routing_header_name: routing_header_value}
+            if routing_header_name is not None and routing_header_value is not None
+            else {}
+        )
         self._client = httpx.Client(
             follow_redirects=False,
             timeout=httpx.Timeout(
@@ -222,6 +232,7 @@ class SignedGatewayClient:
         }
         if same_origin:
             headers["Origin"] = self.origin
+        headers.update(self._routing_headers)
         return self._client.request(
             method,
             f"{self.origin}{gateway_path}",
@@ -242,7 +253,7 @@ class SignedGatewayClient:
                     "video/mp4",
                 )
             },
-            headers={"Origin": self.origin},
+            headers={"Origin": self.origin, **self._routing_headers},
         )
         body = request.read()
         content_type = request.headers["Content-Type"]
@@ -269,6 +280,7 @@ class SignedGatewayClient:
                     content_type=content_type,
                     body=b"",
                 ),
+                **self._routing_headers,
             },
         )
         event_types: list[str] = []
@@ -303,6 +315,96 @@ def _expect_json(response: httpx.Response, expected_status: int, label: str) -> 
     return payload
 
 
+def _verify_anonymous_gymti_fallback(
+    client: SignedGatewayClient,
+) -> dict[str, str | None]:
+    contract_path = Path(__file__).resolve().parents[2] / "contracts" / (
+        "gymti-questionnaire.v1.json"
+    )
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        version = str(contract["version"])
+        first_question_id = str(contract["questions"][0]["id"])
+    except (OSError, KeyError, IndexError, TypeError, ValueError) as error:
+        raise CanaryError("GYMTI contract is unavailable to the private canary") from error
+    response = _expect_json(
+        client.request_json(
+            "POST",
+            "/api/v1/gymti/next-question",
+            payload={
+                "questionnaire_version": version,
+                "scoring_version": version,
+                "answered": [],
+                "candidate_question_ids": [first_question_id],
+            },
+            same_origin=True,
+        ),
+        200,
+        "anonymous GYMTI next question",
+    )
+    if response != {
+        "question_id": first_question_id,
+        "source": "local_fallback",
+        "model": None,
+        "version": version,
+    }:
+        raise CanaryError("anonymous GYMTI did not use the versioned local fallback")
+    return {
+        "next_question_source": "local_fallback",
+        "model": None,
+        "contract_version": version,
+    }
+
+
+def _verify_spa_candidate(client: SignedGatewayClient) -> dict[str, int]:
+    shell = client.request_json("GET", "/")
+    try:
+        if shell.status_code != 200 or "text/html" not in shell.headers.get(
+            "content-type", ""
+        ):
+            raise CanaryError("candidate SPA shell is unavailable")
+        asset_match = re.search(
+            r"(?:src|href)=[\"'](/assets/[A-Za-z0-9._-]+)[\"']",
+            shell.text,
+        )
+        if asset_match is None:
+            raise CanaryError("candidate SPA shell does not reference a built asset")
+        asset_path = asset_match.group(1)
+    finally:
+        shell.close()
+
+    asset = client.request_json("GET", asset_path)
+    try:
+        if (
+            asset.status_code != 200
+            or not asset.content
+            or "text/html" in asset.headers.get("content-type", "")
+        ):
+            raise CanaryError("candidate SPA built asset is unavailable")
+    finally:
+        asset.close()
+    return {"shell_http_status": 200, "asset_http_status": 200}
+
+
+def _verify_release_identity(
+    payload: dict[str, Any],
+    expected_commit_sha: str,
+) -> dict[str, str]:
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", expected_commit_sha) is None
+        or payload.get("status") != "ok"
+        or payload.get("release_sha") != expected_commit_sha
+    ):
+        raise CanaryError("deployed release identity does not match the candidate")
+    return {"commit_sha": expected_commit_sha}
+
+
+def _verify_readiness(payload: dict[str, Any]) -> dict[str, str]:
+    if payload != {"status": "ready"}:
+        raise CanaryError("candidate failed the full production readiness contract")
+    return {"status": "ready"}
+
+
 def _wait_for_terminal(
     client: SignedGatewayClient,
     run_id: str,
@@ -333,9 +435,27 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         service_name=args.service_name,
         credential=credential,
         timeout_seconds=args.timeout_seconds,
+        routing_header_name=args.routing_header_name,
+        routing_header_value=args.routing_header_value,
     )
     run_id: str | None = None
     try:
+        spa = _verify_spa_candidate(client)
+        release_identity = _verify_release_identity(
+            _expect_json(
+                client.request_json("GET", "/api/v1/health"),
+                200,
+                "health",
+            ),
+            args.expected_commit_sha,
+        )
+        readiness = _verify_readiness(
+            _expect_json(
+                client.request_json("GET", "/api/v1/ready"),
+                200,
+                "readiness",
+            )
+        )
         capabilities = _expect_json(
             client.request_json("GET", "/api/v1/capabilities"),
             200,
@@ -343,6 +463,8 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         )
         if capabilities.get("local_analysis_max_seconds") != 300:
             raise CanaryError("deployed local analysis duration boundary is not 300 seconds")
+
+        gymti = _verify_anonymous_gymti_fallback(client)
 
         public_session = _expect_json(
             client.request_json("GET", "/api/v1/access/session"),
@@ -391,7 +513,10 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         receipt = {
             "schema_version": 1,
             "service": args.service_name,
+            "release": release_identity,
+            "readiness": readiness,
             "access": "signed-private-http-api",
+            "spa": spa,
             "media_bytes": media_bytes,
             "capabilities": {
                 "local_analysis_max_seconds": capabilities.get(
@@ -403,6 +528,7 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
                 "anonymous_can_analyze": bool(public_session.get("can_analyze")),
                 "judge_can_analyze": bool(judge_session.get("can_analyze")),
             },
+            "gymti": gymti,
             "upload_http_status": 202,
             "sse": {
                 "http_status": sse_status,
@@ -457,6 +583,9 @@ def parse_args() -> argparse.Namespace:
         default="HakimiFitness.CloudBase.JudgeCode",
     )
     parser.add_argument("--timeout-seconds", type=float, default=240)
+    parser.add_argument("--routing-header-name", required=True)
+    parser.add_argument("--routing-header-value-stdin", action="store_true", required=True)
+    parser.add_argument("--expected-commit-sha", required=True)
     parser.add_argument("--output", required=True)
     return parser.parse_args()
 
@@ -464,6 +593,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
+        routing_header_value = sys.stdin.read().strip()
+        if (
+            not routing_header_value
+            or len(routing_header_value) > 128
+            or re.fullmatch(r"[!-~]+", routing_header_value) is None
+        ):
+            raise CanaryError("private routing token from standard input is invalid")
+        args.routing_header_value = routing_header_value
         receipt = run_canary(args)
         output = Path(args.output).expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)

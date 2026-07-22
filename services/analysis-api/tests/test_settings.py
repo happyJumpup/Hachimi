@@ -73,6 +73,16 @@ def test_web_static_root_is_an_optional_backend_path(tmp_path: Path) -> None:
     assert with_static.web_static_root == tmp_path / "dist"
 
 
+def test_release_sha_is_optional_but_must_be_an_immutable_git_identity() -> None:
+    assert Settings(_env_file=None).app_release_sha is None
+    assert Settings(_env_file=None, app_release_sha="a" * 40).app_release_sha == "a" * 40
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, app_release_sha="A" * 40)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, app_release_sha="a" * 39)
+
+
 def test_production_ffmpeg_is_an_explicit_optional_path(tmp_path: Path) -> None:
     without_ffmpeg = Settings(_env_file=None)
     with_ffmpeg = Settings(_env_file=None, imageio_ffmpeg_exe=tmp_path / "ffmpeg")

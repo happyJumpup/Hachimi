@@ -68,7 +68,7 @@ const posterBlob = async (): Promise<Blob> => {
 const sharePoster = async (): Promise<void> => {
   if (pending.value || !record.value) return
   pending.value = true
-  feedback.value = ''
+  feedback.value = '正在生成海报…'
   try {
     const result = await deliverCompletionPoster(await posterBlob(), record.value.plan.name)
     feedback.value = result === 'shared' ? '已打开分享' : result === 'downloaded' ? '海报已下载' : '已取消分享'
@@ -82,7 +82,7 @@ const sharePoster = async (): Promise<void> => {
 const downloadPoster = async (): Promise<void> => {
   if (pending.value || !record.value) return
   pending.value = true
-  feedback.value = ''
+  feedback.value = '正在生成海报…'
   try {
     downloadCompletionPoster(await posterBlob(), record.value.plan.name)
     feedback.value = '海报已下载'

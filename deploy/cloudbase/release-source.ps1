@@ -226,16 +226,41 @@ $detail = Invoke-TencentApi `
     -Credential $credential
 $baseInfo = Get-PropertyValue $detail 'BaseInfo'
 $serverConfig = Get-PropertyValue $detail 'ServerConfig'
-$onlineVersions = @(
-    Get-PropertyValue $detail 'OnlineVersionInfos' |
-        ForEach-Object { [string](Get-PropertyValue $_ 'VersionName') }
+$onlineVersionPolicies = @(
+    foreach ($version in @(Get-PropertyValue $detail 'OnlineVersionInfos')) {
+        [ordered]@{
+            version_name = [string](Get-PropertyValue $version 'VersionName')
+            flow_ratio = Get-PropertyValue $version 'FlowRatio'
+        }
+    }
 )
-if ($onlineVersions -notcontains $ExpectedCurrentVersion) {
-    throw 'The expected rollback version is not the current online version.'
-}
 $accessTypes = @((Get-PropertyValue $baseInfo 'AccessTypes'))
-if ($accessTypes.Count -ne 1 -or [string]$accessTypes[0] -ne 'OA') {
-    throw 'Source release requires the service to remain OA-only.'
+$publicNetConf = Get-PropertyValue $serverConfig 'PublicNetConf'
+$releasePolicyInput = [ordered]@{
+    access_types = @($accessTypes)
+    public_network_status = [string](Get-PropertyValue $publicNetConf 'PublicNetStatus')
+    expected_current_version = $ExpectedCurrentVersion
+    online_versions = @($onlineVersionPolicies)
+} | ConvertTo-Json -Compress -Depth 5
+$releasePolicyJson = $releasePolicyInput | & python (
+    Join-Path $PSScriptRoot 'release-policy.py'
+)
+if ($LASTEXITCODE -ne 0) {
+    throw 'Release access policy validation failed.'
+}
+try {
+    $releasePolicy = $releasePolicyJson | ConvertFrom-Json
+} catch {
+    throw 'Release access policy returned invalid JSON.'
+}
+if ([int]$releasePolicy.requested_candidate_initial_traffic_percent -ne 0) {
+    throw 'Release access policy must keep the candidate at zero initial traffic.'
+}
+if (
+    [string]$releasePolicy.verified_current_version -ne $ExpectedCurrentVersion -or
+    [int]$releasePolicy.verified_current_flow_ratio -ne 100
+) {
+    throw 'Release access policy did not verify the stable rollback route.'
 }
 
 $environment = Convert-EnvironmentParameters (Get-PropertyValue $serverConfig 'EnvParams')
@@ -273,6 +298,7 @@ $overrides = [ordered]@{
     IMAGEIO_FFMPEG_EXE = '/opt/trainpal/ffmpeg/bin/ffmpeg'
     FFMPEG_BUILD_RECEIPT_PATH = '/opt/trainpal/ffmpeg/receipt.json'
     WEB_STATIC_ROOT = '/workspace/apps/web/dist'
+    APP_RELEASE_SHA = $CommitSha
 }
 foreach ($entry in $overrides.GetEnumerator()) {
     $environment[$entry.Key] = $entry.Value
@@ -322,7 +348,7 @@ try {
         @{ Key = 'MinNum'; IntValue = 0 },
         @{ Key = 'MaxNum'; IntValue = 1 },
         @{ Key = 'Port'; IntValue = 8000 },
-        @{ Key = 'AccessTypes'; ArrayValue = @('OA') },
+        @{ Key = 'AccessTypes'; ArrayValue = @($releasePolicy.access_types) },
         @{ Key = 'EnvParam'; Value = $environmentJson },
         @{ Key = 'BuildDir'; Value = '.' },
         @{ Key = 'Dockerfile'; Value = 'Dockerfile' },
@@ -352,8 +378,11 @@ try {
         region = $Region
         commit_sha = $CommitSha
         source_sha256 = $sourceSha256
-        previous_version = $ExpectedCurrentVersion
+        previous_version = [string]$releasePolicy.verified_current_version
+        previous_version_flow_ratio = [int]$releasePolicy.verified_current_flow_ratio
         release_type = 'GRAY'
+        access_types = @($releasePolicy.access_types)
+        requested_candidate_initial_traffic_percent = [int]$releasePolicy.requested_candidate_initial_traffic_percent
         package_version = $packageVersion
         environment_key_names = @($orderedEnvironment.Keys)
         request_id = [string](Get-PropertyValue $release 'RequestId')
