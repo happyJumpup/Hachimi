@@ -86,12 +86,15 @@ class TencentCosTemporaryStore:
                 retryable=False,
             ) from error
         object_key = f"{self._object_prefix}/{uuid4().hex}.mp4"
-        uploaded = False
+        object_may_exist = False
         primary_error: BaseException | None = None
         started_at = monotonic()
         try:
+            # COS DELETE is idempotent. Mark the random key for cleanup before the
+            # blocking upload starts so cancellation cannot skip deletion after the
+            # shielded thread completes successfully.
+            object_may_exist = True
             await _shielded_thread_call(self._upload, video_path, object_key)
-            uploaded = True
             signed_url = await _shielded_thread_call(self._signed_url, object_key)
             log_safe_fields(
                 LOGGER,
@@ -115,7 +118,7 @@ class TencentCosTemporaryStore:
                 retryable=True,
             ) from error
         finally:
-            if uploaded:
+            if object_may_exist:
                 cleanup_started_at = monotonic()
                 try:
                     await _shielded_thread_call(self._delete, object_key)

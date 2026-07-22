@@ -613,7 +613,15 @@ async def test_long_source_runs_asr_once_and_deduplicates_overlapping_visual_chu
         visual_overlap_seconds=10,
     )
 
-    output = await pipeline.analyze(long_source(tmp_path), no_op_emit)
+    events: list[tuple[str, dict[str, object]]] = []
+
+    async def record_emit(
+        stage: RunStage, event_type: str, data: dict[str, object]
+    ) -> None:
+        del stage
+        events.append((event_type, data))
+
+    output = await pipeline.analyze(long_source(tmp_path), record_emit)
 
     assert asr.calls == 1
     assert all(path.suffix == ".mp4" for path in ark.visual_video_paths)
@@ -624,6 +632,16 @@ async def test_long_source_runs_asr_once_and_deduplicates_overlapping_visual_chu
     ]
     assert output.coverage_status == CoverageStatus.COMPLETE
     assert [candidate.name for candidate in output.candidates].count("深蹲") == 1
+    assert (
+        "branch.completed",
+        {
+            "branch": "visual",
+            "chunk_count": 3,
+            "successful_chunk_count": 3,
+            "processed_seconds": 130.0,
+            "evidence_count": 3,
+        },
+    ) in events
 
 
 @pytest.mark.asyncio

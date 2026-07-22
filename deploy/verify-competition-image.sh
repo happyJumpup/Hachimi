@@ -140,10 +140,26 @@ if [[ -n "${audit_output}" ]]; then
   fail "forbidden release content is present"
 fi
 
+readonly ffmpeg_receipt_fields="$(docker_cmd run --rm \
+  --entrypoint /workspace/services/analysis-api/.venv/bin/python \
+  "${image_ref}" \
+  -c 'import json; payload = json.load(open("/opt/trainpal/ffmpeg/receipt.json", encoding="utf-8")); print(payload["binary_sha256"]); print(payload["configuration_sha256"])')" \
+  || fail "registered FFmpeg build receipt could not be read"
+mapfile -t ffmpeg_receipt_lines <<<"${ffmpeg_receipt_fields}"
+if [[ "${#ffmpeg_receipt_lines[@]}" -ne 2 ]] \
+  || [[ ! "${ffmpeg_receipt_lines[0]}" =~ ^[0-9a-f]{64}$ ]] \
+  || [[ ! "${ffmpeg_receipt_lines[1]}" =~ ^[0-9a-f]{64}$ ]]; then
+  fail "registered FFmpeg build receipt contains invalid hashes"
+fi
+readonly ffmpeg_binary_sha256="${ffmpeg_receipt_lines[0]}"
+readonly ffmpeg_configuration_sha256="${ffmpeg_receipt_lines[1]}"
+
 docker_cmd run --rm \
   --entrypoint /workspace/services/analysis-api/.venv/bin/python \
   "${image_ref}" \
-  -c 'from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path("/opt/trainpal/ffmpeg/bin/ffmpeg"), Path("/opt/trainpal/ffmpeg/receipt.json")) else 1)' \
+  -c 'import sys; from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path("/opt/trainpal/ffmpeg/bin/ffmpeg"), Path("/opt/trainpal/ffmpeg/receipt.json"), sys.argv[1], sys.argv[2]) else 1)' \
+  "${ffmpeg_binary_sha256}" \
+  "${ffmpeg_configuration_sha256}" \
   || fail "registered FFmpeg build receipt is invalid"
 
 docker_cmd run --detach \
@@ -162,6 +178,8 @@ docker_cmd run --detach \
   --env TRUSTED_PROXY_CIDRS= \
   --env PUBLIC_ANALYSIS_CONCURRENCY=0 \
   --env JUDGE_ANALYSIS_CONCURRENCY=3 \
+  --env "FFMPEG_EXPECTED_SHA256=${ffmpeg_binary_sha256}" \
+  --env "FFMPEG_EXPECTED_CONFIGURATION_SHA256=${ffmpeg_configuration_sha256}" \
   --publish 127.0.0.1::8000 \
   "${image_ref}" >/dev/null
 

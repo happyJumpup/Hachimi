@@ -72,7 +72,7 @@ CloudBase 目标环境已实测成功的默认路径是源码包构建。发布�
 
 GHCR 不可变 digest 路线保留为可选供应链方案，但目标 CloudBase 环境此前拉取失败。在同一目标环境完成真实拉取、启动和回滚演练前，不得把 `--imageUrl` 标为生产可用，也不得替换上述源码包默认路径。仓库 `.dockerignore` 仍排除 Git、环境文件、媒体、测试产物、依赖目录和文档。
 
-Docker 多阶段构建从 FFmpeg 8.1.2 官方签名源码生成共享、LGPL-only 运行时。镜像内只允许 `/opt/trainpal/ffmpeg/bin/ffmpeg` 一份二进制，`/ready` 和镜像审计都校验同目录构建收据，并拒绝 GPL、nonfree、版本、配置或哈希不符。
+Docker 多阶段构建固定全部基础镜像 digest，并从 FFmpeg 8.1.2 官方签名源码生成共享、LGPL-only 运行时。镜像内只允许 `/opt/trainpal/ffmpeg/bin/ffmpeg` 一份二进制，`/ready`、五分钟 Canary 收据和镜像审计都绑定同目录构建收据，并拒绝 GPL、nonfree、版本、配置或哈希不符；发布记录仍须保存 CloudBase Build ID。
 
 本地门槛：
 
@@ -88,7 +88,7 @@ docker build `
 
 随后在 Bash 环境执行 `deploy/verify-competition-image.sh trainpal-five-minute:local '<40-char-commit>'`。通过项包括逐层无秘密/媒体扫描、镜像构建 commit 指纹、唯一 FFmpeg 与收据、非 root 用户、容器启动、`/health`、SPA 根路由和 history fallback。
 
-`LOCAL_ANALYSIS_MAX_SECONDS` 是代码和私有验收上限；`GET /api/v1/capabilities` 只返回 `PUBLISHED_ANALYSIS_MAX_SECONDS`。私有评委会话可以在公开值保持 60 秒时验收五分钟，避免“必须先公开 300 才能验证 300”的循环依赖。最终发布 300 秒时，向 `PROVIDER_CONFORMANCE_REPORT_JSON` 注入 runner 生成的脱敏聚合报告，向 `PROVIDER_CANARY_RECEIPT_JSON` 注入绑定该报告 SHA-256、主备模型、Prompt/ASR context 哈希、非秘密 Provider 配置摘要、延迟指标和 Canary 结果的收据，并让 `DEPLOYMENT_COMMIT_SHA` 等于被验收镜像的完整提交 SHA；任一项不匹配时 `/ready` 失败关闭。
+`LOCAL_ANALYSIS_MAX_SECONDS` 是代码和私有验收上限；`GET /api/v1/capabilities` 只返回 `PUBLISHED_ANALYSIS_MAX_SECONDS`。私有评委会话可以在公开值保持 60 秒时验收五分钟，避免“必须先公开 300 才能验证 300”的循环依赖。最终发布 300 秒时，向 `PROVIDER_CONFORMANCE_REPORT_JSON` 注入 runner 生成的脱敏聚合报告，向 `PROVIDER_CANARY_RECEIPT_JSON` 注入 7 天内生成且绑定该报告 SHA-256、EvidenceReconciler 版本、主备模型、Prompt/ASR context 哈希、非秘密 Provider 配置摘要、FFmpeg 二进制／配置哈希、延迟指标和 Canary 结果的收据，并让 `DEPLOYMENT_COMMIT_SHA` 等于被验收镜像的完整提交 SHA；任一项不匹配时 `/ready` 失败关闭。
 
 基础计划代表尚未选型的版本 B，因此备用路线和三个条件秘密保持关闭。生产同构评测必须先选出一个通过门槛的 Seed 主路线，并证明 Qwen 通过跨厂商备用门槛；若 Qwen 只适合成为主路线或没有 Seed 路线合格，本架构不得发布版本 C，需另立传输决策。版本 C 才把 `VISUAL_FALLBACK_ENABLED` 改为 `true` 并注入条件秘密。
 

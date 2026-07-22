@@ -120,12 +120,33 @@ try {
         throw 'forbidden release content is present'
     }
 
+    $ffmpegReceiptFields = @(
+        Invoke-DockerChecked @(
+            'run', '--rm',
+            '--entrypoint', '/workspace/services/analysis-api/.venv/bin/python',
+            $ImageRef,
+            '-c',
+            "import json; payload = json.load(open('/opt/trainpal/ffmpeg/receipt.json', encoding='utf-8')); print(payload['binary_sha256']); print(payload['configuration_sha256'])"
+        )
+    )
+    if (
+        $ffmpegReceiptFields.Count -ne 2 -or
+        $ffmpegReceiptFields[0] -notmatch '^[0-9a-f]{64}$' -or
+        $ffmpegReceiptFields[1] -notmatch '^[0-9a-f]{64}$'
+    ) {
+        throw 'registered FFmpeg build receipt contains invalid hashes'
+    }
+    $ffmpegBinarySha256 = $ffmpegReceiptFields[0]
+    $ffmpegConfigurationSha256 = $ffmpegReceiptFields[1]
+
     Invoke-DockerChecked @(
         'run', '--rm',
         '--entrypoint', '/workspace/services/analysis-api/.venv/bin/python',
         $ImageRef,
         '-c',
-        "from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path('/opt/trainpal/ffmpeg/bin/ffmpeg'), Path('/opt/trainpal/ffmpeg/receipt.json')) else 1)"
+        "import sys; from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path('/opt/trainpal/ffmpeg/bin/ffmpeg'), Path('/opt/trainpal/ffmpeg/receipt.json'), sys.argv[1], sys.argv[2]) else 1)",
+        $ffmpegBinarySha256,
+        $ffmpegConfigurationSha256
     ) | Out-Null
 
     Invoke-DockerChecked @(
@@ -145,6 +166,8 @@ try {
         '--env', 'TRUSTED_PROXY_CIDRS=',
         '--env', 'PUBLIC_ANALYSIS_CONCURRENCY=0',
         '--env', 'JUDGE_ANALYSIS_CONCURRENCY=3',
+        '--env', "FFMPEG_EXPECTED_SHA256=$ffmpegBinarySha256",
+        '--env', "FFMPEG_EXPECTED_CONFIGURATION_SHA256=$ffmpegConfigurationSha256",
         '--publish', '127.0.0.1::8000',
         $ImageRef
     ) | Out-Null

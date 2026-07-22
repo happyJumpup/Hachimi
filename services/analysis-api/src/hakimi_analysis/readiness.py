@@ -105,7 +105,12 @@ def validate_ffmpeg_runtime(
     )
 
 
-def validate_ffmpeg_build_receipt(executable: Path, receipt_path: Path) -> bool:
+def validate_ffmpeg_build_receipt(
+    executable: Path,
+    receipt_path: Path,
+    expected_binary_sha256: str,
+    expected_configuration_sha256: str,
+) -> bool:
     try:
         resolved_executable = executable.resolve(strict=True)
         resolved_receipt = receipt_path.resolve(strict=True)
@@ -129,6 +134,11 @@ def validate_ffmpeg_build_receipt(executable: Path, receipt_path: Path) -> bool:
     if not all(
         isinstance(value, str)
         for value in (binary_sha256, configuration_line, configuration_sha256)
+    ):
+        return False
+    if (
+        binary_sha256 != expected_binary_sha256
+        or configuration_sha256 != expected_configuration_sha256
     ):
         return False
     if not str(configuration_line).startswith(FFMPEG_CONFIGURATION_PREFIX):
@@ -158,7 +168,7 @@ class ProductionReadiness:
         temp_root: Path,
         contracts_root: Path,
         duration_probe: Callable[[Path], float] | None = None,
-        ffmpeg_receipt_probe: Callable[[Path, Path], bool] | None = None,
+        ffmpeg_receipt_probe: Callable[[Path, Path, str, str], bool] | None = None,
         fallback_probe: Callable[[], bool] | None = None,
         build_commit_probe: Callable[[], str | None] | None = None,
         cache_seconds: float = 5,
@@ -245,10 +255,21 @@ class ProductionReadiness:
             return "source_manifest_invalid"
         ffmpeg_executable = self._settings.imageio_ffmpeg_exe
         ffmpeg_receipt = self._settings.ffmpeg_build_receipt_path
+        ffmpeg_binary_sha256 = self._settings.ffmpeg_expected_sha256
+        ffmpeg_configuration_sha256 = (
+            self._settings.ffmpeg_expected_configuration_sha256
+        )
         receipt_valid = (
             ffmpeg_executable is not None
             and ffmpeg_receipt is not None
-            and self._ffmpeg_receipt_probe(ffmpeg_executable, ffmpeg_receipt)
+            and ffmpeg_binary_sha256 is not None
+            and ffmpeg_configuration_sha256 is not None
+            and self._ffmpeg_receipt_probe(
+                ffmpeg_executable,
+                ffmpeg_receipt,
+                ffmpeg_binary_sha256,
+                ffmpeg_configuration_sha256,
+            )
         )
         if not receipt_valid:
             return "media_processor_unavailable"
@@ -265,6 +286,15 @@ class ProductionReadiness:
             )
         except (OSError, PromptContractError):
             return "prompt_contract_invalid"
+        if self._settings.visual_fallback_enabled:
+            qualified_report = validate_provider_conformance_report_json(
+                self._settings.provider_conformance_report_json.strip(),
+                expected_prompt_sha256=contracts.visual.prompt_sha256,
+                expected_primary_model_id=self._settings.ark_visual_model_id,
+                expected_fallback_model_id=self._settings.qwen_visual_model_id,
+            )
+            if qualified_report is None:
+                return "visual_fallback_configuration_invalid"
         if (
             self._settings.judge_access_code is None
             or self._settings.access_cookie_secret is None
@@ -334,6 +364,12 @@ class ProductionReadiness:
         )
         if conformance_sha256 is None:
             return False
+        ffmpeg_binary_sha256 = self._settings.ffmpeg_expected_sha256
+        ffmpeg_configuration_sha256 = (
+            self._settings.ffmpeg_expected_configuration_sha256
+        )
+        if ffmpeg_binary_sha256 is None or ffmpeg_configuration_sha256 is None:
+            return False
         provider_config_digest = provider_config_sha256(
             ark_base_url=self._settings.ark_base_url,
             ark_speech_model_id=self._settings.ark_model_id,
@@ -362,6 +398,8 @@ class ProductionReadiness:
                 expected_asr_context_sha256=contracts.asr_context.request_sha256,
                 expected_asr_hotwords_sha256=contracts.asr_context.content_sha256,
                 expected_provider_config_sha256=provider_config_digest,
+                expected_ffmpeg_binary_sha256=ffmpeg_binary_sha256,
+                expected_ffmpeg_configuration_sha256=ffmpeg_configuration_sha256,
             )
             if receipt_json
             else validate_five_minute_canary_receipt(
@@ -375,6 +413,8 @@ class ProductionReadiness:
                 expected_asr_context_sha256=contracts.asr_context.request_sha256,
                 expected_asr_hotwords_sha256=contracts.asr_context.content_sha256,
                 expected_provider_config_sha256=provider_config_digest,
+                expected_ffmpeg_binary_sha256=ffmpeg_binary_sha256,
+                expected_ffmpeg_configuration_sha256=ffmpeg_configuration_sha256,
             )
         )
 

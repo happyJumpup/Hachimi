@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from uuid import uuid4
 
 from hakimi_analysis.fusion import (
+    EVIDENCE_RECONCILER_VERSION,
     CandidateFusionResult,
     action_name_can_join_group,
     fuse_candidate_evidence,
@@ -275,7 +276,7 @@ class OrchestratedAnalysisPipeline:
             await emit(
                 RunStage.FUSING_CANDIDATES,
                 "stage.changed",
-                {"reconciler_version": "deterministic-v1"},
+                {"reconciler_version": EVIDENCE_RECONCILER_VERSION},
             )
             reconciliation = self._candidate_reconciler(
                 source.id, speech_signals, visual_segments
@@ -339,6 +340,15 @@ class OrchestratedAnalysisPipeline:
         successful_windows: list[AnalysisWindow] = []
         failures: list[tuple[AnalysisWindow, ProviderError]] = []
         route_state = self._visual_router.new_run_state()
+        await emit(
+            RunStage.ANALYZING_EVIDENCE,
+            "branch.started",
+            {
+                "branch": "visual",
+                "contract_version": self._contracts.visual.contract_version,
+                "chunk_count": len(windows),
+            },
+        )
         for index, window in enumerate(windows, start=1):
             remaining_seconds = deadline - self._clock()
             if remaining_seconds < self._visual_chunk_timeout_seconds:
@@ -407,6 +417,18 @@ class OrchestratedAnalysisPipeline:
                         "evidence_count": len(result.segments),
                     },
                 )
+        if successful_windows:
+            await emit(
+                RunStage.ANALYZING_EVIDENCE,
+                "branch.completed",
+                {
+                    "branch": "visual",
+                    "chunk_count": len(windows),
+                    "successful_chunk_count": len(successful_windows),
+                    "processed_seconds": _covered_seconds(successful_windows),
+                    "evidence_count": len(segments),
+                },
+            )
         return VisualChunkResults(
             segments=segments,
             successful_windows=successful_windows,

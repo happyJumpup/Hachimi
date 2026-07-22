@@ -166,9 +166,25 @@ def test_ffmpeg_build_receipt_binds_official_source_signature_config_and_binary(
         ),
     )
 
-    assert validate_ffmpeg_build_receipt(executable, receipt)
+    assert validate_ffmpeg_build_receipt(
+        executable,
+        receipt,
+        sha256(b"official-source-build"),
+        sha256(configuration_line),
+    )
+    assert not validate_ffmpeg_build_receipt(
+        executable,
+        receipt,
+        "0" * 64,
+        sha256(configuration_line),
+    )
 
     payload = json.loads(receipt.read_text(encoding="utf-8"))
     payload["signing_key_fingerprint"] = "0" * 40
     receipt.write_text(json.dumps(payload), encoding="utf-8")
-    assert not validate_ffmpeg_build_receipt(executable, receipt)
+    assert not validate_ffmpeg_build_receipt(
+        executable,
+        receipt,
+        sha256(b"official-source-build"),
+        sha256(configuration_line),
+    )

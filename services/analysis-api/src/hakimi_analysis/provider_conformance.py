@@ -231,6 +231,7 @@ def build_sanitized_report(
         "schema_version": 1,
         "manifest_version": manifest.manifest_version,
         "prompt_contract_sha256": manifest.prompt_contract_sha256,
+        "evidence_reconciler_version": EvidenceReconciler.version,
         "routes": summaries,
         "selection": research_selection,
         "seed_primary_selection": seed_selection,

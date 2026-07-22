@@ -19,6 +19,9 @@ from hakimi_analysis.models import (
     AnalysisCandidate,
     AnalysisWarning,
     CandidateParameters,
+    CoverageGap,
+    CoverageGapReason,
+    CoverageStatus,
     EvidenceSpan,
     EvidenceType,
     RunStage,
@@ -40,6 +43,7 @@ class SuccessfulPipelineOptions(TypedDict, total=False):
     missing_branch: str | None
     declare_missing_warning: bool
     delay_seconds: float
+    partial_coverage: bool
 
 
 def write_smoke_manifest(tmp_path: Path, payload: dict[str, object]) -> Path:
@@ -177,6 +181,7 @@ class SuccessfulCloudPipeline:
         declare_missing_warning: bool = True,
         delete_file_id_override: str | None = None,
         delay_seconds: float = 0,
+        partial_coverage: bool = False,
     ) -> None:
         self._http_client = http_client
         self._calls = calls
@@ -192,6 +197,7 @@ class SuccessfulCloudPipeline:
         self._declare_missing_warning = declare_missing_warning
 
         self._delay_seconds = delay_seconds
+        self._partial_coverage = partial_coverage
 
     async def analyze(
         self,
@@ -270,6 +276,24 @@ class SuccessfulCloudPipeline:
                 )
             ],
             warnings=warnings,
+            coverage_status=(
+                CoverageStatus.PARTIAL
+                if self._partial_coverage
+                else CoverageStatus.COMPLETE
+            ),
+            coverage_gaps=(
+                [
+                    CoverageGap(
+                        start_seconds=10,
+                        end_seconds=50,
+                        reason=CoverageGapReason.PROVIDER_ERROR,
+                        retryable=True,
+                    )
+                ]
+                if self._partial_coverage
+                else []
+            ),
+            processed_seconds=14 if self._partial_coverage else 54,
         )
 
 
@@ -487,6 +511,19 @@ async def test_cloud_smoke_rejects_latency_above_target(tmp_path: Path) -> None:
     assert isinstance(safe_observations, dict)
     assert safe_observations["target_max_seconds_per_video_minute"] == 0.001
     assert safe_observations["seconds_per_video_minute"] > 0.001
+
+
+@pytest.mark.asyncio
+async def test_cloud_smoke_rejects_partial_coverage_as_a_pass(tmp_path: Path) -> None:
+    with pytest.raises(SmokeFailure) as failure:
+        await run_single_source_fixture(tmp_path, partial_coverage=True)
+
+    assert failure.value.code == "incomplete_coverage"
+    assert failure_payload(failure.value)["safe_observations"] == {
+        "coverage_status": "partial",
+        "coverage_gap_count": 1,
+        "processed_seconds": 14.0,
+    }
 
 
 @pytest.mark.asyncio

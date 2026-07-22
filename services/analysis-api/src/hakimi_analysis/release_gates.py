@@ -2,9 +2,11 @@ import hashlib
 import json
 import math
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from hakimi_analysis.fusion import EVIDENCE_RECONCILER_VERSION
 
 SEED_MINI_VISUAL_MODEL_ID = "doubao-seed-2-0-mini-260428"
 SEED_LITE_VISUAL_MODEL_ID = "doubao-seed-2-0-lite-260428"
@@ -42,6 +44,8 @@ _CANARY_KEYS = {
     "asr_context_sha256",
     "asr_hotwords_sha256",
     "provider_config_sha256",
+    "ffmpeg_binary_sha256",
+    "ffmpeg_configuration_sha256",
 }
 
 _BUILD_METADATA_KEYS = {"schema_version", "commit_sha"}
@@ -78,6 +82,8 @@ def validate_five_minute_canary_receipt(
     expected_asr_context_sha256: str,
     expected_asr_hotwords_sha256: str,
     expected_provider_config_sha256: str,
+    expected_ffmpeg_binary_sha256: str,
+    expected_ffmpeg_configuration_sha256: str,
 ) -> bool:
     if path is None:
         return False
@@ -96,6 +102,8 @@ def validate_five_minute_canary_receipt(
         expected_asr_context_sha256=expected_asr_context_sha256,
         expected_asr_hotwords_sha256=expected_asr_hotwords_sha256,
         expected_provider_config_sha256=expected_provider_config_sha256,
+        expected_ffmpeg_binary_sha256=expected_ffmpeg_binary_sha256,
+        expected_ffmpeg_configuration_sha256=expected_ffmpeg_configuration_sha256,
     )
 
 
@@ -111,6 +119,8 @@ def validate_five_minute_canary_receipt_json(
     expected_asr_context_sha256: str,
     expected_asr_hotwords_sha256: str,
     expected_provider_config_sha256: str,
+    expected_ffmpeg_binary_sha256: str,
+    expected_ffmpeg_configuration_sha256: str,
 ) -> bool:
     if (
         re.fullmatch(r"[0-9a-f]{40}", expected_commit_sha) is None
@@ -123,6 +133,8 @@ def validate_five_minute_canary_receipt_json(
                 expected_asr_context_sha256,
                 expected_asr_hotwords_sha256,
                 expected_provider_config_sha256,
+                expected_ffmpeg_binary_sha256,
+                expected_ffmpeg_configuration_sha256,
             )
         )
     ):
@@ -134,7 +146,12 @@ def validate_five_minute_canary_receipt_json(
         return False
     if not isinstance(raw, dict) or set(raw) != _CANARY_KEYS:
         return False
-    if completed_at.tzinfo is None or completed_at > datetime.now(UTC):
+    now = datetime.now(UTC)
+    if (
+        completed_at.tzinfo is None
+        or completed_at > now
+        or now - completed_at > timedelta(days=7)
+    ):
         return False
     median_seconds = _strict_finite_number(raw["five_minute_median_seconds"])
     max_seconds = _strict_finite_number(raw["five_minute_max_seconds"])
@@ -177,6 +194,9 @@ def validate_five_minute_canary_receipt_json(
         and raw["asr_context_sha256"] == expected_asr_context_sha256
         and raw["asr_hotwords_sha256"] == expected_asr_hotwords_sha256
         and raw["provider_config_sha256"] == expected_provider_config_sha256
+        and raw["ffmpeg_binary_sha256"] == expected_ffmpeg_binary_sha256
+        and raw["ffmpeg_configuration_sha256"]
+        == expected_ffmpeg_configuration_sha256
     )
 
 
@@ -195,6 +215,7 @@ def validate_provider_conformance_report_json(
         "schema_version",
         "manifest_version",
         "prompt_contract_sha256",
+        "evidence_reconciler_version",
         "routes",
         "selection",
         "seed_primary_selection",
@@ -208,6 +229,7 @@ def validate_provider_conformance_report_json(
         or not isinstance(raw["manifest_version"], str)
         or not raw["manifest_version"].strip()
         or raw["prompt_contract_sha256"] != expected_prompt_sha256
+        or raw["evidence_reconciler_version"] != EVIDENCE_RECONCILER_VERSION
         or raw["selection"] != raw["seed_primary_selection"]
         or raw["selection"] not in {"seed-mini", "seed-lite"}
         or raw["qwen_fallback_qualified"] is not True

@@ -34,7 +34,13 @@ try {
         }
         Expand-Archive -LiteralPath $archivePath -DestinationPath $outputPath
     } finally {
-        Remove-Item -LiteralPath $archivePath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $archivePath) {
+            try {
+                Remove-Item -LiteralPath $archivePath -Force -ErrorAction Stop
+            } catch {
+                Write-Warning 'Temporary immutable source archive cleanup failed.'
+            }
+        }
     }
 
     $forbiddenMediaExtensions = @('.mp4', '.mov', '.mkv', '.wav', '.mp3', '.ogg', '.webm')

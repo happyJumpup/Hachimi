@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24.14.1-bookworm-slim AS web-builder
+FROM node:24.14.1-bookworm-slim@sha256:b506e7321f176aae77317f99d67a24b272c1f09f1d10f1761f2773447d8da26c AS web-builder
 
 WORKDIR /workspace
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
@@ -12,9 +12,9 @@ RUN pnpm install --frozen-lockfile --filter @hachimi/web...
 COPY apps/web apps/web
 RUN pnpm --filter @hachimi/web build
 
-FROM ghcr.io/astral-sh/uv:0.11.7 AS uv-runtime
+FROM ghcr.io/astral-sh/uv:0.11.7@sha256:240fb85ab0f263ef12f492d8476aa3a2e4e1e333f7d67fbdd923d00a506a516a AS uv-runtime
 
-FROM debian:bookworm-slim AS ffmpeg-builder
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS ffmpeg-builder
 
 ARG FFMPEG_VERSION=8.1.2
 ARG FFMPEG_SIGNING_FINGERPRINT=FCF986EA15E6E293A5644F10B4322F04D67658D8
@@ -87,7 +87,7 @@ RUN set -eu; \
         > /opt/trainpal/ffmpeg/receipt.json; \
     rm -f /src/ffmpeg.tar.xz
 
-FROM python:3.12-slim-bookworm AS api-builder
+FROM python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b AS api-builder
 
 COPY --from=uv-runtime /uv /uvx /bin/
 
@@ -100,7 +100,7 @@ RUN uv sync --project services/analysis-api --frozen --no-dev \
     && test -z "$(find /workspace/services/analysis-api/.venv/lib -type f -path '*/imageio_ffmpeg/binaries/ffmpeg-*' -print -quit)" \
     && rm -rf /root/.cache/uv
 
-FROM python:3.12-slim-bookworm AS app-runtime
+FROM python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b AS app-runtime
 
 ARG TRAINPAL_BUILD_COMMIT_SHA=""
 

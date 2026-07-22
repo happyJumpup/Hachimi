@@ -1,4 +1,7 @@
+import asyncio
 import json
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +73,18 @@ class PublicCosClient(FakeCosClient):
                 ]
             }
         }
+
+
+class SlowUploadCosClient(FakeCosClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.upload_started = threading.Event()
+
+    def put_object(self, **kwargs: Any) -> None:
+        super().put_object(**kwargs)
+        self.upload_started.set()
+        time.sleep(0.05)
+
 
 def make_store(
     client: FakeCosClient,
@@ -209,6 +224,31 @@ async def test_cos_cleanup_preserves_the_primary_provider_error(tmp_path: Path) 
             raise ProviderSchemaError("primary schema error")
 
     assert gate.available is False
+
+
+@pytest.mark.asyncio
+async def test_cos_cancellation_during_upload_still_deletes_the_random_object(
+    tmp_path: Path,
+) -> None:
+    chunk = tmp_path / "chunk.mp4"
+    chunk.write_bytes(b"silent-video")
+    client = SlowUploadCosClient()
+    gate = BackupSafetyGate()
+    store = make_store(client, gate)
+
+    async def consume_url() -> None:
+        async with store.signed_read_url(chunk):
+            raise AssertionError("cancelled upload must not yield a signed URL")
+
+    task = asyncio.create_task(consume_url())
+    assert await asyncio.to_thread(client.upload_started.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(client.uploaded) == 1
+    assert client.deleted == [client.uploaded[0]["Key"]]
+    assert gate.available is True
 
 
 def test_cos_readiness_requires_private_acl_encryption_and_lifecycle() -> None:

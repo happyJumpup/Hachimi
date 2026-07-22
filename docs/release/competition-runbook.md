@@ -105,7 +105,7 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `LOCAL_ANALYSIS_MAX_SECONDS` | 代码和私有验收上限 `300`，不直接对用户公布 |
 | `PUBLISHED_ANALYSIS_MAX_SECONDS` | 默认 `60`；五分钟 Canary 收据与当前部署 commit 匹配后才设为 `300` |
 | `PROVIDER_CONFORMANCE_REPORT_JSON` | 发布 300 秒时注入真实 runner 的脱敏聚合报告；Prompt 哈希、主备模型、24 个计分单元和质量门槛必须与部署配置一致 |
-| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入绑定 conformance 报告哈希、主备模型、Prompt/ASR context 哈希、非秘密 Provider 配置摘要、延迟指标和 Canary 结果的脱敏收据，并绑定完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH` |
+| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入 7 天内生成的脱敏收据，绑定 conformance 报告哈希、主备模型、Prompt/ASR context 哈希、非秘密 Provider 配置摘要、FFmpeg 二进制／配置哈希、延迟指标、Canary 结果与完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH` |
 | `TRAINPAL_BUILD_COMMIT_SHA` | 可选镜像构建路径的 Docker 参数，GitHub Actions 会自动注入。默认 CloudBase 源码包路径则由 `package-source.ps1` 写入 `.trainpal-build-metadata.json`。镜像内指纹、`DEPLOYMENT_COMMIT_SHA` 和 Canary receipt 三者不一致时，300 秒 fail-closed |
 | `LOCAL_UPLOAD_MAX_BYTES` | 对外上传与 `/capabilities` 固定 `19922944`（19 MiB），低于 CloudBase 公网 20 MB 请求 envelope |
 | `ANALYSIS_MAX_SOURCE_BYTES` | Provider 内部与受控来源的代码上限 `268435456`（256 MiB），不得用它放宽公网上传 |
@@ -162,7 +162,7 @@ FFmpeg 不进入 Git；部署镜像在构建阶段从官方签名源码生成并
 
 1. 在干净检出上安装锁定依赖并生成 API 类型，确认生成物无意外 diff。
 2. 运行 `pnpm check`、端到端测试和 CloudBase 基础预检。
-3. 构建同源多阶段镜像；运行镜像验证，确认非 root、只读运行、SPA history、API 404、健康接口和禁入文件。
+3. 使用 Dockerfile 固定的基础镜像 digest 构建同源多阶段镜像；运行镜像验证，确认非 root、只读运行、SPA history、API 404、健康接口和禁入文件。
 4. 审计镜像最终文件系统及各层，确认没有 `.env*`、媒体、音频、帧、转录、模型响应、Trace、源映射、云 Key、本机路径，以及第二份或未登记的 FFmpeg 二进制；只允许构建收据绑定的 `/opt/trainpal/ffmpeg/bin/ffmpeg`。
 5. 默认 CloudBase 源码包路线记录完整 commit SHA、平台 Build ID 和兼容配置快照。只有目标环境真实验证 GHCR 拉取后，才额外记录 registry digest；不能以 `latest` 作为发布或回滚依据。
 6. 保留至少一个上一版不可变源码 commit/构建版本及兼容的非秘密配置快照。

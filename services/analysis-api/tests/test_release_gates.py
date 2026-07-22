@@ -1,6 +1,7 @@
 import hashlib
 import json
 import math
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ SPEECH_PROMPT_SHA256 = "d" * 64
 ASR_CONTEXT_SHA256 = "e" * 64
 ASR_HOTWORDS_SHA256 = "f" * 64
 PROVIDER_CONFIG_SHA256 = "1" * 64
+FFMPEG_BINARY_SHA256 = "2" * 64
+FFMPEG_CONFIGURATION_SHA256 = "3" * 64
 
 
 def receipt_expectations() -> dict[str, str]:
@@ -30,6 +33,8 @@ def receipt_expectations() -> dict[str, str]:
         "expected_asr_context_sha256": ASR_CONTEXT_SHA256,
         "expected_asr_hotwords_sha256": ASR_HOTWORDS_SHA256,
         "expected_provider_config_sha256": PROVIDER_CONFIG_SHA256,
+        "expected_ffmpeg_binary_sha256": FFMPEG_BINARY_SHA256,
+        "expected_ffmpeg_configuration_sha256": FFMPEG_CONFIGURATION_SHA256,
     }
 
 
@@ -56,6 +61,7 @@ def conformance_report_json() -> str:
             "schema_version": 1,
             "manifest_version": "provider-conformance-v1",
             "prompt_contract_sha256": "b" * 64,
+            "evidence_reconciler_version": "deterministic-v2",
             "routes": [
                 route("seed-mini", PRIMARY_MODEL),
                 route("seed-lite", SEED_LITE_MODEL),
@@ -77,7 +83,7 @@ def write_receipt(path: Path, commit_sha: str, conformance_sha256: str) -> None:
                 "schema_version": 1,
                 "profile_version": "five-minute-production-v1",
                 "commit_sha": commit_sha,
-                "completed_at": "2026-07-22T01:00:00Z",
+                "completed_at": datetime.now(UTC).isoformat(),
                 "private_smoke_passed": True,
                 "qwen_preflight_passed": True,
                 "full_pipeline_quality_passed": True,
@@ -104,6 +110,8 @@ def write_receipt(path: Path, commit_sha: str, conformance_sha256: str) -> None:
                 "asr_context_sha256": ASR_CONTEXT_SHA256,
                 "asr_hotwords_sha256": ASR_HOTWORDS_SHA256,
                 "provider_config_sha256": PROVIDER_CONFIG_SHA256,
+                "ffmpeg_binary_sha256": FFMPEG_BINARY_SHA256,
+                "ffmpeg_configuration_sha256": FFMPEG_CONFIGURATION_SHA256,
             }
         ),
         encoding="utf-8",
@@ -228,6 +236,24 @@ def test_canary_receipt_rejects_median_above_observed_max(tmp_path: Path) -> Non
     )
 
 
+def test_canary_receipt_expires_after_seven_days(tmp_path: Path) -> None:
+    receipt = tmp_path / "provider-canary.json"
+    commit_sha = "a" * 40
+    report_sha256 = "c" * 64
+    write_receipt(receipt, commit_sha, report_sha256)
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    payload["completed_at"] = (datetime.now(UTC) - timedelta(days=8)).isoformat()
+
+    assert not validate_five_minute_canary_receipt_json(
+        json.dumps(payload),
+        expected_commit_sha=commit_sha,
+        expected_primary_model_id=PRIMARY_MODEL,
+        expected_fallback_model_id=FALLBACK_MODEL,
+        expected_conformance_report_sha256=report_sha256,
+        **receipt_expectations(),
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -239,6 +265,8 @@ def test_canary_receipt_rejects_median_above_observed_max(tmp_path: Path) -> Non
         ("speech_prompt_sha256", "0" * 64),
         ("asr_context_sha256", "0" * 64),
         ("asr_hotwords_sha256", "0" * 64),
+        ("ffmpeg_binary_sha256", "0" * 64),
+        ("ffmpeg_configuration_sha256", "0" * 64),
     ],
 )
 def test_canary_receipt_binds_the_complete_frozen_provider_configuration(

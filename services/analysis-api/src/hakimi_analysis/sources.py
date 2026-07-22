@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from hakimi_analysis.models import SourceSummary
 
 MAX_ANALYZABLE_SOURCE_DURATION_SECONDS = 300.0
+MAX_ANALYZABLE_SOURCE_BYTES = 256 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +97,13 @@ def load_source_manifest(manifest_path: Path) -> _SourceManifest:
 
 
 class SourceCatalog:
-    def __init__(self, sources: list[VideoSource], *, manifest_backed: bool = False) -> None:
+    def __init__(
+        self,
+        sources: list[VideoSource],
+        *,
+        manifest_backed: bool = False,
+        max_source_bytes: int | None = None,
+    ) -> None:
         if len({source.id for source in sources}) != len(sources):
             raise SourceManifestError("source ids must be unique")
         if any(
@@ -107,6 +114,7 @@ class SourceCatalog:
             raise SourceManifestError("source duration exceeds the analysis boundary")
         self._sources = {source.id: source for source in sources}
         self._manifest_backed = manifest_backed
+        self._max_source_bytes = max_source_bytes
 
     @classmethod
     def from_manifest(
@@ -116,7 +124,10 @@ class SourceCatalog:
         media_root: Path,
         public_media_base_url: str,
         duration_probe: Callable[[Path], float],
+        max_source_bytes: int = MAX_ANALYZABLE_SOURCE_BYTES,
     ) -> "SourceCatalog":
+        if max_source_bytes < 1:
+            raise SourceManifestError("source byte boundary must be positive")
         manifest = load_source_manifest(manifest_path)
 
         parsed_base = urlparse(public_media_base_url)
@@ -143,6 +154,8 @@ class SourceCatalog:
             if not source_path.is_file():
                 raise SourceManifestError("source media file is unavailable")
             try:
+                if source_path.stat().st_size > max_source_bytes:
+                    raise SourceManifestError("source media exceeds the byte boundary")
                 digest = _sha256(source_path)
             except OSError as error:
                 raise SourceManifestError("source media hash cannot be read") from error
@@ -178,15 +191,25 @@ class SourceCatalog:
                     expected_sha256=item.sha256,
                 )
             )
-        return cls(sources, manifest_backed=True)
+        return cls(
+            sources,
+            manifest_backed=True,
+            max_source_bytes=max_source_bytes,
+        )
 
     def list(self) -> list[SourceSummary]:
         return [source.summary() for source in self._sources.values()]
 
     def get(self, source_id: str) -> VideoSource:
         try:
-            return self._sources[source_id]
-        except KeyError as error:
+            source = self._sources[source_id]
+            if (
+                self._max_source_bytes is not None
+                and source.path.stat().st_size > self._max_source_bytes
+            ):
+                raise KeyError(source_id)
+            return source
+        except (KeyError, OSError) as error:
             raise KeyError(f"unknown source_id: {source_id}") from error
 
     @property
@@ -200,6 +223,11 @@ class SourceCatalog:
             if source.expected_sha256 is None or not source.path.is_file():
                 return False
             try:
+                if (
+                    self._max_source_bytes is not None
+                    and source.path.stat().st_size > self._max_source_bytes
+                ):
+                    return False
                 if _sha256(source.path) != source.expected_sha256:
                     return False
                 actual_duration = duration_probe(source.path)

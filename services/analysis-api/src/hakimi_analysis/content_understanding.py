@@ -9,7 +9,11 @@ from typing import Any, Literal, Protocol
 
 from pydantic import Field, model_validator
 
-from hakimi_analysis.fusion import CandidateFusionResult, fuse_candidate_evidence
+from hakimi_analysis.fusion import (
+    EVIDENCE_RECONCILER_VERSION,
+    CandidateFusionResult,
+    fuse_candidate_evidence,
+)
 from hakimi_analysis.media import (
     AnalysisWindow,
     PreparedMedia,
@@ -212,7 +216,7 @@ class ContentUnderstandingResult(StrictModel):
 
 
 class EvidenceReconciler:
-    version = "deterministic-v1"
+    version = EVIDENCE_RECONCILER_VERSION
 
     def reconcile_candidates(
         self,

@@ -18,7 +18,7 @@ from pydantic import (
 )
 
 from hakimi_analysis.bootstrap import build_catalog, build_pipeline
-from hakimi_analysis.models import AnalysisCandidate, EvidenceType, RunStage
+from hakimi_analysis.models import AnalysisCandidate, CoverageStatus, EvidenceType, RunStage
 from hakimi_analysis.pipeline import AnalysisPipeline, PipelineFailure, PipelineOutput
 from hakimi_analysis.providers.base import ProviderError
 from hakimi_analysis.settings import PROJECT_ROOT, Settings
@@ -64,7 +64,10 @@ _SAFE_OBSERVATION_KEYS = {
     "drag_curl_count",
     "seconds_per_video_minute",
     "target_max_seconds_per_video_minute",
+    "coverage_gap_count",
+    "processed_seconds",
 }
+_SAFE_TEXT_OBSERVATION_KEYS = {"coverage_status"}
 
 
 def _safe_diagnostic(value: object) -> str | None:
@@ -96,11 +99,18 @@ def failure_payload(error: SmokeFailure) -> dict[str, object]:
             }
             for call in error.provider_calls
         ]
-    safe_observations = {
+    safe_observations: dict[str, object] = {
         key: value
         for key, value in error.observations.items()
         if key in _SAFE_OBSERVATION_KEYS and isinstance(value, (int, float))
     }
+    safe_observations.update(
+        {
+            key: _safe_diagnostic(value) or "redacted"
+            for key, value in error.observations.items()
+            if key in _SAFE_TEXT_OBSERVATION_KEYS
+        }
+    )
     if safe_observations:
         payload["safe_observations"] = safe_observations
     return payload
@@ -403,6 +413,15 @@ def _validate_checkpoint_result(
     checkpoint: SmokeCheckpoint,
     recorder: EventRecorder,
 ) -> None:
+    if output.coverage_status != CoverageStatus.COMPLETE or output.coverage_gaps:
+        raise SmokeFailure(
+            "incomplete_coverage",
+            observations={
+                "coverage_status": output.coverage_status.value,
+                "coverage_gap_count": len(output.coverage_gaps),
+                "processed_seconds": output.processed_seconds,
+            },
+        )
     candidates = output.candidates
     completed_branches = recorder.completed_branches()
     if not completed_branches:
@@ -532,6 +551,8 @@ async def _run_source(
         "elapsed_seconds": round(elapsed_seconds, 2),
         "seconds_per_video_minute": round(seconds_per_video_minute, 2),
         "performance_target_met": True,
+        "coverage_status": result.coverage_status.value,
+        "coverage_gap_count": len(result.coverage_gaps),
         "target_max_seconds_per_video_minute": target_max,
         "branch_outcomes": {
             branch: "completed" if branch in completed_branches else "unavailable"

@@ -115,6 +115,35 @@ def test_manifest_rejects_media_longer_than_full_source_boundary(tmp_path: Path)
         )
 
 
+def test_manifest_and_runtime_reject_media_above_the_provider_byte_boundary(
+    tmp_path: Path,
+) -> None:
+    manifest_path = write_manifest(tmp_path)
+
+    with pytest.raises(SourceManifestError, match="byte boundary"):
+        SourceCatalog.from_manifest(
+            manifest_path=manifest_path,
+            media_root=tmp_path / "media",
+            public_media_base_url="https://media.example.com/hachimi/",
+            duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 54.4,
+            max_source_bytes=4,
+        )
+
+    catalog = SourceCatalog.from_manifest(
+        manifest_path=manifest_path,
+        media_root=tmp_path / "media",
+        public_media_base_url="https://media.example.com/hachimi/",
+        duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 54.4,
+        max_source_bytes=32,
+    )
+    media_path = tmp_path / "media" / "competition" / "arm-01.mp4"
+    media_path.write_bytes(b"x" * 33)
+
+    with pytest.raises(KeyError):
+        catalog.get("arm-01")
+    assert catalog.validate_media(lambda _: 54.4) is False
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "manifest_configuration",

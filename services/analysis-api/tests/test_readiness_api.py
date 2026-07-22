@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,44 @@ from hakimi_analysis.readiness import ProductionReadiness
 from hakimi_analysis.release_gates import provider_config_sha256
 from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog, VideoSource
+
+
+def qualified_conformance_report(visual_prompt_sha256: str) -> str:
+    def route(name: str, model_id: str) -> dict[str, object]:
+        return {
+            "route": name,
+            "model_id": model_id,
+            "units": 24,
+            "complete": True,
+            "success_rate": 1.0,
+            "precision": 0.95,
+            "recall": 0.9,
+            "f1_tiou_05": 0.9,
+            "time_hit_rate": 0.9,
+            "median_seconds_per_video_minute": 10.0,
+            "schema_or_clock_violations": 0,
+            "cost_status": "not-measured",
+            "passes_quality_gate": True,
+        }
+
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "manifest_version": "provider-conformance-v1",
+            "prompt_contract_sha256": visual_prompt_sha256,
+            "evidence_reconciler_version": "deterministic-v2",
+            "routes": [
+                route("seed-mini", "doubao-seed-2-0-mini-260428"),
+                route("seed-lite", "doubao-seed-2-0-lite-260428"),
+                route("qwen-vl", "qwen3-vl-flash-2026-01-22"),
+            ],
+            "selection": "seed-mini",
+            "seed_primary_selection": "seed-mini",
+            "qwen_fallback_qualified": True,
+            "version_c_decision": "eligible-for-version-c-canary",
+        },
+        separators=(",", ":"),
+    )
 
 
 @pytest.mark.asyncio
@@ -416,6 +455,9 @@ def test_production_ready_rejects_prompt_contract_hash_drift(tmp_path: Path) -> 
 
 
 def test_production_ready_verifies_enabled_qwen_cos_fallback(tmp_path: Path) -> None:
+    visual_prompt_sha256 = hashlib.sha256(
+        b"Inspect the complete continuous silent MP4 chunk."
+    ).hexdigest()
     fallback_settings = {
         "visual_fallback_enabled": True,
         "qwen_api_key": "qwen-key",
@@ -423,6 +465,9 @@ def test_production_ready_verifies_enabled_qwen_cos_fallback(tmp_path: Path) -> 
         "cos_secret_key": "cos-key",
         "cos_region": "ap-guangzhou",
         "cos_bucket": "private-bucket-123",
+        "provider_conformance_report_json": qualified_conformance_report(
+            visual_prompt_sha256
+        ),
     }
     not_ready, _ = configured_readiness(
         tmp_path / "not-ready",
@@ -434,9 +479,18 @@ def test_production_ready_verifies_enabled_qwen_cos_fallback(tmp_path: Path) -> 
         settings_overrides=fallback_settings,
         fallback_probe=lambda: True,
     )
+    missing_quality_gate, _ = configured_readiness(
+        tmp_path / "missing-quality-gate",
+        settings_overrides={
+            **fallback_settings,
+            "provider_conformance_report_json": "",
+        },
+        fallback_probe=lambda: True,
+    )
 
     assert not_ready.check() == "visual_fallback_configuration_invalid"
     assert ready.check() is None
+    assert missing_quality_gate.check() == "visual_fallback_configuration_invalid"
 
 
 def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
@@ -476,6 +530,7 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
             "schema_version": 1,
             "manifest_version": "provider-conformance-v1",
             "prompt_contract_sha256": visual_prompt_sha256,
+            "evidence_reconciler_version": "deterministic-v2",
             "routes": [
                 route("seed-mini", primary_model),
                 route("seed-lite", "doubao-seed-2-0-lite-260428"),
@@ -534,7 +589,7 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
                 "schema_version": 1,
                 "profile_version": "five-minute-production-v1",
                 "commit_sha": commit_sha,
-                "completed_at": "2026-07-22T01:00:00Z",
+                "completed_at": datetime.now(UTC).isoformat(),
                 "private_smoke_passed": True,
                 "qwen_preflight_passed": True,
                 "full_pipeline_quality_passed": True,
@@ -561,6 +616,10 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
                 "asr_context_sha256": asr_context_sha256,
                 "asr_hotwords_sha256": asr_hotwords_sha256,
                 "provider_config_sha256": provider_config_digest,
+                "ffmpeg_binary_sha256": hashlib.sha256(
+                    b"server-managed-ffmpeg"
+                ).hexdigest(),
+                "ffmpeg_configuration_sha256": "c" * 64,
             }
         ),
         encoding="utf-8",

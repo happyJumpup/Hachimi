@@ -48,3 +48,22 @@ def test_release_audit_allows_only_the_registered_ffmpeg_runtime_path() -> None:
     assert "bundled FFmpeg" in audit._violation(
         PurePosixPath("usr/local/bin/ffmpeg")
     )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ACCESS_COOKIE_SECRET",
+        "ARK_API_KEY",
+        "COS_SECRET_ID",
+        "COS_SECRET_KEY",
+        "JUDGE_ACCESS_CODE",
+        "QWEN_API_KEY",
+        "VOLC_ASR_API_KEY",
+    ],
+)
+def test_release_audit_covers_every_production_secret_environment_name(
+    name: str,
+) -> None:
+    audit = load_audit_module()
+    assert name in audit.SECRET_ENV_NAMES

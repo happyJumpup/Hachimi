@@ -13,7 +13,10 @@ from typing import Any
 SECRET_ENV_NAMES = {
     "ACCESS_COOKIE_SECRET",
     "ARK_API_KEY",
+    "COS_SECRET_ID",
+    "COS_SECRET_KEY",
     "JUDGE_ACCESS_CODE",
+    "QWEN_API_KEY",
     "VOLC_ASR_API_KEY",
 }
 MEDIA_SUFFIXES = {

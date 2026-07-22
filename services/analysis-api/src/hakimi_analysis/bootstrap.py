@@ -98,6 +98,7 @@ def build_catalog(settings: Settings) -> SourceCatalog:
                 media_root=settings.source_media_root,
                 public_media_base_url=settings.public_media_base_url,
                 duration_probe=probe_duration_sync,
+                max_source_bytes=settings.analysis_max_source_bytes,
             )
         except SourceManifestError:
             return EmptySourceCatalog()
