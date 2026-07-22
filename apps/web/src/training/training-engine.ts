@@ -1,5 +1,6 @@
 import type { TrainingPersistence } from '@/db/training-repository'
 import type { DraftItem } from '@/domain/types'
+import type { CoachStyleId } from '@/domain/coach'
 import type {
   ActionProgress,
   ActionResult,
@@ -30,7 +31,7 @@ type VersionedCommand = {
 }
 
 export type TrainingCommand =
-  | { type: 'session.create'; plan: PlanSnapshot }
+  | { type: 'session.create'; plan: PlanSnapshot; coachStyleId: CoachStyleId | null }
   | ({ type: 'set.start' } & VersionedCommand)
   | ({ type: 'clock.tick' } & VersionedCommand)
   | ({ type: 'session.pause'; reason: 'user' | 'page_hidden' } & VersionedCommand)
@@ -293,6 +294,7 @@ export const createTrainingEngine = ({
       completedActionCount: actions.filter((action) => action.status === 'completed').length,
       calorie,
       petId: 'hachimi',
+      coachStyleId: session.coachStyleId,
       startedAt: session.startedAt,
       endedAt: endedAt.toISOString(),
     }
@@ -435,6 +437,7 @@ export const createTrainingEngine = ({
           skipped: false,
         })),
         petId: 'hachimi',
+        coachStyleId: command.coachStyleId,
         startedAt: now,
         updatedAt: now,
       }

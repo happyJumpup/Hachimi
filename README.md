@@ -20,7 +20,7 @@ TrainPal 同时是产品名、用户可见的唯一 Agent 和小猫教练身份�
 
 普通访客可使用明确标注的“快速体验方案”。它是静态产品样例，不是 AI 结果或运行时 Mock 回退。评委体验码只用于验证，验证后的访问级别通过安全 Cookie 保存。
 
-主要页面：`/` 首页与导入、`/analysis` 分析任务、`/plan` 方案编辑、`/personalize` 个性化、`/train` 训练中心、`/training` 训练执行、`/result/:recordId` 结果与海报、`/mine` 我的。开发环境另提供静态 Fixture 设计画廊 `/__design/trainpal`，生产构建不注册该路由。
+主要页面：`/` 首页与导入、`/analysis` 分析任务、`/plan` 方案编辑、`/personalize` 个性化、`/train` 训练中心、`/training` 训练执行、`/result/:recordId` 结果与海报、`/mine` 我的。开发环境另提供静态 Fixture 设计画廊 `/__design/trainpal` 和七猫动画预览台 `/__design/trainpal/pets`，生产构建不注册这两个路由。
 
 ## 技术栈
 
@@ -40,6 +40,14 @@ pnpm dev
 ```
 
 `.env.local` 只由后端读取且必须保持 Git 忽略。`HAKIMI_DEMO_VIDEO_PATH` 只配置受控快速体验；用户本地视频由浏览器主动选择，不通过环境变量或服务器路径导入。竞赛部署使用版本化来源清单和只读媒体缓存，视频不会复制进仓库。
+
+七猫运行资源已经是 WebP。需要从设计交付包重新生成时，使用项目内 Sharp 脚本；`<raw-pets-directory>` 应直接包含 `hotblood`、`gentle` 等七个目录：
+
+```powershell
+pnpm --filter @hachimi/web pets:build -- --source <raw-pets-directory>
+```
+
+脚本只转码清单中的 168 个动画 PNG，不复制 `fullbody.png`，也不把原始 PNG 放入运行目录。
 
 测试 Provider 仅允许 `APP_ENV=test`，不能作为开发或生产回退。真实云配置缺失时，后端会明确失败。
 

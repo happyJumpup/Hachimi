@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import TrainPalCoach from '@/features/experience/TrainPalCoach.vue'
+import CoachMotion from '@/features/experience/CoachMotion.vue'
 import {
   deliverCompletionPoster,
   downloadCompletionPoster,
@@ -39,6 +39,11 @@ const coachResultMessage = computed(() => (
     ? '这一页已经替你记好了。下一次训练，TrainPal 还会从这里继续陪你。'
     : '今天做到这里也算一次真实训练。实际完成量已经保存，不需要勉强补齐。'
 ))
+const coachCue = computed(() => (
+  record.value?.outcome === 'completed' && record.value.coachStyleId
+    ? { sequence: 1, event: 'session_completed' as const }
+    : null
+))
 
 const formatDuration = (seconds: number): string => {
   const rounded = Math.max(0, Math.round(seconds))
@@ -56,6 +61,7 @@ const posterBlob = async (): Promise<Blob> => {
     trainingDurationSeconds: current.trainingDurationSeconds,
     caloriesKcal: current.calorie.value,
     completedActionCount: current.completedActionCount,
+    coachStyleId: current.coachStyleId,
   })
 }
 
@@ -151,8 +157,10 @@ onMounted(async () => {
       </div>
 
       <div class="coach-result">
-        <TrainPalCoach
+        <CoachMotion
+          :style-id="record.coachStyleId"
           :state="record.outcome === 'completed' ? 'completed' : 'paused'"
+          :cue="coachCue"
           :visible="library.preferences.petVisible"
         />
         <div>

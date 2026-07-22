@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 
 import type { DraftPlan } from '@/domain/types'
+import type { CoachStyleId } from '@/domain/coach'
 import type {
   PlanSnapshot,
   TrainingRecord,
@@ -115,7 +116,10 @@ export const useTrainingStore = defineStore('training', () => {
     })
   }
 
-  async function createFromDraft(draft: DraftPlan): Promise<TrainingEngineResult> {
+  async function createFromDraft(
+    draft: DraftPlan,
+    coachStyleId: CoachStyleId | null = null,
+  ): Promise<TrainingEngineResult> {
     return serialize(async () => {
       if (persistenceSuspended.value) return applyResult(unavailable())
       if (!engine) return applyResult(unavailable())
@@ -127,7 +131,11 @@ export const useTrainingStore = defineStore('training', () => {
         sourcePlanId: draft.linkedPlanId,
         items: cloneJson(draft.items),
       }
-      const result = await engine.dispatch({ type: 'session.create', plan: snapshot })
+      const result = await engine.dispatch({
+        type: 'session.create',
+        plan: snapshot,
+        coachStyleId,
+      })
       return applyResult(result)
     })
   }

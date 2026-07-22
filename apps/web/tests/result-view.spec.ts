@@ -28,6 +28,7 @@ const makeRecord = (): TrainingRecord => ({
   completedActionCount: 1,
   calorie: { value: 4, method: 'generic' },
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   endedAt: '2026-07-21T00:01:00.000Z',
 })
@@ -54,6 +55,7 @@ const makeSession = (record: TrainingRecord): TrainingSession => ({
     skipped: false,
   })),
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   updatedAt: '2026-07-21T00:01:00.000Z',
 })
@@ -112,10 +114,22 @@ describe('训练结果', () => {
   it('presents one warm result summary before progressively disclosing action details', async () => {
     const context = await setup()
 
+    expect(context.wrapper.find('.trainpal-coach').exists()).toBe(false)
     expect(context.wrapper.get('.coach-result').text()).toContain('TrainPal 留言')
     expect(context.wrapper.get('.result-metrics').text()).toContain('约 4')
     expect(context.wrapper.get('.action-results').attributes('open')).toBeUndefined()
     expect(context.wrapper.findAll('footer button')).toHaveLength(1)
+  })
+
+  it('renders the completed motion from the immutable record style snapshot', async () => {
+    const context = await setup()
+    context.record.coachStyleId = 'gentle'
+    useLibraryStore().records = [structuredClone(context.record)]
+    await flushPromises()
+
+    const coach = context.wrapper.get('.coach-motion')
+    expect(coach.attributes('data-style')).toBe('gentle')
+    expect(coach.attributes('data-action')).toBe('comfort')
   })
 
   it('keeps the TrainPal message when the user hides the cat coach', async () => {

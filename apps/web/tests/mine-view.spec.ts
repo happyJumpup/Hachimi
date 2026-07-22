@@ -42,6 +42,7 @@ const trainingRecord = (): TrainingRecord => ({
   completedActionCount: 1,
   calorie: { value: 12, method: 'generic' },
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   endedAt: '2026-07-21T00:03:00.000Z',
 })

@@ -87,7 +87,7 @@ describe('training library repository', () => {
     const { database, draftRepository, library } = setup()
     await draftRepository.save(draft())
     await library.saveProfile({ sex: 'female', age: 28, heightCm: 165, weightKg: 55 })
-    await library.savePreferences({ petVisible: false })
+    await library.savePreferences({ petVisible: false, coachStyleId: null })
     await database.localMedia.put({
       sourceId: 'local:clear-test',
       blob: new Blob(['video'], { type: 'video/mp4' }),
@@ -125,12 +125,12 @@ describe('training library repository', () => {
     databases.push(name)
     const database = createHachimiDatabase(name)
     const staleTab = createDexieLibraryRepository(database, { writeFence: staleFence })
-    await staleTab.savePreferences({ petVisible: false })
+    await staleTab.savePreferences({ petVisible: false, coachStyleId: null })
 
     clearingFence.beginClear('epoch-2')
     await staleTab.clearAllLocalData()
 
-    await expect(staleTab.savePreferences({ petVisible: true })).rejects.toThrow(
+    await expect(staleTab.savePreferences({ petVisible: true, coachStyleId: null })).rejects.toThrow(
       /stale local data epoch/,
     )
     expect(await database.preferences.count()).toBe(0)

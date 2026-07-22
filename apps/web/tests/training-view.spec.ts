@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import type { SourceSummary } from '@/domain/types'
-import type { TrainingSession } from '@/domain/training'
+import type { CoachStyleId } from '@/domain/coach'
+import type { TrainingRecord, TrainingSession } from '@/domain/training'
+import CoachMotion from '@/features/experience/CoachMotion.vue'
 import { createQuickExperienceDraftItems } from '@/features/quick-experience/fixture'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useLocalMediaStore } from '@/stores/local-media'
@@ -15,6 +17,7 @@ import TrainingView from '@/views/TrainingView.vue'
 const trainingSession = (
   status: TrainingSession['status'],
   currentItemIndex = 0,
+  coachStyleId: CoachStyleId | null = null,
 ): TrainingSession => {
   const baseItems = createQuickExperienceDraftItems()
   const items = [
@@ -44,8 +47,88 @@ const trainingSession = (
       skipped: false,
     })),
     petId: 'hachimi',
+    coachStyleId,
     startedAt: '2026-07-21T00:00:00.000Z',
     updatedAt: '2026-07-21T00:00:00.000Z',
+  }
+}
+
+class CueEngine implements TrainingEngine {
+  constructor(
+    private current: TrainingSession,
+    private readonly options: { fail?: boolean; terminal?: boolean } = {},
+  ) {}
+
+  async restore(): Promise<TrainingEngineResult> {
+    return { ok: true, session: this.current, record: null, events: [] }
+  }
+
+  async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
+    if (this.options.fail) {
+      return {
+        ok: false,
+        code: 'invalid_transition',
+        message: '当前操作失败',
+        session: this.current,
+      }
+    }
+
+    const item = this.current.plan.items[this.current.currentItemIndex]!
+    if (command.type === 'set.start') {
+      this.current = { ...this.current, status: 'active', revision: this.current.revision + 1 }
+      return {
+        ok: true,
+        session: this.current,
+        record: null,
+        events: [{ type: 'set.started', itemId: item.id, setIndex: this.current.currentSetIndex }],
+      }
+    }
+
+    if (command.type === 'set.complete' && this.options.terminal) {
+      const record: TrainingRecord = {
+        id: this.current.sessionId,
+        outcome: 'completed',
+        plan: this.current.plan,
+        actions: [],
+        activeSeconds: 1,
+        creditedRestSeconds: 0,
+        trainingDurationSeconds: 1,
+        completedActionCount: 1,
+        calorie: { value: 4, method: 'generic' },
+        petId: 'hachimi',
+        coachStyleId: this.current.coachStyleId,
+        startedAt: this.current.startedAt,
+        endedAt: '2026-07-21T00:01:00.000Z',
+      }
+      return {
+        ok: true,
+        session: null,
+        record,
+        events: [
+          { type: 'set.completed', itemId: item.id, setIndex: this.current.currentSetIndex },
+          { type: 'session.completed', recordId: record.id },
+        ],
+      }
+    }
+
+    if (command.type === 'set.complete') {
+      this.current = {
+        ...this.current,
+        status: 'resting',
+        revision: this.current.revision + 1,
+        restStartedAt: new Date().toISOString(),
+        restEndsAt: new Date(Date.now() + 30_000).toISOString(),
+        scheduledRestSeconds: 30,
+      }
+      return {
+        ok: true,
+        session: this.current,
+        record: null,
+        events: [{ type: 'set.completed', itemId: item.id, setIndex: 0 }],
+      }
+    }
+
+    return { ok: true, session: this.current, record: null, events: [] }
   }
 }
 
@@ -143,6 +226,76 @@ describe('训练页合同', () => {
     expect(wrapper.find('.media-stage .trainpal-coach').exists()).toBe(false)
     expect(wrapper.findAll('button.primary-action')).toHaveLength(1)
     expect(wrapper.get('button.primary-action').text()).toBe('提前继续')
+    expect(wrapper.find('.trainpal-coach').exists()).toBe(false)
+    expect(wrapper.text()).toContain('先放松呼吸')
+    wrapper.unmount()
+  })
+
+  it('emits a motion cue only after a successful set command', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    await useTrainingStore().load(new CueEngine(trainingSession('paused', 0, 'hotblood')))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    await wrapper.get('button.primary-action').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent(CoachMotion).props('cue')).toMatchObject({ event: 'set_started' })
+    wrapper.unmount()
+
+    const failedPinia = createPinia()
+    setActivePinia(failedPinia)
+    await useTrainingStore().load(new CueEngine(
+      trainingSession('paused', 0, 'hotblood'),
+      { fail: true },
+    ))
+    useAnalysisStore().sources = [source]
+    const failedWrapper = await mountTraining(failedPinia)
+    await failedWrapper.get('button.primary-action').trigger('click')
+    await flushPromises()
+
+    expect(failedWrapper.getComponent(CoachMotion).props('cue')).toBeNull()
+    failedWrapper.unmount()
+  })
+
+  it('uses the session-completed cue instead of replaying set completion at the terminal', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    await useTrainingStore().load(new CueEngine(
+      trainingSession('active', 1, 'hotblood'),
+      { terminal: true },
+    ))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+
+    await wrapper.get('button.primary-action').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.getComponent(CoachMotion).props('cue')).toMatchObject({
+      event: 'session_completed',
+    })
+    wrapper.unmount()
+  })
+
+  it('triggers the challenger final-countdown cue once per rest window', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-21T00:00:00.000Z'))
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const current = trainingSession('resting', 0, 'challenger')
+    current.restStartedAt = new Date().toISOString()
+    current.restEndsAt = new Date(Date.now() + 10_000).toISOString()
+    current.scheduledRestSeconds = 10
+    await useTrainingStore().load(new CueEngine(current))
+    useAnalysisStore().sources = [source]
+    const wrapper = await mountTraining(pinia)
+    const initialCue = wrapper.getComponent(CoachMotion).props('cue')
+
+    expect(initialCue).toMatchObject({ event: 'rest_final_countdown' })
+    await vi.advanceTimersByTimeAsync(1_100)
+    await flushPromises()
+    expect(wrapper.getComponent(CoachMotion).props('cue')).toEqual(initialCue)
     wrapper.unmount()
   })
 

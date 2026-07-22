@@ -14,6 +14,7 @@ const completedResult = {
   trainingDurationSeconds: 24 * 60,
   caloriesKcal: 126,
   completedActionCount: 3,
+  coachStyleId: null,
 }
 
 describe('completion poster', () => {
@@ -48,9 +49,29 @@ describe('completion poster', () => {
 
     await expect(renderCompletionPoster(completedResult, runtime)).resolves.toBe(png)
     expect(runtime.createSurface).toHaveBeenCalledWith(1080, 1920)
-    expect(runtime.loadImage).toHaveBeenCalledTimes(1)
-    expect(context.drawImage).toHaveBeenCalledTimes(1)
+    expect(runtime.loadImage).not.toHaveBeenCalled()
+    expect(context.drawImage).not.toHaveBeenCalled()
     expect(exportPng).toHaveBeenCalledTimes(1)
+  })
+
+  it('draws the completed action frame only when the record has a confirmed style', async () => {
+    const context = {
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+      drawImage: vi.fn(),
+    } as unknown as PosterDrawingContext
+    const runtime: PosterRuntime = {
+      createSurface: vi.fn().mockReturnValue({
+        context,
+        exportPng: vi.fn().mockResolvedValue(new Blob(['png'], { type: 'image/png' })),
+      }),
+      loadImage: vi.fn().mockResolvedValue({}),
+    }
+
+    await renderCompletionPoster({ ...completedResult, coachStyleId: 'gentle' }, runtime)
+
+    expect(runtime.loadImage).toHaveBeenCalledWith('/trainpal/pets/gentle/comfort/01.webp')
+    expect(context.drawImage).toHaveBeenCalledTimes(1)
   })
 
   it('uses Web Share when file sharing is available', async () => {

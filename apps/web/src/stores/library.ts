@@ -28,6 +28,7 @@ const emptyProfile = (): TrainingProfile => ({
 const defaultPreferences = (): Preferences => ({
   id: 'current',
   petVisible: true,
+  coachStyleId: null,
   updatedAt: new Date(0).toISOString(),
 })
 
@@ -150,7 +151,10 @@ export const useLibraryStore = defineStore('library', () => {
 
   async function setPetVisible(petVisible: boolean): Promise<void> {
     await runOperation(async () => {
-      preferences.value = await requireRepository().savePreferences({ petVisible })
+      preferences.value = await requireRepository().savePreferences({
+        petVisible,
+        coachStyleId: preferences.value.coachStyleId,
+      })
     })
   }
 

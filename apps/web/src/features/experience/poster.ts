@@ -1,3 +1,8 @@
+import {
+  coachFrameUrls,
+  resolveCoachEventAction,
+  type CoachStyleId,
+} from '@/domain/coach'
 import type { TrainingRecord } from '@/domain/training'
 
 export interface CompletionPosterInput {
@@ -6,6 +11,7 @@ export interface CompletionPosterInput {
   trainingDurationSeconds: number
   caloriesKcal: number
   completedActionCount: number
+  coachStyleId: CoachStyleId | null
 }
 
 export interface CompletionPosterModel {
@@ -46,7 +52,6 @@ export type PosterDeliveryResult = 'shared' | 'downloaded' | 'cancelled'
 
 const POSTER_WIDTH = 1_080
 const POSTER_HEIGHT = 1_920
-const COMPLETED_PET_URL = new URL('../../assets/pet/completed.webp', import.meta.url).href
 
 function asNonNegativeInteger(value: number): number {
   if (!Number.isFinite(value) || value < 0) throw new Error('海报数据不完整')
@@ -103,7 +108,11 @@ function createBrowserRuntime(): PosterRuntime {
   }
 }
 
-function drawPoster(context: PosterDrawingContext, model: CompletionPosterModel, pet: CanvasImageSource): void {
+function drawPoster(
+  context: PosterDrawingContext,
+  model: CompletionPosterModel,
+  pet: CanvasImageSource | null,
+): void {
   context.fillStyle = '#F3EFE5'
   context.fillRect(0, 0, POSTER_WIDTH, POSTER_HEIGHT)
   context.fillStyle = '#FFFDF8'
@@ -131,7 +140,7 @@ function drawPoster(context: PosterDrawingContext, model: CompletionPosterModel,
   context.fillText(model.caloriesLabel, 144, 890)
   context.fillText(model.actionCountLabel, 144, 1_020)
 
-  context.drawImage(pet, 570, 1_110, 360, 360)
+  if (pet) context.drawImage(pet, 570, 1_110, 360, 405)
   context.fillStyle = '#6C746E'
   context.font = '500 34px "Microsoft YaHei", sans-serif'
   context.fillText('TrainPal · 你的专属训练伙伴', 144, 1_690)
@@ -146,7 +155,12 @@ export async function renderCompletionPoster(
 ): Promise<Blob> {
   const model = buildCompletionPosterModel(input)
   const surface = runtime.createSurface(POSTER_WIDTH, POSTER_HEIGHT)
-  const pet = await runtime.loadImage(COMPLETED_PET_URL)
+  const completedAction = input.coachStyleId
+    ? resolveCoachEventAction(input.coachStyleId, 'session_completed')
+    : null
+  const pet = input.coachStyleId && completedAction
+    ? await runtime.loadImage(coachFrameUrls(input.coachStyleId, completedAction)[0]!)
+    : null
   drawPoster(surface.context, model, pet)
   return surface.exportPng()
 }

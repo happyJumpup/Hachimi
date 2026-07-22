@@ -38,7 +38,7 @@ const profileSummary = computed(() => {
       <span aria-hidden="true">!</span>
       <div>
         <strong>这版不生成假个性化结果</strong>
-        <p>GYMTI 问卷和小猫教练风格仍在定稿；入口与信息层级先按冻结合同落位。</p>
+        <p>GYMTI 问卷和风格推荐规则仍在定稿；七猫形象只完成技术预备，不生成推荐或保存风格。</p>
       </div>
     </section>
 
@@ -56,7 +56,7 @@ const profileSummary = computed(() => {
         <span class="step-number">02</span>
         <div>
           <small>小猫教练风格</small>
-          <h2>选择你喜欢的陪伴方式</h2>
+          <h2>确认推荐的陪伴方式</h2>
           <p>不同品种对应沟通语气、鼓励方式和提示密度，不会改变动作或训练强度。</p>
         </div>
         <b>形象制作中</b>

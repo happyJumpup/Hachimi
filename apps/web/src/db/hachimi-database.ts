@@ -49,6 +49,25 @@ export class HachimiDatabase extends Dexie {
       preferences: '&id, updatedAt',
       localMedia: '&sourceId, importedAt, updatedAt',
     })
+
+    this.version(4).stores({
+      drafts: '&id, updatedAt, linkedPlanId',
+      plans: '&id, updatedAt, createdAt, name',
+      sessions: '&id, sessionId, status, updatedAt',
+      records: '&id, endedAt, outcome',
+      profiles: '&id, updatedAt',
+      preferences: '&id, updatedAt',
+      localMedia: '&sourceId, importedAt, updatedAt',
+    }).upgrade(async (transaction: Transaction) => {
+      const addNullCoachStyle = (record: { coachStyleId?: unknown }): void => {
+        if (record.coachStyleId === undefined) record.coachStyleId = null
+      }
+      await Promise.all([
+        transaction.table('preferences').toCollection().modify(addNullCoachStyle),
+        transaction.table('sessions').toCollection().modify(addNullCoachStyle),
+        transaction.table('records').toCollection().modify(addNullCoachStyle),
+      ])
+    })
   }
 }
 

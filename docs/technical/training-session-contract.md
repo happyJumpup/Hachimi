@@ -20,10 +20,10 @@
 
 ## 2. 本地数据版本与迁移
 
-当前工程基线使用 Dexie v3，内部数据库名称为既有兼容标识。v3 表结构为：
+当前工程基线使用 Dexie v4，内部数据库名称为既有兼容标识。v4 保持 v3 表结构，并只增加数据迁移：
 
 ```ts
-db.version(3).stores({
+db.version(4).stores({
   drafts: '&id, updatedAt, linkedPlanId',
   plans: '&id, updatedAt, createdAt, name',
   sessions: '&id, sessionId, status, updatedAt',
@@ -41,7 +41,7 @@ db.version(3).stores({
 - 旧记录缺少来源种类时按 `controlled` 读取，不批量重写动作 ID。
 - 旧三态来源记录保持原语义；只有用户确认的新个性化差异才写入 `personalized`。
 - 旧教练可见性字段映射到新的 TrainPal 可见性偏好；兼容键不是用户界面命名。
-- 旧场次和记录缺少教练风格快照时使用明确的默认占位，不反推 GYMTI 或人格。
+- v3 偏好、场次和记录缺少教练风格时补 `coachStyleId: null`；保留旧 `petId: 'hachimi'` 只作兼容，不把它展示或推断成任何正式小猫风格。
 - 任一迁移异常整体回滚并提示“本机训练数据暂时无法读取”，不得自动清空。
 
 ## 3. 方案与字段来源
@@ -254,7 +254,6 @@ interface PlanSnapshot {
   source: 'draft' | 'saved' | 'sample'
   sourcePlanId: string | null
   items: DraftItem[]
-  coachStyleId: string | null
   tipSnapshotVersion: string | null
 }
 
@@ -276,6 +275,7 @@ interface TrainingSession {
   status: SessionStatus
   pauseReason: PauseReason | null
   plan: PlanSnapshot
+  coachStyleId: string | null
   currentItemIndex: number
   currentSetIndex: number
   currentSetActiveMilliseconds: number
@@ -422,13 +422,13 @@ kcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 
 ## 14. 当前实现差距
 
-截至 2026-07-22，Dexie v3、单一活动场次、训练状态机、记录、卡路里和既有角色五态已有工程基线。以下是冻结合同而非已完成声明：
+截至 2026-07-22，Dexie v4、可空教练风格快照、单一活动场次、训练状态机、记录、卡路里和七猫五态播放器已有工程基线。以下是冻结合同而非已完成声明：
 
 - 四态来源中的 `personalized` 全链路与旧数据迁移；
 - 三个领域 Skill 的持久化任务、幂等键和成功结果复用；
 - 基础方案提案取代独立候选收件箱；
 - 来源节奏结构与公开旧分类字段移除；
-- GYMTI／训练经验、教练风格、个性化上下文与提案时效；
+- GYMTI／训练经验、风格推荐与确认写入、个性化上下文与提案时效；
 - 带依据动作要点、结构化轻反馈、有界场次调整、成长和设备休息提醒。
 
 相关切片在持久化或公开接口落地前必须补充迁移、Repository、状态机与端到端测试，不能只改界面文案。

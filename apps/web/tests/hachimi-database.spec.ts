@@ -124,4 +124,55 @@ describe('Dexie local training data', () => {
 
     database.close()
   })
+
+  it('upgrades v3 coach data to an explicit null style without rewriting legacy pet ids', async () => {
+    const databaseName = uniqueDatabaseName()
+    const legacy = new Dexie(databaseName)
+    legacy.version(3).stores({
+      drafts: '&id, updatedAt, linkedPlanId',
+      plans: '&id, updatedAt, createdAt, name',
+      sessions: '&id, sessionId, status, updatedAt',
+      records: '&id, endedAt, outcome',
+      profiles: '&id, updatedAt',
+      preferences: '&id, updatedAt',
+      localMedia: '&sourceId, importedAt, updatedAt',
+    })
+    await legacy.table('preferences').put({
+      id: 'current',
+      petVisible: false,
+      updatedAt: '2026-07-21T16:00:00.000Z',
+    })
+    await legacy.table('sessions').put({
+      id: 'current',
+      sessionId: 'legacy-session',
+      status: 'paused',
+      petId: 'hachimi',
+      updatedAt: '2026-07-21T16:00:00.000Z',
+    })
+    await legacy.table('records').put({
+      id: 'legacy-record',
+      outcome: 'completed',
+      petId: 'hachimi',
+      endedAt: '2026-07-21T16:10:00.000Z',
+    })
+    legacy.close()
+
+    const database = createHachimiDatabase(databaseName)
+    await database.open()
+
+    expect(await database.preferences.get('current')).toMatchObject({
+      petVisible: false,
+      coachStyleId: null,
+    })
+    expect(await database.sessions.get('current')).toMatchObject({
+      petId: 'hachimi',
+      coachStyleId: null,
+    })
+    expect(await database.records.get('legacy-record')).toMatchObject({
+      petId: 'hachimi',
+      coachStyleId: null,
+    })
+
+    database.close()
+  })
 })

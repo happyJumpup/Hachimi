@@ -45,5 +45,7 @@ describe('TrainPal route experience contract', () => {
   it('does not register the design gallery in production route records', () => {
     expect(createTrainPalRoutes(false).some((route) => route.path === '/__design/trainpal')).toBe(false)
     expect(createTrainPalRoutes(true).some((route) => route.path === '/__design/trainpal')).toBe(true)
+    expect(createTrainPalRoutes(false).some((route) => route.path === '/__design/trainpal/pets')).toBe(false)
+    expect(createTrainPalRoutes(true).some((route) => route.path === '/__design/trainpal/pets')).toBe(true)
   })
 })

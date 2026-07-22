@@ -38,6 +38,25 @@ for (const width of widths) {
   })
 }
 
+for (const width of [320, 390] as const) {
+  test(`unconfirmed coach leaves the live training help usable at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 })
+    await page.goto('/train')
+    await page.getByRole('button', { name: '使用快速体验方案' }).click()
+
+    await expect(page.getByText(/明确确认前不展示小猫/)).toBeVisible()
+    await expect(page.locator('.trainpal-coach')).toHaveCount(0)
+    await page.getByRole('button', { name: '开始训练' }).click()
+
+    await expect(page).toHaveURL(/\/training$/)
+    await expect(page.getByRole('heading', { name: '肩部绕环' })).toBeVisible()
+    await expect(page.getByText(/按自己的节奏来，训练进度会留在这里/)).toBeVisible()
+    await expect(page.getByRole('button', { name: '开始本组' })).toBeVisible()
+    await expect(page.locator('.trainpal-coach')).toHaveCount(0)
+    await expectNoHorizontalOverflow(page)
+  })
+}
+
 test('home and optional profile dialog pass the WCAG automated scan', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: /刷到的动作/ })).toBeVisible()

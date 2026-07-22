@@ -44,9 +44,13 @@ describe('local training library store', () => {
     await store.load(persistence)
 
     expect(store.preferences.petVisible).toBe(true)
+    expect(store.preferences.coachStyleId).toBeNull()
     await store.setPetVisible(false)
     expect(store.preferences.petVisible).toBe(false)
-    expect(persistence.savePreferences).toHaveBeenCalledWith({ petVisible: false })
+    expect(persistence.savePreferences).toHaveBeenCalledWith({
+      petVisible: false,
+      coachStyleId: null,
+    })
   })
 
   it('installs the labelled quick experience as an unlinked current draft', async () => {

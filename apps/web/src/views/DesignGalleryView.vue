@@ -45,7 +45,7 @@ const actionFixture = [
 
         <article class="coach-card tp-card">
           <div class="coach-placeholder" aria-hidden="true">CAT</div>
-          <div><small>TRAINPAL 教练</small><h3>今天先把动作做稳。</h3><p>猫咪形象与教练风格等待正式资产，不阻塞信息层级。</p></div>
+          <div><small>TRAINPAL 教练</small><h3>今天先把动作做稳。</h3><p>未确认风格时只保留中性文字帮助，不在正式页面显示默认猫。</p></div>
         </article>
 
         <div class="action-list tp-card">

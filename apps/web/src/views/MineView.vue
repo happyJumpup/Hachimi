@@ -146,7 +146,7 @@ onMounted(async () => {
       </button>
       <button type="button" class="setting-row" @click="openPanel('coach', $event)">
         <span class="row-icon coach-icon" aria-hidden="true">C</span>
-        <span><small>小猫教练风格</small><strong>当前使用 TrainPal 默认风格</strong></span>
+        <span><small>小猫教练风格</small><strong>尚未确认</strong></span>
         <b>›</b>
       </button>
       <button type="button" class="setting-row" @click="openPanel('profile', $event)">
@@ -217,9 +217,8 @@ onMounted(async () => {
         </div>
 
         <div v-else-if="activePanel === 'coach'" class="coach-panel">
-          <div class="coach-placeholder" aria-hidden="true">TP</div>
-          <h3>小猫教练形象正在制作</h3>
-          <p>教练风格只影响语气、鼓励方式和提示密度，不改变动作与训练参数。</p>
+          <h3>完成 GYMTI 后再确认风格</h3>
+          <p>问卷会给出一个推荐；在你明确确认前，正式页面不会展示任何小猫形象。教练风格不会改变动作与训练参数。</p>
           <div class="preference-row">
             <span><strong>训练中显示 TrainPal</strong><small>隐藏不会移除训练控制与安全信息</small></span>
             <button type="button" :aria-pressed="library.preferences.petVisible" :disabled="pending || library.persistenceSuspended" @click="toggleCoach">

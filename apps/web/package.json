@@ -11,6 +11,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:e2e": "playwright test",
+    "pets:build": "node scripts/build-trainpal-pets.mjs",
     "api:generate": "openapi-typescript ../../contracts/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
@@ -33,6 +34,7 @@
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^27.2.0",
     "openapi-typescript": "^7.10.1",
+    "sharp": "^0.35.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.0",
     "vite": "^7.2.4",

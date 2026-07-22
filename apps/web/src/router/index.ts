@@ -127,6 +127,19 @@ export const createTrainPalRoutes = (includeDesignGallery: boolean): RouteRecord
         title: 'TrainPal 设计画廊',
       },
     })
+    routes.push({
+      path: '/__design/trainpal/pets',
+      name: 'trainpal-pet-lab',
+      component: () => import('@/views/PetLabView.vue'),
+      meta: {
+        shell: 'immersive',
+        theme: 'journal',
+        showBottomNav: false,
+        showAnalysisTask: false,
+        showTrainingTask: false,
+        title: 'TrainPal 七猫动画预览台',
+      },
+    })
   }
 
   return routes

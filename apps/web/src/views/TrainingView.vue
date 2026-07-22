@@ -10,14 +10,16 @@ import {
 import { onBeforeRouteLeave } from 'vue-router'
 
 import { analysisClient } from '@/api/client'
+import type { CoachMotionCue, CoachMotionEvent } from '@/domain/coach'
 import { fingerprintMatches, probeVideoDuration, SUPPORTED_LOCAL_MEDIA_TYPES } from '@/domain/local-media'
 import { toSafeOriginUrl } from '@/domain/source'
-import TrainPalCoach from '@/features/experience/TrainPalCoach.vue'
+import CoachMotion from '@/features/experience/CoachMotion.vue'
 import { derivePetState } from '@/features/experience/pet-state'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useLibraryStore } from '@/stores/library'
 import { useLocalMediaStore } from '@/stores/local-media'
 import { useTrainingStore } from '@/stores/training'
+import type { TrainingEngineResult } from '@/training/training-engine'
 
 const analysis = useAnalysisStore()
 const library = useLibraryStore()
@@ -31,8 +33,11 @@ const localMediaUrl = ref<string | null>(null)
 const localMediaResolving = ref(false)
 const localMediaError = ref('')
 const screenReaderAnnouncement = ref('')
+const coachCue = ref<CoachMotionCue | null>(null)
 let ticker: ReturnType<typeof setInterval> | null = null
 let pausePending = false
+let cueSequence = 0
+let countdownRestKey: string | null = null
 
 const session = computed(() => training.session)
 const item = computed(() => training.currentItem)
@@ -127,6 +132,45 @@ const petState = computed(() => derivePetState({
   pauseReason: session.value?.pauseReason ?? null,
   outcome: training.lastRecord?.outcome ?? null,
 }))
+const currentCoachStyleId = computed(() => (
+  session.value?.coachStyleId ?? training.lastRecord?.coachStyleId ?? null
+))
+
+const presentCoachEvent = (event: CoachMotionEvent): void => {
+  if (!currentCoachStyleId.value) return
+  cueSequence += 1
+  coachCue.value = { sequence: cueSequence, event }
+}
+
+const presentTrainingEvents = (result: TrainingEngineResult): void => {
+  if (!result.ok || !currentCoachStyleId.value) return
+  const eventTypes = new Set(result.events.map((event) => event.type))
+  if (eventTypes.has('session.completed')) presentCoachEvent('session_completed')
+  else if (eventTypes.has('set.completed')) presentCoachEvent('set_completed')
+  else if (eventTypes.has('set.started')) presentCoachEvent('set_started')
+}
+
+watch(
+  () => [
+    session.value?.status ?? null,
+    session.value?.restEndsAt ?? null,
+    restRemainingSeconds.value,
+    session.value?.coachStyleId ?? null,
+  ] as const,
+  ([status, restEndsAt, remaining, coachStyleId]) => {
+    if (
+      status !== 'resting'
+      || !restEndsAt
+      || coachStyleId !== 'challenger'
+      || remaining <= 0
+      || remaining > 10
+      || countdownRestKey === restEndsAt
+    ) return
+    countdownRestKey = restEndsAt
+    presentCoachEvent('rest_final_countdown')
+  },
+  { immediate: true },
+)
 
 const formatDuration = (seconds: number): string => {
   const safe = Math.max(0, Math.round(seconds))
@@ -257,26 +301,32 @@ watch(
   },
 )
 
-const run = async (operation: () => Promise<unknown>): Promise<void> => {
-  if (commandPending.value) return
+const run = async (
+  operation: () => Promise<TrainingEngineResult>,
+): Promise<TrainingEngineResult | null> => {
+  if (commandPending.value) return null
   commandPending.value = true
-  await operation()
-  commandPending.value = false
-  await syncVideo()
+  try {
+    const result = await operation()
+    presentTrainingEvents(result)
+    await syncVideo()
+    return result
+  } finally {
+    commandPending.value = false
+  }
 }
 
-const startOrContinue = (): Promise<void> => run(async () => {
+const startOrContinue = (): Promise<TrainingEngineResult | null> => run(() => {
   if (session.value?.status === 'ready_to_continue' || session.value?.status === 'resting') {
-    await training.continueRest()
-  } else {
-    await training.startSet()
+    return training.continueRest()
   }
+  return training.startSet()
 })
 
-const pause = (): Promise<void> => run(() => training.pause('user'))
-const completeSet = (): Promise<void> => run(() => training.completeSet())
-const continueEarly = (): Promise<void> => run(() => training.continueRest())
-const reloadAfterConflict = (): Promise<void> => run(() => training.restore())
+const pause = (): Promise<TrainingEngineResult | null> => run(() => training.pause('user'))
+const completeSet = (): Promise<TrainingEngineResult | null> => run(() => training.completeSet())
+const continueEarly = (): Promise<TrainingEngineResult | null> => run(() => training.continueRest())
+const reloadAfterConflict = (): Promise<TrainingEngineResult | null> => run(() => training.restore())
 
 const endEarly = async (): Promise<void> => {
   if (!window.confirm('提前结束后只记录实际完成量，确定结束吗？')) return
@@ -362,9 +412,11 @@ onBeforeUnmount(() => {
     <section v-if="!session && training.lastRecord" class="terminal-card">
       <p class="eyebrow">TrainPal · SESSION SAVED</p>
       <h1>{{ training.lastRecord.outcome === 'completed' ? '训练完成' : '已提前结束' }}</h1>
-      <TrainPalCoach
+      <CoachMotion
         v-if="training.lastRecord.outcome === 'completed'"
         state="completed"
+        :style-id="training.lastRecord.coachStyleId"
+        :cue="coachCue"
         :visible="library.preferences.petVisible"
       />
       <div class="terminal-metrics">
@@ -458,9 +510,11 @@ onBeforeUnmount(() => {
           </p>
 
           <div v-if="isRestFocus" class="rest-focus">
-            <TrainPalCoach
+            <CoachMotion
               class="training-pet training-pet--rest"
+              :style-id="session.coachStyleId"
               :state="petState"
+              :cue="coachCue"
               :visible="library.preferences.petVisible"
             />
             <div class="rest-focus__copy">
@@ -473,9 +527,11 @@ onBeforeUnmount(() => {
 
           <template v-else>
             <div class="coach-strip">
-              <TrainPalCoach
+              <CoachMotion
                 class="training-pet"
+                :style-id="session.coachStyleId"
                 :state="petState"
+                :cue="coachCue"
                 :visible="library.preferences.petVisible"
               />
               <div>

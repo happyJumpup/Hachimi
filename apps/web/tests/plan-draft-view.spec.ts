@@ -119,6 +119,7 @@ class ExistingSessionEngine implements TrainingEngine {
       creditedRestMilliseconds: 0,
       progress: [{ itemId: item.id, completedSets: 0, activeMilliseconds: 0, skipped: false }],
       petId: 'hachimi',
+      coachStyleId: null,
       startedAt: '2026-07-21T00:00:00.000Z',
       updatedAt: '2026-07-21T00:01:00.000Z',
     }
@@ -132,6 +133,7 @@ class ExistingSessionEngine implements TrainingEngine {
 
 class CapturingStartEngine implements TrainingEngine {
   createdPlan: Extract<TrainingCommand, { type: 'session.create' }>['plan'] | null = null
+  createdCoachStyleId: Extract<TrainingCommand, { type: 'session.create' }>['coachStyleId'] = null
 
   async restore(): Promise<TrainingEngineResult> {
     return { ok: true, session: null, record: null, events: [] }
@@ -140,6 +142,7 @@ class CapturingStartEngine implements TrainingEngine {
   async dispatch(command: TrainingCommand): Promise<TrainingEngineResult> {
     if (command.type !== 'session.create') throw new Error('unexpected command')
     this.createdPlan = structuredClone(command.plan)
+    this.createdCoachStyleId = command.coachStyleId
     return { ok: true, session: null, record: null, events: [] }
   }
 }
@@ -431,6 +434,7 @@ describe('方案草稿保存状态', () => {
     }])
     const engine = new CapturingStartEngine()
     await useTrainingStore().load(engine)
+    useLibraryStore().preferences.coachStyleId = 'zen'
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -446,6 +450,7 @@ describe('方案草稿保存状态', () => {
     await flushPromises()
 
     expect(engine.createdPlan?.items.map((item) => item.name)).toEqual(['已确认动作'])
+    expect(engine.createdCoachStyleId).toBe('zen')
     expect(router.currentRoute.value.path).toBe('/training')
   })
 

@@ -33,6 +33,7 @@ const session = (sessionId: string, revision = 0): TrainingSession => ({
   creditedRestMilliseconds: 0,
   progress: [],
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   updatedAt: '2026-07-21T00:00:00.000Z',
 })
@@ -48,6 +49,7 @@ const record = (sessionId: string): TrainingRecord => ({
   completedActionCount: 0,
   calorie: { value: 12, method: 'generic' },
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   endedAt: '2026-07-21T00:01:00.000Z',
 })

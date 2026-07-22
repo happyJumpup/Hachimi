@@ -50,7 +50,10 @@ export const createDexieLibraryRepository = (
   },
 
   async loadPreferences() {
-    return (await db.preferences.get('current')) ?? null
+    const preferences = await db.preferences.get('current')
+    return preferences
+      ? { ...preferences, coachStyleId: preferences.coachStyleId ?? null }
+      : null
   },
 
   async saveProfile(profile) {

@@ -1,4 +1,5 @@
 import type { DraftItem } from '@/domain/types'
+import type { CoachStyleId } from '@/domain/coach'
 
 export interface SavedPlan {
   id: string
@@ -20,6 +21,7 @@ export interface TrainingProfile {
 export interface Preferences {
   id: 'current'
   petVisible: boolean
+  coachStyleId: CoachStyleId | null
   updatedAt: string
 }
 
@@ -57,6 +59,7 @@ export interface TrainingSession {
   creditedRestMilliseconds: number
   progress: ActionProgress[]
   petId: 'hachimi'
+  coachStyleId: CoachStyleId | null
   startedAt: string
   updatedAt: string
 }
@@ -88,6 +91,7 @@ export interface TrainingRecord {
   completedActionCount: number
   calorie: CalorieEstimate
   petId: 'hachimi'
+  coachStyleId: CoachStyleId | null
   startedAt: string
   endedAt: string
 }

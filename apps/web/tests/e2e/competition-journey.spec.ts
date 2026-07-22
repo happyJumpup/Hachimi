@@ -46,7 +46,8 @@ test('quick plan completes through save-as, rest recovery, TrainPal, record, and
   await expect(page.getByRole('heading', { name: '肩部绕环' })).toBeVisible()
   await expect(page.getByRole('button', { name: '显示 TrainPal' })).toBeVisible()
   await page.getByRole('button', { name: '显示 TrainPal' }).click()
-  await expect(page.locator('.training-pet img')).toBeVisible()
+  await expect(page.locator('.training-pet img')).toHaveCount(0)
+  await expect(page.getByText(/按自己的节奏来，训练进度会留在这里/)).toBeVisible()
   await page.getByRole('button', { name: '开始本组' }).click()
   await expect(page.getByText('组间休息', { exact: true }).first()).toBeVisible({ timeout: 5_000 })
 
@@ -79,8 +80,12 @@ test('quick plan completes through save-as, rest recovery, TrainPal, record, and
   await expect(page.getByText('已完成', { exact: true }).first()).toBeVisible()
 })
 
-test('TrainPal asset failure does not block early ending and no completion poster is offered', async ({ page }) => {
-  await page.route('**/*.webp', (route) => route.abort())
+test('unconfirmed coach requests no cat assets and does not block early ending', async ({ page }) => {
+  let coachAssetRequests = 0
+  await page.route('**/trainpal/pets/**', (route) => {
+    coachAssetRequests += 1
+    return route.abort()
+  })
   page.on('dialog', (dialog) => dialog.accept())
 
   await page.goto('/train')
@@ -88,7 +93,9 @@ test('TrainPal asset failure does not block early ending and no completion poste
   await page.getByRole('button', { name: '开始训练' }).click()
 
   await expect(page).toHaveURL(/\/training$/)
-  await expect(page.getByText(/训练不受影响/)).toBeVisible()
+  await expect(page.locator('.trainpal-coach')).toHaveCount(0)
+  expect(coachAssetRequests).toBe(0)
+  await expect(page.getByText(/按自己的节奏来，训练进度会留在这里/)).toBeVisible()
   await expect(page.getByRole('button', { name: '开始本组' })).toBeEnabled()
   await page.getByText('更多训练操作', { exact: true }).click()
   await page.getByRole('button', { name: '提前结束' }).click()

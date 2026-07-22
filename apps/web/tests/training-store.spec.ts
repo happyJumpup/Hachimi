@@ -28,6 +28,7 @@ const activeSession = (revision: number): TrainingSession => ({
   creditedRestMilliseconds: 0,
   progress: [],
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   updatedAt: '2026-07-21T00:00:00.000Z',
 })
@@ -90,6 +91,7 @@ class RecordThenSessionEngine implements TrainingEngine {
           completedActionCount: 0,
           calorie: { value: 0, method: 'generic' },
           petId: 'hachimi',
+          coachStyleId: null,
           startedAt: '2026-07-21T00:00:00.000Z',
           endedAt: '2026-07-21T00:01:00.000Z',
         },
@@ -189,15 +191,17 @@ describe('training store command serialization', () => {
       updatedAt: '2026-07-21T00:00:00.000Z',
     }
 
-    await store.createFromDraft(baseDraft)
+    await store.createFromDraft(baseDraft, 'zen')
     await store.createFromDraft({ ...baseDraft, name: '已存方案', linkedPlanId: 'plan-1' })
 
     expect(engine.commands[0]).toMatchObject({
       type: 'session.create',
+      coachStyleId: 'zen',
       plan: { source: 'sample', sourcePlanId: null },
     })
     expect(engine.commands[1]).toMatchObject({
       type: 'session.create',
+      coachStyleId: null,
       plan: { source: 'saved', sourcePlanId: 'plan-1' },
     })
   })

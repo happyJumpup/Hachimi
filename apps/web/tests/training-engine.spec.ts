@@ -143,7 +143,11 @@ const setup = () => {
 describe('TrainingEngine public command interface', () => {
   it('credits a paused partial set to both the record total and action detail', async () => {
     const { clock, engine } = setup()
-    expectSuccess(await engine.dispatch({ type: 'session.create', plan: plan(repsAction()) }))
+    expectSuccess(await engine.dispatch({
+      type: 'session.create',
+      plan: plan(repsAction()),
+      coachStyleId: null,
+    }))
     expectSuccess(await engine.dispatch({
       type: 'set.start',
       sessionId: 'session-1',
@@ -175,12 +179,14 @@ describe('TrainingEngine public command interface', () => {
     const created = expectSuccess(await engine.dispatch({
       type: 'session.create',
       plan: sourcePlan,
+      coachStyleId: 'gentle',
     }))
     expect(created.session).toMatchObject({
       sessionId: 'session-1',
       revision: 0,
       status: 'paused',
       pauseReason: 'before_start',
+      coachStyleId: 'gentle',
     })
     sourcePlan.items[0].name = '已在调用方修改'
     expect(created.session?.plan.items[0].name).toBe('拖拽弯举')
@@ -234,6 +240,7 @@ describe('TrainingEngine public command interface', () => {
       trainingDurationSeconds: 2,
       completedActionCount: 1,
       calorie: { value: 24, method: 'generic' },
+      coachStyleId: 'gentle',
       actions: [{
         itemId: 'curl',
         completedSets: 2,
@@ -256,7 +263,11 @@ describe('TrainingEngine public command interface', () => {
 
   it('counts duration only while active in the foreground and auto-completes at the target', async () => {
     const { clock, engine, persistence } = setup()
-    expectSuccess(await engine.dispatch({ type: 'session.create', plan: plan(durationAction()) }))
+    expectSuccess(await engine.dispatch({
+      type: 'session.create',
+      plan: plan(durationAction()),
+      coachStyleId: null,
+    }))
     expectSuccess(await engine.dispatch({
       type: 'set.start',
       sessionId: 'session-1',
@@ -321,6 +332,7 @@ describe('TrainingEngine public command interface', () => {
     expectSuccess(await engine.dispatch({
       type: 'session.create',
       plan: plan(repsAction({ restSeconds: sourced(60, 'video') })),
+      coachStyleId: null,
     }))
     expectSuccess(await engine.dispatch({
       type: 'set.start',
@@ -360,7 +372,11 @@ describe('TrainingEngine public command interface', () => {
 
   it('normalizes a refreshed active session to paused without adding wall-clock time', async () => {
     const { clock, engine, persistence } = setup()
-    expectSuccess(await engine.dispatch({ type: 'session.create', plan: plan(durationAction()) }))
+    expectSuccess(await engine.dispatch({
+      type: 'session.create',
+      plan: plan(durationAction()),
+      coachStyleId: null,
+    }))
     expectSuccess(await engine.dispatch({
       type: 'set.start',
       sessionId: 'session-1',
@@ -389,6 +405,7 @@ describe('TrainingEngine public command interface', () => {
     expectSuccess(await engine.dispatch({
       type: 'session.create',
       plan: plan(repsAction({ restSeconds: sourced(60, 'video') })),
+      coachStyleId: null,
     }))
     expectSuccess(await engine.dispatch({
       type: 'set.start',
@@ -428,6 +445,7 @@ describe('TrainingEngine public command interface', () => {
         repsAction({ sets: sourced(3, 'user') }),
         durationAction(),
       ),
+      coachStyleId: null,
     }))
     expectSuccess(await engine.dispatch({
       type: 'set.start',

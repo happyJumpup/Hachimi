@@ -7,6 +7,7 @@ import { fingerprintMatches, probeVideoDuration, SUPPORTED_LOCAL_MEDIA_TYPES } f
 import { estimatePlanMinutes } from '@/domain/plan'
 import { toSafeOriginUrl } from '@/domain/source'
 import type { ActionMode, DraftItem } from '@/domain/types'
+import CoachMotion from '@/features/experience/CoachMotion.vue'
 import { QUICK_EXPERIENCE_PLAN_NAME } from '@/features/quick-experience/fixture'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
@@ -216,7 +217,10 @@ const startTraining = async (): Promise<void> => {
       ...draft.plan,
       items: confirmedItems.value,
     })) as typeof draft.plan
-    const result = await training.createFromDraft(executablePlan)
+    const result = await training.createFromDraft(
+      executablePlan,
+      library.preferences.coachStyleId,
+    )
     if (result.ok || (!result.ok && result.code === 'active_session_exists')) {
       await router.push('/training')
     } else if (!result.ok) {
@@ -326,11 +330,16 @@ const retryOperation = async (): Promise<void> => {
     <p v-if="saveMessage" class="save-message" role="status">{{ saveMessage }}</p>
 
     <section v-if="draft.items.length" class="coach-card tp-card" aria-labelledby="coach-card-title">
-      <div class="coach-mark" aria-hidden="true">TP</div>
+      <CoachMotion
+        state="idle"
+        :style-id="library.preferences.coachStyleId"
+        :visible="library.preferences.petVisible"
+      />
+      <div v-if="!library.preferences.coachStyleId" class="coach-mark" aria-hidden="true">TP</div>
       <div>
         <p class="tp-kicker">TRAINPAL COACH</p>
         <h2 id="coach-card-title">需要更贴近你的目标？</h2>
-        <p>GYMTI 和教练风格由你主动选择，基础方案随时可以直接训练。</p>
+        <p>GYMTI 会给出一个教练风格推荐；明确确认前不展示小猫，基础方案仍可直接训练。</p>
       </div>
       <RouterLink to="/personalize">让 TrainPal 调整这次训练</RouterLink>
     </section>

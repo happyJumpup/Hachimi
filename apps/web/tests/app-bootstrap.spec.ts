@@ -26,6 +26,7 @@ const restoredSession = (): NonNullable<TrainingEngineResult['session']> => ({
   creditedRestMilliseconds: 0,
   progress: [],
   petId: 'hachimi',
+  coachStyleId: null,
   startedAt: '2026-07-21T00:00:00.000Z',
   updatedAt: '2026-07-21T00:01:00.000Z',
 })
