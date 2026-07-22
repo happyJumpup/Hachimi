@@ -1,6 +1,6 @@
 ---
 name: visual-action-localization
-version: 1.4.0
+version: 1.4.1
 description: Localize all exercise demonstrations in one continuous video chunk.
 ---
 
@@ -10,7 +10,8 @@ description: Localize all exercise demonstrations in one continuous video chunk.
 
 A continuous video clip plus JSON metadata describing its clip-local timeline.
 The clip is one overlapping chunk of a controlled source video. The caller,
-not the model, converts returned times to the source-video clock.
+not the model, converts returned times first to the analysis-range clock; the
+run manager later adds the source-range offset exactly once.
 
 ## Output
 

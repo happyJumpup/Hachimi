@@ -225,7 +225,6 @@ class OrchestratedAnalysisPipeline:
                         prepared,
                         emit,
                         deadline=evidence_deadline,
-                        source_offset_seconds=source.analysis_start_seconds,
                     )
                 )
                 try:
@@ -253,15 +252,12 @@ class OrchestratedAnalysisPipeline:
             source.analysis_duration_seconds,
             visual_results.successful_windows,
             visual_results.failures,
-            source_offset_seconds=source.analysis_start_seconds,
         )
         if isinstance(speech_result, ProviderError) and not visual_segments and not coverage_gaps:
             coverage_gaps = [
                 CoverageGap(
-                    start_seconds=source.analysis_start_seconds,
-                    end_seconds=(
-                        source.analysis_start_seconds + source.analysis_duration_seconds
-                    ),
+                    start_seconds=0,
+                    end_seconds=source.analysis_duration_seconds,
                     reason=_coverage_gap_reason(speech_result),
                     retryable=True,
                 )
@@ -321,15 +317,13 @@ class OrchestratedAnalysisPipeline:
         emit: EmitCallback,
         *,
         deadline: float,
-        source_offset_seconds: float,
     ) -> list[SpeechSignal] | ProviderError:
         remaining_seconds = deadline - self._clock()
         if remaining_seconds <= 0:
             return ProviderError("timeout", "run budget exhausted before speech", retryable=True)
         try:
             async with asyncio.timeout(min(self._evidence_timeout_seconds, remaining_seconds)):
-                signals = await self._speech_branch(prepared, emit)
-                return _offset_speech_signals(signals, source_offset_seconds)
+                return await self._speech_branch(prepared, emit)
         except TimeoutError:
             return ProviderError("timeout", "speech evidence budget exceeded", retryable=True)
         except ProviderError as error:
@@ -408,7 +402,7 @@ class OrchestratedAnalysisPipeline:
                 failures.append((window, unexpected_error))
             else:
                 segments.extend(
-                    _offset_visual_segments(result.segments, source_window_start)
+                    _offset_visual_segments(result.segments, window.start_seconds)
                 )
                 successful_windows.append(window)
                 processed_seconds = _covered_seconds(successful_windows)
@@ -498,8 +492,6 @@ def _coverage_gaps(
     duration_seconds: float,
     successful_windows: list[AnalysisWindow],
     failures: list[tuple[AnalysisWindow, ProviderError]],
-    *,
-    source_offset_seconds: float = 0,
 ) -> list[CoverageGap]:
     if not failures:
         return []
@@ -528,15 +520,13 @@ def _coverage_gaps(
             ProviderError("provider_error", "visual coverage unavailable", retryable=True),
         )
         reason = _coverage_gap_reason(error)
-        absolute_start = source_offset_seconds + start_seconds
-        absolute_end = source_offset_seconds + end_seconds
-        if gaps and gaps[-1].end_seconds == absolute_start and gaps[-1].reason == reason:
-            gaps[-1] = gaps[-1].model_copy(update={"end_seconds": absolute_end})
+        if gaps and gaps[-1].end_seconds == start_seconds and gaps[-1].reason == reason:
+            gaps[-1] = gaps[-1].model_copy(update={"end_seconds": end_seconds})
         else:
             gaps.append(
                 CoverageGap(
-                    start_seconds=absolute_start,
-                    end_seconds=absolute_end,
+                    start_seconds=start_seconds,
+                    end_seconds=end_seconds,
                     reason=reason,
                     retryable=True,
                 )
@@ -544,32 +534,18 @@ def _coverage_gaps(
     return gaps
 
 
-def _offset_speech_signals(
-    signals: list[SpeechSignal], source_offset_seconds: float
-) -> list[SpeechSignal]:
-    if source_offset_seconds == 0:
-        return signals
-    return [
-        signal.model_copy(
-            update={
-                "start_seconds": signal.start_seconds + source_offset_seconds,
-                "end_seconds": signal.end_seconds + source_offset_seconds,
-            }
-        )
-        for signal in signals
-    ]
-
-
 def _offset_visual_segments(
-    segments: list[VisualSegment], source_offset_seconds: float
+    segments: list[VisualSegment], analysis_window_offset_seconds: float
 ) -> list[VisualSegment]:
-    if source_offset_seconds == 0:
+    if analysis_window_offset_seconds == 0:
         return segments
     return [
         segment.model_copy(
             update={
-                "start_seconds": segment.start_seconds + source_offset_seconds,
-                "end_seconds": segment.end_seconds + source_offset_seconds,
+                "start_seconds": (
+                    segment.start_seconds + analysis_window_offset_seconds
+                ),
+                "end_seconds": segment.end_seconds + analysis_window_offset_seconds,
             }
         )
         for segment in segments

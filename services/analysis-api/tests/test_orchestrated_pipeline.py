@@ -23,6 +23,7 @@ from hakimi_analysis.orchestration import (
     build_visual_chunks,
 )
 from hakimi_analysis.providers.base import ProviderError
+from hakimi_analysis.runs import AnalysisRunManager
 from hakimi_analysis.sources import VideoSource
 
 
@@ -438,7 +439,7 @@ def test_skill_repository_loads_all_three_versioned_contracts() -> None:
     repository = SkillRepository.load(Path(__file__).parents[3] / "skills")
 
     assert repository.speech_version == "1.4.0"
-    assert repository.visual_version == "1.4.0"
+    assert repository.visual_version == "1.4.1"
     assert repository.fusion_version == "1.2.0"
     assert "continuous video clip" in repository.visual_instructions
     assert "clip-local" in repository.visual_instructions
@@ -556,7 +557,7 @@ async def test_failed_middle_visual_chunk_keeps_results_and_reports_only_uncover
 
 
 @pytest.mark.asyncio
-async def test_range_source_prepares_only_the_requested_absolute_media_range(
+async def test_range_source_keeps_pipeline_results_on_the_analysis_range_clock(
     tmp_path: Path,
 ) -> None:
     media = FakeMediaProcessor(tmp_path)
@@ -583,14 +584,16 @@ async def test_range_source_prepares_only_the_requested_absolute_media_range(
     assert asr.window_starts == [0]
     assert ark.speech_windows == [Segment(start_seconds=0, end_seconds=10)]
     assert ark.visual_windows == [Segment(start_seconds=0, end_seconds=10)]
-    assert output.candidates[0].segment == Segment(start_seconds=11, end_seconds=14)
+    assert output.candidates[0].segment == Segment(start_seconds=1, end_seconds=4)
     assert {
         (span.start_seconds, span.end_seconds) for span in output.candidates[0].evidence
-    } == {(11, 13), (12, 14)}
+    } == {(1, 3), (2, 4)}
 
 
 @pytest.mark.asyncio
-async def test_range_failure_reports_coverage_gap_on_the_source_clock(tmp_path: Path) -> None:
+async def test_range_failure_keeps_pipeline_gap_on_the_analysis_range_clock(
+    tmp_path: Path,
+) -> None:
     pipeline = OrchestratedAnalysisPipeline(
         media=FakeMediaProcessor(tmp_path),
         asr=EmptyAsr(),
@@ -610,6 +613,81 @@ async def test_range_failure_reports_coverage_gap_on_the_source_clock(tmp_path: 
 
     assert output.coverage_status == CoverageStatus.INSUFFICIENT
     assert [(gap.start_seconds, gap.end_seconds) for gap in output.coverage_gaps] == [
+        (0, 10)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_manager_offsets_orchestrated_range_results_to_the_source_clock(
+    tmp_path: Path,
+) -> None:
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=LocalRangeAsr(),
+        ark=ClockBoundaryArk(),
+        skills=skills(),
+    )
+    manager = AnalysisRunManager(pipeline)
+    range_source = VideoSource(
+        id="local:62f31c4b-bd1c-4b6a-8ad8-c6121b56135a",
+        title="local upload",
+        path=tmp_path / "source.mp4",
+        duration_seconds=30,
+        analysis_start_seconds=10,
+        analysis_end_seconds=20,
+    )
+
+    try:
+        created = await manager.create(range_source, None)
+        for _ in range(100):
+            completed = manager.get(created.id)
+            if completed.status.value in {"completed", "failed", "cancelled"}:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await manager.close()
+
+    assert completed.status.value == "completed"
+    assert completed.candidates[0].segment == Segment(start_seconds=11, end_seconds=14)
+    assert {
+        (span.start_seconds, span.end_seconds)
+        for span in completed.candidates[0].evidence
+    } == {(11, 13), (12, 14)}
+
+
+@pytest.mark.asyncio
+async def test_run_manager_offsets_orchestrated_range_gaps_to_the_source_clock(
+    tmp_path: Path,
+) -> None:
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=EmptyAsr(),
+        ark=ChunkAwareArk(fail_all=True),
+        skills=skills(),
+    )
+    manager = AnalysisRunManager(pipeline)
+    range_source = VideoSource(
+        id="local:62f31c4b-bd1c-4b6a-8ad8-c6121b56135a",
+        title="local upload",
+        path=tmp_path / "source.mp4",
+        duration_seconds=30,
+        analysis_start_seconds=10,
+        analysis_end_seconds=20,
+    )
+
+    try:
+        created = await manager.create(range_source, None)
+        for _ in range(100):
+            completed = manager.get(created.id)
+            if completed.status.value in {"completed", "failed", "cancelled"}:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await manager.close()
+
+    assert completed.status.value == "completed"
+    assert completed.coverage_status == CoverageStatus.INSUFFICIENT
+    assert [(gap.start_seconds, gap.end_seconds) for gap in completed.coverage_gaps] == [
         (10, 20)
     ]
 
