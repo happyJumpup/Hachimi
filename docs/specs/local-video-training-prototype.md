@@ -1,12 +1,14 @@
 # 本地视频训练原型规格
 
-Status: frozen product contract; implementation acceptance pending
+Status: historical implementation contract; superseded for product and UX decisions
 
 Updated: 2026-07-21
 
+> 本文保留 2026-07-21 本地视频与可恢复分析切片的技术边界。当前产品、Agent、方案和页面体验以 [TrainPal 竞赛 Web MVP](competition-web-mvp.md)、根目录 `CONTEXT.md` 与 ADR-0015～0028 为准。下文的公开 `segment_role`、候选面板、产品名暂缓和旧 Pet 口径不得用于新实现；媒体安全、覆盖缺口、运行恢复与清理合同仍有效，直至被新的技术 ADR 取代。
+
 Audience: 产品、设计、Web/API 开发、测试与演示人员
 
-本文件是下一轮原型的权威规格。[竞赛 Web MVP 规格](competition-web-mvp.md)继续记录已完成的受控视频竞赛基线，但其中“受控视频是唯一入口”“离页即取消”和“60 秒是产品上限”的内容不再适用于本原型。
+本文不是当前产品或视觉权威规格；它记录既有实现为何采用本地视频与可恢复分析。
 
 ## 1. 目标
 

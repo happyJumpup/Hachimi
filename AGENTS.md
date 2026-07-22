@@ -28,9 +28,10 @@
   feed scraping are out of scope.
 - The core object is a **训练动作**, not a complete video. A video action keeps
   its source and demonstration time range; a self-created action may have none.
-- The runtime has one task-oriented 动作分析 Agent. Its speech, visual, and
-  fusion Skills propose candidates and distinguish 跟练执行段 from
-  教学演示段; the user chooses and edits the plan.
+- The user sees one TrainPal Agent. A replaceable 内容理解 Provider produces
+  structured source evidence; TrainPal deterministically orchestrates the
+  训练编译、个性化调整 and 动作要点补充 Skills. Skills do not call each
+  other, write the draft, or own the training state machine.
 - Analysis Runs are explicit, cancellable, and recoverable for a short time on
   the same device. Page navigation, refresh, or an SSE disconnect must not
   cancel a run. Do not turn them into permanent or cross-device background
@@ -50,8 +51,26 @@
 - Keep the current production Provider. The completed native audio/video
   benchmark did not select a Seed/Qwen quality winner or validate the long-video
   production route; a switch requires new reviewed evidence and an ADR.
-- GymBTI details, the public product name, and new Pet capabilities are deferred.
-  Keep the current calorie contract and non-blocking five-state Pet.
+- TrainPal is the frozen product, Agent, and cat-coach identity. GYMTI question
+  wording and final cat assets remain pending, but the current product contract,
+  four-value field provenance (`video | rule | personalized | user`),
+  non-blocking coach role, and five training presentation states are not
+  deferred. Keep the current calorie contract until a separate decision changes
+  it.
+
+## Experience boundaries
+
+- The current design source of truth is
+  `docs/design/trainpal-mobile-experience-brief.md`. Use journey-specific pages,
+  a mobile-first responsive layout, a warm journal theme outside training, and
+  a dark high-contrast training stage. Do not recreate a Douyin feed, right-side
+  action rail, fixed phone shell, or mandatory 9:16 video stage.
+- Top-level navigation is `首页 / 训练 / 我的`. Analysis, plan editing,
+  personalization, an active training session, and results are immersive
+  subflows. Each page has one primary task and one visually dominant action.
+- Source clips are reference playback unless reliable source rhythm exists.
+  Do not expose or persist the legacy public segment-role enum. Uncertainty
+  appears as a 待确认动作 or an explicit coverage gap.
 
 ## Security and data handling
 
