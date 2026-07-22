@@ -11,7 +11,6 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Net.Http
 
 function Get-Sha256Hex {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
@@ -160,32 +159,31 @@ function Send-SourcePackage {
         [AllowNull()][object[]]$UploadHeaders
     )
 
-    $client = [Net.Http.HttpClient]::new()
-    $stream = [IO.File]::OpenRead($ArchivePath)
-    $content = [Net.Http.StreamContent]::new($stream)
-    $request = [Net.Http.HttpRequestMessage]::new(
-        [Net.Http.HttpMethod]::Put,
-        $UploadUrl
-    )
-    $request.Content = $content
-    try {
-        foreach ($item in @($UploadHeaders)) {
-            $name = [string](Get-PropertyValue $item 'Key')
-            $value = [string](Get-PropertyValue $item 'Value')
-            if (-not $name) { continue }
-            if (-not $request.Headers.TryAddWithoutValidation($name, $value)) {
-                if (-not $content.Headers.TryAddWithoutValidation($name, $value)) {
-                    throw "CloudBase package upload header is unsupported: ${name}."
-                }
+    $headers = @{}
+    foreach ($item in @($UploadHeaders)) {
+        $name = [string](Get-PropertyValue $item 'Key')
+        $value = [string](Get-PropertyValue $item 'Value')
+        if ($name) { $headers[$name] = $value }
+    }
+    for ($attempt = 1; $attempt -le 3; $attempt += 1) {
+        try {
+            $response = Invoke-WebRequest `
+                -UseBasicParsing `
+                -Uri $UploadUrl `
+                -Method Put `
+                -InFile $ArchivePath `
+                -Headers $headers `
+                -TimeoutSec 180
+            if ([int]$response.StatusCode -lt 200 -or [int]$response.StatusCode -ge 300) {
+                throw "CloudBase source package upload failed with HTTP $([int]$response.StatusCode)."
             }
+            return
+        } catch {
+            if ($attempt -ge 3) {
+                throw 'CloudBase source package upload failed after three attempts.'
+            }
+            Start-Sleep -Seconds ([Math]::Pow(2, $attempt - 1))
         }
-        $response = $client.SendAsync($request).GetAwaiter().GetResult()
-        if (-not $response.IsSuccessStatusCode) {
-            throw "CloudBase source package upload failed with HTTP $([int]$response.StatusCode)."
-        }
-    } finally {
-        $request.Dispose()
-        $client.Dispose()
     }
 }
 
