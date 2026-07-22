@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -349,12 +350,18 @@ def validate(plan: dict[str, Any]) -> None:
         "https://cloud.tencent.com/document/product/1243/90265"
     ):
         fail("unexpected pricing source")
-    if budget.get("assumed_ccu_price_cny_per_hour") != 0.22:
-        fail("CCU price assumption must remain the conservative rounded value")
-    if budget.get("ccu_per_warm_instance") != 2:
-        fail("warm instance must remain two CCU")
-    if budget.get("maximum_warm_hours") != 18:
-        fail("warm window must remain bounded to 18 hours")
+    price = budget.get("assumed_ccu_price_cny_per_hour")
+    ccu_per_instance = budget.get("ccu_per_warm_instance")
+    warm_hours = budget.get("maximum_warm_hours")
+    public_hours = budget.get("maximum_public_window_hours")
+    if not isinstance(price, (int, float)) or not 0 < price <= 1:
+        fail("CCU price assumption must be positive and conservatively bounded")
+    if ccu_per_instance != capacity["cpu_cores"]:
+        fail("warm instance CCU must match the configured CPU cores")
+    if not isinstance(warm_hours, (int, float)) or warm_hours <= 0:
+        fail("warm window must be positive")
+    if not isinstance(public_hours, (int, float)) or public_hours < warm_hours:
+        fail("public window must be at least as long as the warm window")
     calculated_compute_ceiling = (
         budget.get("assumed_ccu_price_cny_per_hour", 0)
         * budget.get("ccu_per_warm_instance", 0)
@@ -364,12 +371,8 @@ def validate(plan: dict[str, Any]) -> None:
         "estimated_compute_ceiling_cny"
     ):
         fail("estimated compute ceiling does not match the pricing assumptions")
-    if budget.get("estimated_compute_ceiling_cny") != 7.92:
-        fail("unexpected compute cost ceiling")
     if calculated_compute_ceiling > budget["hard_ceiling"]:
         fail("estimated compute ceiling exceeds the authorized budget")
-    if budget.get("maximum_public_window_hours") != 52:
-        fail("public access window must remain bounded to 52 hours")
     continuous_compute_ceiling = (
         budget.get("assumed_ccu_price_cny_per_hour", 0)
         * budget.get("ccu_per_warm_instance", 0)
@@ -379,18 +382,21 @@ def validate(plan: dict[str, Any]) -> None:
         "estimated_continuous_compute_ceiling_cny"
     ):
         fail("continuous compute ceiling does not match the pricing assumptions")
-    if budget.get("estimated_continuous_compute_ceiling_cny") != 22.88:
-        fail("unexpected continuous compute cost ceiling")
     if continuous_compute_ceiling > budget["hard_ceiling"]:
         fail("continuous compute ceiling exceeds the authorized budget")
-    if budget.get("confirmed_demo_end") != "2026-07-25T00:00:00+08:00":
-        fail("unexpected confirmed demo end")
     if budget.get("unpriced_resources_require_console_confirmation") is not True:
         fail("unpriced resources must require console confirmation")
     if budget.get("purchase_requires_fresh_confirmation") is not True:
         fail("paid purchases must require fresh confirmation")
-    if plan.get("submission_deadline") != "2026-07-23T11:00:00+08:00":
-        fail("unexpected submission deadline")
+    try:
+        submission_deadline = datetime.fromisoformat(plan["submission_deadline"])
+        confirmed_demo_end = datetime.fromisoformat(budget["confirmed_demo_end"])
+    except (TypeError, ValueError) as exc:
+        fail(f"competition timestamps must be ISO 8601 values: {exc}")
+    if submission_deadline.utcoffset() is None or confirmed_demo_end.utcoffset() is None:
+        fail("competition timestamps must include UTC offsets")
+    if confirmed_demo_end <= submission_deadline:
+        fail("confirmed demo end must be later than the submission deadline")
 
     serialized = json.dumps(plan, ensure_ascii=False).lower()
     for marker in SECRET_VALUE_MARKERS:

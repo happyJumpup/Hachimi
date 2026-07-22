@@ -56,7 +56,7 @@ If any gate fails, disable the public-network switch and any HTTP Access mapping
 
 ## Cost and expiry guard
 
-The total Tencent Cloud spend authorized for this task is RMB 300. Using the published 360 CCU / RMB 76 reference as a conservative rounded assumption of RMB 0.22 per CCU-hour, one 2-CCU warm instance for at most 18 hours has a compute ceiling of RMB 7.92; even a deliberately conservative 52-hour continuously active estimate is RMB 22.88. Console-priced requests, traffic, storage, builds, or add-ons are not covered by those estimates and must remain within the authorized ceiling. The 2026-07-23 11:00 submission deadline is not the judging end. Public access may remain available until the confirmed demo end at 2026-07-25 00:00 Asia/Shanghai, with minimum instances set to zero outside explicitly announced judging periods. At the confirmed end, disable public access, return the minimum instance count to zero, and review or remove unused billable resources.
+The total Tencent Cloud spend authorized for this task is RMB 300. `deploy/cloudbase/foundation-plan.json` is the operational source of truth for the submission deadline, confirmed demo end, public/warm duration limits, pricing assumption, and derived compute ceilings. Its validator must derive both warm and continuously active compute bounds and reject a plan above the authorized ceiling. Console-priced requests, traffic, storage, builds, or add-ons are not covered by those compute estimates and must remain within the same budget. Minimum instances stay at zero outside explicitly announced judging periods. At the confirmed end, disable public access, return the minimum instance count to zero, and review or remove unused billable resources.
 
 ## Consequences
 
