@@ -124,3 +124,25 @@ def test_secret_values_are_redacted_from_settings_repr() -> None:
     assert "asr-secret-value" not in representation
     assert "judge-secret-value" not in representation
     assert "cookie-secret-value" not in representation
+
+
+def test_gymti_deepseek_compatible_settings_have_safe_local_fallback_defaults() -> None:
+    settings = Settings(_env_file=None)
+    configured = Settings(
+        _env_file=None,
+        gymti_llm_api_key=SecretStr("deepseek-secret-value"),
+        gymti_llm_model="deepseek-reasoner",
+        gymti_llm_base_url="https://api.deepseek.com/v1",
+        gymti_llm_enabled=True,
+        gymti_llm_retention_confirmed=True,
+    )
+
+    assert settings.gymti_llm_api_key is None
+    assert settings.gymti_llm_enabled is False
+    assert settings.gymti_llm_retention_confirmed is False
+    assert settings.gymti_llm_temperature > 0
+    assert settings.gymti_llm_model == "deepseek-chat"
+    assert configured.gymti_llm_enabled is True
+    assert configured.gymti_llm_retention_confirmed is True
+    assert configured.gymti_llm_model == "deepseek-reasoner"
+    assert "deepseek-secret-value" not in repr(configured)

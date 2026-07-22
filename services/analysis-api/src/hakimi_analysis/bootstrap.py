@@ -5,6 +5,12 @@ import httpx
 from fastapi import FastAPI
 
 from hakimi_analysis.access import AccessManager
+from hakimi_analysis.gymti import (
+    GymtiContractError,
+    GymtiService,
+    OpenAiStyleGymtiModel,
+    load_gymti_contract,
+)
 from hakimi_analysis.media import LocalMediaProcessor, probe_duration_sync
 from hakimi_analysis.models import (
     AnalysisCandidate,
@@ -172,6 +178,52 @@ def build_pipeline(
     )
 
 
+def build_gymti_service(
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+) -> GymtiService | None:
+    """Build a stateless GYMTI seam; disabled or unavailable LLMs use local fallback."""
+
+    try:
+        contract = load_gymti_contract(settings.gymti_contract_path)
+    except GymtiContractError:
+        return None
+    if not settings.gymti_llm_enabled or not settings.gymti_llm_retention_confirmed:
+        return GymtiService(
+            contract=contract,
+            model=None,
+            model_name=None,
+            model_attempts=settings.gymti_llm_max_attempts,
+        )
+    api_key = (
+        settings.gymti_llm_api_key.get_secret_value().strip()
+        if settings.gymti_llm_api_key is not None
+        else ""
+    )
+    model_name = settings.gymti_llm_model.strip()
+    base_url = settings.gymti_llm_base_url.strip()
+    if not api_key or not model_name or not base_url:
+        return GymtiService(
+            contract=contract,
+            model=None,
+            model_name=None,
+            model_attempts=settings.gymti_llm_max_attempts,
+        )
+    return GymtiService(
+        contract=contract,
+        model=OpenAiStyleGymtiModel(
+            api_key=api_key,
+            model=model_name,
+            base_url=base_url,
+            http_client=http_client,
+            timeout_seconds=settings.gymti_llm_timeout_seconds,
+            temperature=settings.gymti_llm_temperature,
+        ),
+        model_name=model_name,
+        model_attempts=settings.gymti_llm_max_attempts,
+    )
+
+
 def build_default_app() -> FastAPI:
     from hakimi_analysis.app import create_app
 
@@ -232,4 +284,6 @@ def build_default_app() -> FastAPI:
         local_analysis_max_seconds=settings.local_analysis_max_seconds,
         local_upload_max_bytes=settings.local_upload_max_bytes,
         local_upload_temp_root=temp_root,
+        gymti_service=build_gymti_service(settings, http_client),
+        gymti_llm_enabled=settings.gymti_llm_enabled,
     )

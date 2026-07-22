@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 import tarfile
+from functools import cache
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -13,6 +15,8 @@ from typing import Any
 SECRET_ENV_NAMES = {
     "ACCESS_COOKIE_SECRET",
     "ARK_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "GYMTI_LLM_API_KEY",
     "JUDGE_ACCESS_CODE",
     "VOLC_ASR_API_KEY",
 }
@@ -41,13 +45,7 @@ VISUAL_MEDIA_SUFFIXES = {
     ".webp",
 }
 SUBTITLE_SUFFIXES = {".ass", ".srt", ".ssa", ".vtt"}
-REGISTERED_VISUAL_SHA256 = {
-    "5518f49229cc0331bfdf9c5351e6a7806bf97cac6c882b2d5dc40e620f85561c",
-    "bdab0d00707684a80f44f31fc09f0325ac0b608060ca746b63e15e6d940b44ab",
-    "730f5c6b4b2b91d11ea23085eac3739a4d22841014d7c21752b207b63ff4db30",
-    "d775c21bc2df5bd2156638247066f7f836b9b800c9d8f3044f595a81f906f91c",
-    "74ffadcabdb1124680efcb0dbf2d4b2c2f5c5a88b79a6d811cf108a8552a92a9",
-}
+REGISTERED_VISUAL_MANIFEST = Path(__file__).with_name("registered-visual-assets.json")
 FORBIDDEN_PREFIXES = tuple(
     PurePosixPath(value)
     for value in (
@@ -67,6 +65,48 @@ REGISTERED_FFMPEG = PurePosixPath("opt/trainpal/ffmpeg/bin/ffmpeg")
 
 class ImageAuditError(RuntimeError):
     pass
+
+
+@cache
+def _load_registered_visual_sha256() -> frozenset[str]:
+    try:
+        payload = json.loads(REGISTERED_VISUAL_MANIFEST.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ImageAuditError("registered visual manifest could not be loaded") from error
+    if not isinstance(payload, dict) or set(payload) != {"version", "assets"}:
+        raise ImageAuditError("registered visual manifest shape is invalid")
+    if payload["version"] != 1 or not isinstance(payload["assets"], list):
+        raise ImageAuditError("registered visual manifest version is invalid")
+
+    source_paths: set[str] = set()
+    hashes: set[str] = set()
+    for item in payload["assets"]:
+        if not isinstance(item, dict) or set(item) not in (
+            {"sourcePath", "sha256"},
+            {"sourcePath", "sha256", "legacy"},
+        ):
+            raise ImageAuditError("registered visual manifest entry is invalid")
+        source_path = item.get("sourcePath")
+        digest = item.get("sha256")
+        legacy = item.get("legacy", False)
+        if (
+            not isinstance(source_path, str)
+            or not source_path
+            or "\\" in source_path
+            or PurePosixPath(source_path).is_absolute()
+            or ".." in PurePosixPath(source_path).parts
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or not isinstance(legacy, bool)
+        ):
+            raise ImageAuditError("registered visual manifest entry value is invalid")
+        if source_path in source_paths or digest in hashes:
+            raise ImageAuditError("registered visual manifest contains a duplicate")
+        source_paths.add(source_path)
+        hashes.add(digest)
+    if not hashes:
+        raise ImageAuditError("registered visual manifest is empty")
+    return frozenset(hashes)
 
 
 def _normalize(member_name: str) -> PurePosixPath:
@@ -114,7 +154,7 @@ def _violation(
     if any(token in basename for token in ("transcript", "transcription", "subtitle")):
         return "transcript artifact"
     if path.suffix.lower() in VISUAL_MEDIA_SUFFIXES:
-        if content_sha256 in REGISTERED_VISUAL_SHA256:
+        if content_sha256 in _load_registered_visual_sha256():
             return None
         return "raw frame or unregistered visual asset"
     if path.suffix.lower() == ".map" and _is_under(path, WEB_DIST):

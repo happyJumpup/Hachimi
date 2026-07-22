@@ -4,6 +4,8 @@ set -Eeuo pipefail
 
 readonly image_ref="${1:?usage: verify-competition-image.sh <image-ref>}"
 readonly smoke_name="hachimi-image-smoke-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
+readonly model_trap_name="${smoke_name}-model-trap"
+readonly smoke_network="${smoke_name}-network"
 readonly work_dir="$(mktemp -d)"
 
 docker_cmd() {
@@ -21,6 +23,8 @@ fi
 
 cleanup() {
   docker_cmd rm --force "${smoke_name}" >/dev/null 2>&1 || true
+  docker_cmd rm --force "${model_trap_name}" >/dev/null 2>&1 || true
+  docker_cmd network rm "${smoke_network}" >/dev/null 2>&1 || true
   rm -rf "${work_dir}"
 }
 trap cleanup EXIT
@@ -29,6 +33,9 @@ fail() {
   printf 'competition image verification failed: %s\n' "$1" >&2
   if docker_cmd inspect "${smoke_name}" >/dev/null 2>&1; then
     docker_cmd logs "${smoke_name}" >&2 || true
+  fi
+  if docker_cmd inspect "${model_trap_name}" >/dev/null 2>&1; then
+    docker_cmd logs "${model_trap_name}" >&2 || true
   fi
   exit 1
 }
@@ -46,6 +53,10 @@ docker_cmd image save "${image_ref}" >"${saved_image}"
 
 audit_output="$({
   docker_cmd run --rm --entrypoint /bin/sh "${image_ref}" -eu -c '
+    if [ ! -f /workspace/contracts/gymti-questionnaire.v1.json ]; then
+      printf "%s\n" /workspace/contracts/gymti-questionnaire.v1.json
+    fi
+
     find /workspace -type f \( \
       -name ".env" -o -name ".env.*" -o \
       -name "*.mp4" -o -name "*.mov" -o -name "*.mkv" -o \
@@ -54,28 +65,15 @@ audit_output="$({
       -name "*.aac" -o -name "*.flac" -o -name "*.trace" \
     \) -print
 
+    # Registered WebP files have already been checked by path-independent SHA-256
+    # in audit-image-layers.py. Keep this runtime pass for visual formats that are
+    # never allowed in the release image and for subtitle artifacts.
     find /workspace -type f \( \
       -name "*.bmp" -o -name "*.gif" -o -name "*.jpeg" -o \
       -name "*.jpg" -o -name "*.png" -o -name "*.tif" -o \
-      -name "*.tiff" -o -name "*.webp" -o -name "*.ass" -o \
-      -name "*.srt" -o -name "*.ssa" -o -name "*.vtt" \
-    \) -print | while IFS= read -r artifact_path; do
-      case "${artifact_path}" in
-        *.webp)
-          artifact_sha="$(sha256sum "${artifact_path}" | awk "{print \$1}")"
-          case "${artifact_sha}" in
-            5518f49229cc0331bfdf9c5351e6a7806bf97cac6c882b2d5dc40e620f85561c|\
-            bdab0d00707684a80f44f31fc09f0325ac0b608060ca746b63e15e6d940b44ab|\
-            730f5c6b4b2b91d11ea23085eac3739a4d22841014d7c21752b207b63ff4db30|\
-            d775c21bc2df5bd2156638247066f7f836b9b800c9d8f3044f595a81f906f91c|\
-            74ffadcabdb1124680efcb0dbf2d4b2c2f5c5a88b79a6d811cf108a8552a92a9)
-              ;;
-            *) printf "%s\n" "${artifact_path}" ;;
-          esac
-          ;;
-        *) printf "%s\n" "${artifact_path}" ;;
-      esac
-    done
+      -name "*.tiff" -o -name "*.ass" -o -name "*.srt" -o \
+      -name "*.ssa" -o -name "*.vtt" \
+    \) -print
 
     find /workspace -type f \( \
       -iname "*transcript*" -o -iname "*transcription*" -o -iname "*subtitle*" \
@@ -120,8 +118,35 @@ docker_cmd run --rm \
   -c 'from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path("/opt/trainpal/ffmpeg/bin/ffmpeg"), Path("/opt/trainpal/ffmpeg/receipt.json")) else 1)' \
   || fail "registered FFmpeg build receipt is invalid"
 
+docker_cmd network create "${smoke_network}" >/dev/null
+docker_cmd run --detach \
+  --name "${model_trap_name}" \
+  --network "${smoke_network}" \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,nosuid,size=8m,mode=1777 \
+  --entrypoint services/analysis-api/.venv/bin/python \
+  "${image_ref}" \
+  -c '
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class TrapHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        print("unexpected-gymti-model-call", flush=True)
+        self.send_response(503)
+        self.end_headers()
+
+    def log_message(self, _format, *_args):
+        return
+
+ThreadingHTTPServer(("0.0.0.0", 8081), TrapHandler).serve_forever()
+' >/dev/null
+if [[ "$(docker_cmd inspect --format '{{.State.Running}}' "${model_trap_name}")" != "true" ]]; then
+  fail "GYMTI model trap exited before the image smoke"
+fi
+
 docker_cmd run --detach \
   --name "${smoke_name}" \
+  --network "${smoke_network}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --tmpfs /workspace/tmp/analysis-runs:rw,noexec,nosuid,size=128m,uid=10001,gid=10001,mode=0700 \
@@ -136,6 +161,12 @@ docker_cmd run --detach \
   --env TRUSTED_PROXY_CIDRS= \
   --env PUBLIC_ANALYSIS_CONCURRENCY=0 \
   --env JUDGE_ANALYSIS_CONCURRENCY=3 \
+  --env GYMTI_LLM_ENABLED=true \
+  --env GYMTI_LLM_RETENTION_CONFIRMED=true \
+  --env GYMTI_LLM_API_KEY=release-smoke-trap-key \
+  --env GYMTI_LLM_BASE_URL="http://${model_trap_name}:8081/v1" \
+  --env GYMTI_LLM_MAX_ATTEMPTS=1 \
+  --env GYMTI_LLM_TIMEOUT_SECONDS=1 \
   --publish 127.0.0.1::8000 \
   "${image_ref}" >/dev/null
 
@@ -189,6 +220,23 @@ api_status="$(curl --silent --show-error --output "${work_dir}/api-404.json" \
 [[ "${api_status}" == "404" ]] || fail "unknown API route returned HTTP ${api_status}"
 if grep --fixed-strings --quiet '<div id="app"></div>' "${work_dir}/api-404.json"; then
   fail "unknown API route incorrectly returned the SPA shell"
+fi
+
+if ! docker_cmd exec --interactive "${smoke_name}" \
+  services/analysis-api/.venv/bin/python - \
+  <"$(dirname "$0")/smoke-gymti-image.py"
+then
+  fail "anonymous GYMTI image smoke failed"
+fi
+
+if ! model_trap_logs="$(docker_cmd logs "${model_trap_name}" 2>&1)"; then
+  fail "could not inspect GYMTI model trap logs"
+fi
+if grep --fixed-strings --quiet 'unexpected-gymti-model-call' <<<"${model_trap_logs}"; then
+  fail "anonymous GYMTI image smoke reached the configured model"
+fi
+if [[ "$(docker_cmd inspect --format '{{.State.Running}}' "${model_trap_name}")" != "true" ]]; then
+  fail "GYMTI model trap exited during the image smoke"
 fi
 
 printf 'competition image verification passed: %s\n' "${image_ref}"

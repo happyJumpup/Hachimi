@@ -10,6 +10,7 @@ COPY apps/web/package.json apps/web/package.json
 RUN pnpm install --frozen-lockfile --filter @hachimi/web...
 
 COPY apps/web apps/web
+COPY contracts/gymti-questionnaire.v1.json contracts/gymti-questionnaire.v1.json
 RUN pnpm --filter @hachimi/web build
 
 FROM ghcr.io/astral-sh/uv:0.11.7 AS uv-runtime
@@ -114,6 +115,7 @@ WORKDIR /workspace
 COPY --from=api-builder /workspace/services/analysis-api/.venv services/analysis-api/.venv
 COPY --from=ffmpeg-builder /opt/trainpal/ffmpeg /opt/trainpal/ffmpeg
 COPY services/analysis-api/src services/analysis-api/src
+COPY contracts/gymti-questionnaire.v1.json contracts/gymti-questionnaire.v1.json
 COPY skills skills
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY licenses licenses

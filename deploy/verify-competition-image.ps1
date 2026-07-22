@@ -7,12 +7,16 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
 
-$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $workDirectory = Join-Path (
     [IO.Path]::GetTempPath()
 ) ("trainpal-image-audit-{0}" -f [Guid]::NewGuid().ToString('N'))
-$containerName = "trainpal-image-smoke-{0}" -f [Guid]::NewGuid().ToString('N')
+$suffix = [Guid]::NewGuid().ToString('N')
+$containerName = "trainpal-image-smoke-$suffix"
+$modelTrapName = "trainpal-gymti-model-trap-$suffix"
+$networkName = "trainpal-image-smoke-$suffix"
 $containerStarted = $false
+$modelTrapStarted = $false
+$networkCreated = $false
 
 function Invoke-DockerChecked {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -24,6 +28,10 @@ function Invoke-DockerChecked {
 }
 
 $containerAudit = @'
+if [ ! -f /workspace/contracts/gymti-questionnaire.v1.json ]; then
+  printf '%s\n' /workspace/contracts/gymti-questionnaire.v1.json
+fi
+
 find /workspace -type f \( \
   -name '.env' -o -name '.env.*' -o \
   -name '*.mp4' -o -name '*.mov' -o -name '*.mkv' -o \
@@ -32,28 +40,14 @@ find /workspace -type f \( \
   -name '*.aac' -o -name '*.flac' -o -name '*.trace' \
 \) -print
 
+# WebP files are checked against the registered SHA-256 manifest by the layer
+# audit. This runtime pass rejects every other image and subtitle format.
 find /workspace -type f \( \
   -name '*.bmp' -o -name '*.gif' -o -name '*.jpeg' -o \
   -name '*.jpg' -o -name '*.png' -o -name '*.tif' -o \
-  -name '*.tiff' -o -name '*.webp' -o -name '*.ass' -o \
-  -name '*.srt' -o -name '*.ssa' -o -name '*.vtt' \
-\) -print | while IFS= read -r artifact_path; do
-  case "${artifact_path}" in
-    *.webp)
-      artifact_sha="$(sha256sum "${artifact_path}" | awk '{print $1}')"
-      case "${artifact_sha}" in
-        5518f49229cc0331bfdf9c5351e6a7806bf97cac6c882b2d5dc40e620f85561c|\
-        bdab0d00707684a80f44f31fc09f0325ac0b608060ca746b63e15e6d940b44ab|\
-        730f5c6b4b2b91d11ea23085eac3739a4d22841014d7c21752b207b63ff4db30|\
-        d775c21bc2df5bd2156638247066f7f836b9b800c9d8f3044f595a81f906f91c|\
-        74ffadcabdb1124680efcb0dbf2d4b2c2f5c5a88b79a6d811cf108a8552a92a9)
-          ;;
-        *) printf '%s\n' "${artifact_path}" ;;
-      esac
-      ;;
-    *) printf '%s\n' "${artifact_path}" ;;
-  esac
-done
+  -name '*.tiff' -o -name '*.ass' -o -name '*.srt' -o \
+  -name '*.ssa' -o -name '*.vtt' \
+\) -print
 
 find /workspace -type f \( \
   -iname '*transcript*' -o -iname '*transcription*' -o -iname '*subtitle*' \
@@ -89,6 +83,25 @@ $encodedContainerAudit = [Convert]::ToBase64String(
     [Text.Encoding]::UTF8.GetBytes($containerAudit)
 )
 $containerAuditCommand = "printf '%s' '$encodedContainerAudit' | base64 -d | /bin/sh -eu"
+
+$modelTrapCode = @'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+class TrapHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        print("unexpected-gymti-model-call", flush=True)
+        self.send_response(503)
+        self.end_headers()
+
+    def log_message(self, _format, *_args):
+        return
+
+ThreadingHTTPServer(("0.0.0.0", 8081), TrapHandler).serve_forever()
+'@
+$encodedModelTrap = [Convert]::ToBase64String(
+    [Text.Encoding]::UTF8.GetBytes($modelTrapCode)
+)
+$modelTrapCommand = "import base64;exec(base64.b64decode('$encodedModelTrap'))"
 
 try {
     New-Item -ItemType Directory -Path $workDirectory | Out-Null
@@ -128,9 +141,30 @@ try {
         "from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path('/opt/trainpal/ffmpeg/bin/ffmpeg'), Path('/opt/trainpal/ffmpeg/receipt.json')) else 1)"
     ) | Out-Null
 
+    Invoke-DockerChecked @('network', 'create', $networkName) | Out-Null
+    $networkCreated = $true
+    Invoke-DockerChecked @(
+        'run', '--detach',
+        '--name', $modelTrapName,
+        '--network', $networkName,
+        '--read-only',
+        '--tmpfs', '/tmp:rw,noexec,nosuid,size=8m,mode=1777',
+        '--entrypoint', '/workspace/services/analysis-api/.venv/bin/python',
+        $ImageRef,
+        '-c', $modelTrapCommand
+    ) | Out-Null
+    $modelTrapStarted = $true
+    $modelTrapRunning = (
+        Invoke-DockerChecked @('inspect', '--format', '{{.State.Running}}', $modelTrapName)
+    ).Trim()
+    if ($modelTrapRunning -ne 'true') {
+        throw 'GYMTI model trap exited before the image smoke'
+    }
+
     Invoke-DockerChecked @(
         'run', '--detach',
         '--name', $containerName,
+        '--network', $networkName,
         '--read-only',
         '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m,mode=1777',
         '--tmpfs', '/workspace/tmp/analysis-runs:rw,noexec,nosuid,size=128m,uid=10001,gid=10001,mode=0700',
@@ -145,6 +179,12 @@ try {
         '--env', 'TRUSTED_PROXY_CIDRS=',
         '--env', 'PUBLIC_ANALYSIS_CONCURRENCY=0',
         '--env', 'JUDGE_ANALYSIS_CONCURRENCY=3',
+        '--env', 'GYMTI_LLM_ENABLED=true',
+        '--env', 'GYMTI_LLM_RETENTION_CONFIRMED=true',
+        '--env', 'GYMTI_LLM_API_KEY=release-smoke-trap-key',
+        '--env', "GYMTI_LLM_BASE_URL=http://${modelTrapName}:8081/v1",
+        '--env', 'GYMTI_LLM_MAX_ATTEMPTS=1',
+        '--env', 'GYMTI_LLM_TIMEOUT_SECONDS=1',
         '--publish', '127.0.0.1::8000',
         $ImageRef
     ) | Out-Null
@@ -172,7 +212,7 @@ try {
                     }
                 }
             } catch [System.Net.Http.HttpRequestException] {
-                # The container can refuse connections briefly while Uvicorn starts.
+                # Uvicorn can refuse connections briefly while the container starts.
             }
             Start-Sleep -Seconds 1
         }
@@ -203,16 +243,50 @@ try {
         $http.Dispose()
     }
 
+    $gymtiSmoke = Get-Content -Raw (Join-Path $PSScriptRoot 'smoke-gymti-image.py')
+    $gymtiSmoke | & docker exec --interactive $containerName `
+        /workspace/services/analysis-api/.venv/bin/python -
+    if ($LASTEXITCODE -ne 0) {
+        throw 'anonymous GYMTI image smoke failed'
+    }
+
+    $modelLogs = (& docker logs $modelTrapName 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'could not inspect GYMTI model trap logs'
+    }
+    if ($modelLogs.Contains('unexpected-gymti-model-call')) {
+        throw 'anonymous GYMTI image smoke reached the configured model'
+    }
+    $modelTrapRunning = (
+        Invoke-DockerChecked @('inspect', '--format', '{{.State.Running}}', $modelTrapName)
+    ).Trim()
+    if ($modelTrapRunning -ne 'true') {
+        throw 'GYMTI model trap exited during the image smoke'
+    }
+
     Write-Output "competition image verification passed: $ImageRef"
 } catch {
     if ($containerStarted) {
         & docker logs $containerName 2>$null
     }
+    if ($modelTrapStarted) {
+        & docker logs $modelTrapName 2>$null
+    }
     throw
 } finally {
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'SilentlyContinue'
     if ($containerStarted) {
         & docker rm --force $containerName 2>$null | Out-Null
     }
+    if ($modelTrapStarted) {
+        & docker rm --force $modelTrapName 2>$null | Out-Null
+    }
+    if ($networkCreated) {
+        & docker network rm $networkName 2>$null | Out-Null
+    }
+    $ErrorActionPreference = $previousErrorActionPreference
+
     if (Test-Path -LiteralPath $workDirectory) {
         $resolvedWorkDirectory = (Resolve-Path -LiteralPath $workDirectory).Path
         $resolvedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())

@@ -3,7 +3,7 @@ from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     app_env: Literal["development", "test", "production"] = "development"
@@ -52,6 +53,30 @@ class Settings(BaseSettings):
     analysis_visual_chunk_seconds: float = Field(default=60.0, gt=0, le=300)
     analysis_visual_overlap_seconds: float = Field(default=10.0, ge=0)
     analysis_latency_target_max_seconds_per_video_minute: float = Field(default=15.0, gt=0)
+    gymti_contract_path: Path = PROJECT_ROOT / "contracts" / "gymti-questionnaire.v1.json"
+    gymti_llm_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GYMTI_LLM_API_KEY", "DEEPSEEK_API_KEY"),
+    )
+    gymti_llm_model: str = Field(
+        default="deepseek-chat",
+        validation_alias=AliasChoices("GYMTI_LLM_MODEL", "DEEPSEEK_MODEL"),
+    )
+    gymti_llm_base_url: str = Field(
+        default="https://api.deepseek.com/v1",
+        validation_alias=AliasChoices("GYMTI_LLM_BASE_URL", "DEEPSEEK_BASE_URL"),
+    )
+    gymti_llm_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GYMTI_LLM_ENABLED"),
+    )
+    gymti_llm_retention_confirmed: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("GYMTI_LLM_RETENTION_CONFIRMED"),
+    )
+    gymti_llm_timeout_seconds: float = Field(default=4.0, gt=0, le=20)
+    gymti_llm_temperature: float = Field(default=0.7, ge=0, le=2)
+    gymti_llm_max_attempts: int = Field(default=2, ge=1, le=3)
 
     @model_validator(mode="after")
     def reject_runtime_test_provider(self) -> "Settings":

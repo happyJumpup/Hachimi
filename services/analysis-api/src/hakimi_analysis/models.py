@@ -211,6 +211,61 @@ class AccessSessionView(StrictModel):
     retry_after_seconds: int | None = Field(default=None, ge=1)
 
 
+class GymtiAnswer(StrictModel):
+    question_id: str = Field(pattern=r"^\S{1,128}$")
+    option_id: str = Field(pattern=r"^\S{1,128}$")
+
+
+class GymtiNextQuestionRequest(StrictModel):
+    questionnaire_version: str = Field(min_length=1, max_length=128)
+    scoring_version: str = Field(min_length=1, max_length=128)
+    answered: list[GymtiAnswer] = Field(default_factory=list, max_length=8)
+    candidate_question_ids: list[str] = Field(min_length=1, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_distinct_ids(self) -> "GymtiNextQuestionRequest":
+        question_ids = [answer.question_id for answer in self.answered]
+        if len(set(question_ids)) != len(question_ids):
+            raise ValueError("answered question ids must be unique")
+        if len(set(self.candidate_question_ids)) != len(self.candidate_question_ids):
+            raise ValueError("candidate question ids must be unique")
+        return self
+
+
+class GymtiNextQuestionView(StrictModel):
+    question_id: str
+    source: Literal["llm", "local_fallback"]
+    model: str | None = None
+    version: str
+
+
+class GymtiResultNarrativeRequest(StrictModel):
+    questionnaire_version: str = Field(min_length=1, max_length=128)
+    scoring_version: str = Field(min_length=1, max_length=128)
+    answered: list[GymtiAnswer] = Field(min_length=1, max_length=8)
+    formal_result_id: str = Field(pattern=r"^\S{1,128}$")
+    secondary_result_id: str | None = Field(default=None, pattern=r"^\S{1,128}$")
+    coach_style_id: str = Field(pattern=r"^\S{1,128}$")
+    reason_codes: list[str] = Field(max_length=3)
+
+    @model_validator(mode="after")
+    def validate_distinct_ids(self) -> "GymtiResultNarrativeRequest":
+        question_ids = [answer.question_id for answer in self.answered]
+        if len(set(question_ids)) != len(question_ids):
+            raise ValueError("answered question ids must be unique")
+        if len(set(self.reason_codes)) != len(self.reason_codes):
+            raise ValueError("reason codes must be unique")
+        return self
+
+
+class GymtiNarrativeSnapshotView(StrictModel):
+    source: Literal["llm", "template"]
+    model: str | None = None
+    version: str
+    generated_at: datetime
+    text: str = Field(min_length=1, max_length=600)
+
+
 class AnalysisWarning(StrictModel):
     code: Literal["speech_unavailable", "visual_unavailable"]
     message: str

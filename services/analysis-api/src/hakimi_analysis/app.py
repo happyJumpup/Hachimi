@@ -37,13 +37,19 @@ from hakimi_analysis.access import (
     AdmissionDenied,
     AnalysisLease,
 )
+from hakimi_analysis.gymti import GymtiContextError, GymtiService
 from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.models import (
     AccessSessionView,
+    AccessTier,
     AnalysisRunView,
     ApiErrorResponse,
     CapabilitiesView,
     CreateAnalysisRunRequest,
+    GymtiNarrativeSnapshotView,
+    GymtiNextQuestionRequest,
+    GymtiNextQuestionView,
+    GymtiResultNarrativeRequest,
     NotReadyResponse,
     ReadyResponse,
     SourceSummary,
@@ -214,6 +220,8 @@ def create_app(
     local_upload_max_bytes: int = 256 * 1024 * 1024,
     local_upload_temp_root: Path | None = None,
     local_duration_probe: Callable[[Path], float] | None = None,
+    gymti_service: GymtiService | None = None,
+    gymti_llm_enabled: bool = False,
 ) -> FastAPI:
     if (
         not math.isfinite(local_analysis_max_seconds)
@@ -273,6 +281,8 @@ def create_app(
     app.state.run_manager = manager
     app.state.source_catalog = source_catalog
     app.state.access_manager = access_manager
+    app.state.gymti_service = gymti_service
+    app.state.gymti_llm_enabled = gymti_llm_enabled
     if local_upload_enabled:
         app.add_middleware(
             LocalUploadBodyLimitMiddleware,
@@ -301,6 +311,148 @@ def create_app(
             local_upload_enabled=local_upload_enabled,
             local_analysis_max_seconds=local_analysis_max_seconds,
             local_upload_max_bytes=local_upload_max_bytes,
+        )
+
+    async def reserve_gymti_model(
+        request: Request,
+    ) -> tuple[AccessSession, AnalysisLease | None]:
+        """Admit a paid GYMTI model request only through the existing judge gate."""
+
+        session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
+        if (
+            not gymti_llm_enabled
+            or gymti_service is None
+            or not gymti_service.model_available
+            or session.tier is not AccessTier.JUDGE
+        ):
+            return session, None
+        try:
+            lease = await access_manager.reserve(
+                session,
+                source_id="gymti-llm",
+                client_ip=_client_ip(request, trusted_proxy_networks),
+            )
+        except AdmissionDenied:
+            return session, None
+        return session, lease
+
+    @app.post(
+        "/api/v1/gymti/next-question",
+        response_model=GymtiNextQuestionView,
+        responses={
+            403: {"model": ApiErrorResponse, "description": "请求未通过同源校验。"},
+            422: {"model": ApiErrorResponse, "description": "问卷上下文与当前合同不匹配。"},
+            503: {"model": ApiErrorResponse, "description": "GYMTI 问卷合同暂不可用。"},
+        },
+    )
+    async def gymti_next_question(
+        payload: GymtiNextQuestionRequest,
+        request: Request,
+        response: Response,
+    ) -> GymtiNextQuestionView:
+        _require_same_origin(
+            request,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
+        if gymti_service is None:
+            raise HTTPException(status_code=503, detail="GYMTI 问卷暂不可用")
+        answered_question_option_ids = tuple(
+            (answer.question_id, answer.option_id) for answer in payload.answered
+        )
+        try:
+            gymti_service.validate_next_question_context(
+                questionnaire_version=payload.questionnaire_version,
+                scoring_version=payload.scoring_version,
+                answered_question_option_ids=answered_question_option_ids,
+                candidate_question_ids=payload.candidate_question_ids,
+            )
+        except GymtiContextError as error:
+            raise HTTPException(status_code=422, detail="GYMTI 问卷上下文无效") from error
+        session, model_lease = await reserve_gymti_model(request)
+        try:
+            selected = await gymti_service.next_question(
+                questionnaire_version=payload.questionnaire_version,
+                scoring_version=payload.scoring_version,
+                answered_question_option_ids=answered_question_option_ids,
+                candidate_question_ids=payload.candidate_question_ids,
+                allow_model=model_lease is not None,
+            )
+        except GymtiContextError as error:
+            raise HTTPException(status_code=422, detail="GYMTI 问卷上下文无效") from error
+        finally:
+            if model_lease is not None:
+                await model_lease.release()
+        _set_access_cookie(response, access_manager, session)
+        response.headers["Cache-Control"] = "no-store"
+        return GymtiNextQuestionView(
+            question_id=selected.question_id,
+            source=selected.source,
+            model=selected.model,
+            version=selected.version,
+        )
+
+    @app.post(
+        "/api/v1/gymti/result-narrative",
+        response_model=GymtiNarrativeSnapshotView,
+        responses={
+            403: {"model": ApiErrorResponse, "description": "请求未通过同源校验。"},
+            422: {"model": ApiErrorResponse, "description": "正式结果与当前合同不匹配。"},
+            503: {"model": ApiErrorResponse, "description": "GYMTI 问卷合同暂不可用。"},
+        },
+    )
+    async def gymti_result_narrative(
+        payload: GymtiResultNarrativeRequest,
+        request: Request,
+        response: Response,
+    ) -> GymtiNarrativeSnapshotView:
+        _require_same_origin(
+            request,
+            app_env=app_env,
+            development_origins=resolved_cors_origins,
+        )
+        if gymti_service is None:
+            raise HTTPException(status_code=503, detail="GYMTI 问卷暂不可用")
+        answered_question_option_ids = tuple(
+            (answer.question_id, answer.option_id) for answer in payload.answered
+        )
+        try:
+            gymti_service.validate_result_narrative_context(
+                questionnaire_version=payload.questionnaire_version,
+                scoring_version=payload.scoring_version,
+                answered_question_option_ids=answered_question_option_ids,
+                formal_result_id=payload.formal_result_id,
+                secondary_result_id=payload.secondary_result_id,
+                coach_style_id=payload.coach_style_id,
+                reason_codes=payload.reason_codes,
+            )
+        except GymtiContextError as error:
+            raise HTTPException(status_code=422, detail="GYMTI 正式结果无效") from error
+        session, model_lease = await reserve_gymti_model(request)
+        try:
+            snapshot = await gymti_service.result_narrative(
+                questionnaire_version=payload.questionnaire_version,
+                scoring_version=payload.scoring_version,
+                answered_question_option_ids=answered_question_option_ids,
+                formal_result_id=payload.formal_result_id,
+                secondary_result_id=payload.secondary_result_id,
+                coach_style_id=payload.coach_style_id,
+                reason_codes=payload.reason_codes,
+                allow_model=model_lease is not None,
+            )
+        except GymtiContextError as error:
+            raise HTTPException(status_code=422, detail="GYMTI 正式结果无效") from error
+        finally:
+            if model_lease is not None:
+                await model_lease.release()
+        _set_access_cookie(response, access_manager, session)
+        response.headers["Cache-Control"] = "no-store"
+        return GymtiNarrativeSnapshotView(
+            source=snapshot.source,
+            model=snapshot.model,
+            version=snapshot.version,
+            generated_at=snapshot.generated_at,
+            text=snapshot.text,
         )
 
     @app.get(
