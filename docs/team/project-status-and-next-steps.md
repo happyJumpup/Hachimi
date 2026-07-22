@@ -1,6 +1,6 @@
 # TrainPal：项目状态与下一步
 
-> 更新于 2026-07-23。五分钟后端与 TrainPal Vue design v1 已分别形成可集成提交，CloudBase 私有灰度版本 A 正在构建；只有剩余前端切片、真实 Canary 和回滚全部通过后才能宣称竞赛版完成或公网上线。
+> 更新于 2026-07-23。五分钟后端与 TrainPal Vue design v1 已集成，CloudBase A/B、私有真实视频、公网并发 Canary 和 B→A→B 回滚已通过；最终内容、移动真机、录屏和到期关停结果仍未完成，不能把短期演示表述为长期生产上线。
 
 ## 1. 当前产品方向
 
@@ -29,7 +29,7 @@ TrainPal 是独立 Web、用户可见的唯一 Agent 和小猫教练的统一身
 - `AnalysisRunView` 提供来源时长、已处理时长、暂时候选数、`complete | partial | insufficient` 覆盖状态和覆盖缺口；公开候选不再包含 `segment_role`，用户通过确认、编辑或删除校正结果。
 - Web 在离页／刷新后恢复同一运行，中间结果只读；覆盖缺口逐项重传本机 Blob，按绝对时间合并可靠结果。
 
-当前竞赛后端已把能力合同和分块实现收敛为完整源文件不超过 5 分钟：一次 ASR、60 秒视觉块、10 秒重叠、单块 20 秒和整次 180 秒。它已通过本地 API／类型门槛，但目标 CloudBase 的真实五分钟、三并发、临时材料清理与回滚尚未通过，因此不能把“已实现”写成“已上线”。
+当前竞赛后端已把能力合同和分块实现收敛为完整源文件不超过 5 分钟：一次 ASR、60 秒视觉块、10 秒重叠、单块 20 秒和整次 180 秒。目标 CloudBase 已用 67.83 秒和 295 秒授权样本通过私有真实链路，并完成三路公网评委并发、第四路 `429`、临时材料清理与 B→A→B 回滚。公网三条结果均为 `partial`，因此工程链路可以演示，但模型覆盖质量仍必须由用户核对，不能宣称任意视频生产级解析。
 
 - 训练编译 Skill 必须先输出可立即使用的整份基础方案；不再把独立候选收件箱作为主流程。
 - 动作要点补充按已确认动作非阻塞运行；可使用带引用的网页结果，失败时可明确标注模型通用建议，训练中不联网。
@@ -51,6 +51,8 @@ TrainPal 是独立 Web、用户可见的唯一 Agent 和小猫教练的统一身
 - 次数／时长训练、休息墙钟、刷新恢复、提前结束、卡路里约值、结果与分享已有基线。
 - 当前 production 配置使用真实 `cloud` Provider；Ark、豆包流式语音识别 2.0 与确定性媒体／融合路径已经接入，测试 Provider 在非测试环境拒绝启动。
 - 移动体验 Brief、TrainPal 身份、个性化、来源节奏、三个 Skill、任务幂等、覆盖状态、移动页面与视觉 ADR 已冻结。
+- Vue design v1 已合入五分钟后端，前端单元测试 150 项、API 测试 228 项、Playwright 15/15，以及 Ruff、严格 mypy、ESLint、Vue typecheck 和生产构建均通过；提交的 OpenAPI 合同新增与运行时 schema 一致性门禁。
+- CloudBase 当前公开配置复用版本 B 的同一镜像，2 vCPU / 4 GiB、单 worker、最小/最大实例 `1/1`；匿名分析并发为 0，评委分析并发为 3。
 
 native audio/video benchmark 任务仍在独立工作树验证。任何尚未提交且未通过证据、结构、清理和无虚构参数硬门槛的结果都不能接入比赛版；当前没有可以据此宣布的 Seed／Qwen 质量冠军。
 
@@ -58,7 +60,7 @@ native audio/video benchmark 任务仍在独立工作树验证。任何尚未提
 
 - benchmark 证据可用于排除不满足门禁的组合和指导后续测试，但不能当作生产 Provider 选型结论；
 - 下一轮原型保持现有生产 Provider，不因为单次 spike 改路由；
-- 当前 Provider 分块基线保持为生产候选；只有目标部署验收通过后才启用 300 秒公开能力；
+- 当前 Provider 分块基线保持为竞赛运行时；300 秒后端能力已在目标部署启用，但 CloudBase HTTP Access 请求体上限为 20 MB，Web 以 19 MB 作为安全上限；
 - 后续若切换 Provider，需引用复核后的 benchmark 证据并新增技术路线 ADR，不能只改环境变量后对外宣称升级。
 - 已观察到无讲解、音乐配音且画面不写动作名的纯视觉短视频出现动作召回不足和误识别。这证明当前自建内容理解链路可用于原型演示与继续验证，但不能宣称任意健身视频生产级解析。
 - `complete | partial | insufficient`、可靠来源节奏、整份基础方案、三个 Skill、`personalized` 来源和个性化提案时效已是新合同，但尚不能按文档存在即视为全链路完成。
@@ -66,19 +68,23 @@ native audio/video benchmark 任务仍在独立工作树验证。任何尚未提
 
 ## 4. CloudBase 竞赛入口状态
 
-CloudBase Run 已被接受为竞赛期间的临时同源 HTTPS 入口，服务计划为 `trainpal-demo`、2 vCPU / 4 GiB、最多一个实例、一个 Uvicorn worker。任何人可浏览页面，真实 Provider 分析必须使用评委访问会话，公共付费分析并发为 0。
+CloudBase Run 已作为竞赛期间的临时同源 HTTPS 入口启用，服务为 `trainpal-demo`、2 vCPU / 4 GiB、最多一个实例、一个 Uvicorn worker。任何人可浏览页面，真实 Provider 分析必须使用评委访问会话，公共付费分析并发为 0。
 
-1. 等待剩余前端任务提交，合并 API、Web 与本组文档分支，重新生成并核对 OpenAPI／前端类型，确认 wire contract 无漂移。
-2. 验证本地 Blob 导入、刷新恢复、重新选择、清除数据与 v2→v3 无损迁移。
-3. 验证页面切换、刷新、SSE 断线、显式取消、换源和迟到事件的不同生命周期。
-4. 构造部分覆盖结果，确认可靠候选可使用、每个缺口可单独重试，成功与失败合并都不丢失已有结果。
-5. 验证完整、部分、空、系统失败、容量繁忙、上传关闭、超限和媒体丢失的文案与操作相互区分。
-6. 对服务端上传副本、音频、帧、转录和 Provider 材料执行所有终态清理审计；确认日志与构建不含文件名、媒体、密钥或 Provider 正文。
-7. 签名 FFmpeg 镜像已完成本地构建与审计，CloudBase 版本 A 已以 OA、0% 流量的灰度构建提交；仍需完成私有 `/ready`、版本 B、真实短视频、外部裁剪五分钟样本、三并发／第四路 429 和 B→A→B 回滚。
+已完成：
 
-生产环境变量名称、2 vCPU / 4 GiB、0–1 实例和 OA 访问已由只读 API 回查；密钥值不进入回执。公网 Canary 尚未通过，因此不能说公网 Demo 已上线，也不能公布评委链接。
+1. 版本 A `trainpal-demo-007`（Build `2601400378`）私有 `/health`、`/ready`、签名 FFmpeg、短样本和 295 秒样本；两条均为 `complete`、0 个覆盖缺口。
+2. 版本 B `trainpal-demo-008`（Build `2601400393`）集成前端后完成私有探针、真实短样本和 `008 → 007 → 008` 实际回滚。
+3. 同一版本 B 镜像的公网配置版本 `trainpal-demo-009` 完成 SPA/history、两个独立浏览器上下文、匿名隔离、三路 `202`、第四路 `429 + Retry-After` 和三条 SSE 终态。
+4. 公网三条运行均完成并诚实返回 `partial`；结束后容量释放。回执只记录服务、版本、Build ID、提交 SHA、资源和环境变量名称，不记录秘密值、环境 ID、域名或真实内容。
 
-CloudBase 默认域名可能显示首次访问确认，并且只适合有限竞赛演示；它不是长期生产域名。发布全过程以 [`deploy/cloudbase/foundation-plan.json`](../../deploy/cloudbase/foundation-plan.json)、[CloudBase 操作说明](../../deploy/cloudbase/README.md)和[竞赛 Runbook](../release/competition-runbook.md)为准。
+仍需完成：
+
+1. 确认最终答辩视频、授权登记和人工语义标注；7/19 分钟原片必须先外部裁剪至不超过 5 分钟并压缩到 Web 19 MB 安全上限内。
+2. 在 Android Chrome 与 iOS Safari 真机完成选片、上传、前后台、软键盘、安全区和分享验收。
+3. 冻结五分钟讲解脚本并录制两份不泄露体验码、Cookie、路径或模型原文的真实闭环视频。
+4. 验证 2026-07-24 23:00（Asia/Shanghai）一次性关停任务实际禁用公网映射、把访问收紧为 OA 并把最小实例降为 0。
+
+CloudBase 默认域名首次打开会显示访问确认，需点击“确定访问”；它只适合有限竞赛演示，不是长期生产域名。发布全过程以 [`deploy/cloudbase/foundation-plan.json`](../../deploy/cloudbase/foundation-plan.json)、[CloudBase 操作说明](../../deploy/cloudbase/README.md)和[竞赛 Runbook](../release/competition-runbook.md)为准。
 
 ## 5. 当前开发主线
 
@@ -128,7 +134,7 @@ CloudBase 默认域名可能显示首次访问确认，并且只适合有限竞�
 1. 不可变镜像、配置快照、素材权属、媒体／FFmpeg 哈希和私有 `/ready` 全部通过。
 2. 至少一条团队授权本地视频通过真实 Provider 完整 Web 流程，且没有预置候选或测试回退。
 3. 三路评委分析和第四路 429 通过，无跨会话数据、实例重启或临时材料增长。
-4. 默认域名第二浏览器、Android／iOS、公网回滚和再前滚通过。
+4. 默认域名第二浏览器上下文、公网回滚和再前滚已通过；Android／iOS 真机仍须通过。
 5. 链接、体验码说明、五分钟脚本、双份录屏、已知限制和关停负责人均已确认。
 
 ## 7. 明确暂缓

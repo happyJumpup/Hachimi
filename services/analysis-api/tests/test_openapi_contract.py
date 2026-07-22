@@ -1,9 +1,15 @@
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from hakimi_analysis.app import create_app
 from hakimi_analysis.bootstrap import UnconfiguredPipeline
 from hakimi_analysis.models import AnalysisCandidate
+from hakimi_analysis.sources import EmptySourceCatalog
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_analysis_candidate_requires_an_absolute_segment() -> None:
@@ -101,3 +107,15 @@ def test_openapi_documents_actual_readiness_and_analysis_errors() -> None:
     ]
     assert "completed evidence" in progress_description
     assert "exact fused candidate count" in progress_description
+
+
+def test_committed_openapi_contract_matches_the_public_application_schema() -> None:
+    committed = json.loads(
+        (REPOSITORY_ROOT / "contracts" / "openapi.json").read_text(encoding="utf-8")
+    )
+    generated = create_app(
+        catalog=EmptySourceCatalog(),
+        pipeline=UnconfiguredPipeline(),
+    ).openapi()
+
+    assert committed == generated
