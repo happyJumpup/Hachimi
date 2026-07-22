@@ -22,7 +22,6 @@ from hakimi_analysis.models import (
     EvidenceSpan,
     EvidenceType,
     Segment,
-    SegmentRole,
 )
 from hakimi_analysis.observability import ALLOWED_LOG_FIELDS
 from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
@@ -83,7 +82,6 @@ class RelativeCandidatePipeline:
                             end_seconds=2.75,
                         )
                     ],
-                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=False,
                 )
             ]
@@ -190,7 +188,6 @@ class CandidateBoundaryPipeline:
                             end_seconds=self._evidence_end_seconds,
                         )
                     ],
-                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=True,
                 )
             ]
@@ -506,6 +503,53 @@ async def test_capabilities_publish_the_configured_local_upload_limits(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_default_local_upload_accepts_300_seconds_and_rejects_longer_before_provider(
+    tmp_path: Path,
+) -> None:
+    accepted_pipeline = RelativeCandidatePipeline()
+    accepted_app = create_app(
+        pipeline=accepted_pipeline,
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "accepted",
+        local_duration_probe=lambda _: 300.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=accepted_app), base_url="https://test"
+    ) as client:
+        capabilities = await client.get("/api/v1/capabilities")
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("source.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+
+    assert capabilities.json()["local_analysis_max_seconds"] == 300.0
+    assert completed["source_duration_seconds"] == 300.0
+    assert accepted_pipeline.source is not None
+
+    rejected_pipeline = BlockingCapturePipeline()
+    rejected_app = create_app(
+        pipeline=rejected_pipeline,
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "rejected",
+        local_duration_probe=lambda _: 300.001,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=rejected_app), base_url="https://test"
+    ) as client:
+        rejected = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("source.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": SECOND_LOCAL_SOURCE_ID},
+        )
+
+    assert rejected.status_code == 422
+    assert rejected.json() == {"detail": "视频时长超过当前分析上限"}
+    assert rejected_pipeline.sources == []
+
+
+@pytest.mark.asyncio
 async def test_disabled_local_upload_is_fail_closed_without_writing_media(tmp_path: Path) -> None:
     upload_root = tmp_path / "uploads"
     app = create_app(
@@ -617,7 +661,7 @@ async def test_deterministic_provider_respects_short_range_and_unknown_role_conf
         "start_seconds": 10.0,
         "end_seconds": 14.0,
     }
-    assert candidates[0]["segment_role"] == "unknown"
+    assert "segment_role" not in candidates[0]
     assert candidates[0]["needs_confirmation"] is True
 
 
@@ -950,9 +994,11 @@ async def test_cancelling_during_request_upload_never_acquires_run_resources(
     assert list(upload_root.iterdir()) == []
 
 
-def test_direct_app_configuration_rejects_non_finite_local_analysis_limit() -> None:
+def test_direct_app_configuration_rejects_invalid_local_analysis_limit() -> None:
     with pytest.raises(ValueError):
         create_app(local_analysis_max_seconds=float("nan"))
+    with pytest.raises(ValueError):
+        create_app(local_analysis_max_seconds=300.001)
 
 
 @pytest.mark.asyncio
@@ -1065,6 +1111,45 @@ async def test_failure_cleans_local_media_and_never_logs_names_paths_or_transcri
     assert all(set(payload) <= ALLOWED_LOG_FIELDS for payload in payloads)
     assert not pipeline.source.path.exists()
     assert list(upload_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_cleanup_failure_is_not_silently_reported_as_completed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload_root = tmp_path / "uploads"
+
+    def fail_unless_errors_are_ignored(
+        _directory: Path,
+        ignore_errors: bool = False,
+    ) -> None:
+        if ignore_errors:
+            return
+        raise OSError("simulated cleanup failure")
+
+    monkeypatch.setattr(
+        "hakimi_analysis.app.shutil.rmtree",
+        fail_unless_errors_are_ignored,
+    )
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_temp_root=upload_root,
+        local_duration_probe=lambda _: 20.0,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("private.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        failed = await wait_for_status(client, created.json()["id"], "failed")
+
+    assert failed["status"] == "failed"
+    assert list(upload_root.iterdir())
 
 
 @pytest.mark.asyncio

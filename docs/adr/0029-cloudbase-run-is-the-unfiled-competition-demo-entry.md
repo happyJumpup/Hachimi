@@ -5,6 +5,8 @@
 - Decision owners: TrainPal team
 - Supersedes: ADR-0011 only for the public edge and host topology
 
+> 2026-07-23 更新：本地上传、五分钟分块管线、空可信代理列表和镜像内签名 FFmpeg 合同由 [ADR-0030](0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 取代。本文关于必须配置受控来源、FFmpeg 位于镜像外以及生产代理列表不得为空的要求不再适用于当前 CloudBase 版本。
+
 ## Context
 
 The team has no ICP-filed custom domain and needs a public HTTPS entry for judges and invited visitors before 2026-07-23 11:00 Asia/Shanghai. The existing CloudBase environment already supplies a Tencent-managed default domain, while the product and controlled media set are still being finalized.
@@ -15,7 +17,7 @@ The API keeps active analysis runs in process memory and its temporary analysis 
 
 ## Decision
 
-Use one CloudBase Run service named `trainpal-demo` in environment `bizhao-d8grp8yqd81759fbb` as the temporary same-origin web and API entry.
+Use one CloudBase Run service named `trainpal-demo` in the operator-confirmed `ap-shanghai` environment as the temporary same-origin web and API entry. The environment identifier is supplied only at deployment time and is not committed.
 
 - Serve the built SPA and `/api/v1/*` from the same container. Keep the service public-network switch and any HTTP Access mapping disabled through the private release gates. Then open a short public-canary window for public-domain gates; announce the link only after that canary passes.
 - Run exactly one Uvicorn worker and set the service maximum instance count to one.

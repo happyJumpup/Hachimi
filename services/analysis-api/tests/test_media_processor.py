@@ -273,6 +273,11 @@ async def test_visual_window_uses_builtin_mpeg4_encoder_for_accurate_seeking(
     assert "libx264" not in captured
     assert captured[captured.index("-c:v") + 1] == "mpeg4"
     assert captured[captured.index("-pix_fmt") + 1] == "yuv420p"
+    assert "min(1280,iw)" in captured[captured.index("-vf") + 1]
+    assert captured[captured.index("-r") + 1] == "15"
+    assert captured[captured.index("-b:v") + 1] == "4000k"
+    assert captured[captured.index("-maxrate") + 1] == "4000k"
+    assert captured[captured.index("-bufsize") + 1] == "8000k"
 
 
 @pytest.mark.asyncio
@@ -488,3 +493,44 @@ async def test_failed_extraction_stops_the_other_ffmpeg_process(
     assert len(processes) == 2
     assert all(process.returncode is not None for process in processes)
     assert not any((tmp_path / "runs").iterdir())
+
+
+@pytest.mark.asyncio
+async def test_visual_chunk_preserves_the_continuous_video_instead_of_a_sparse_sheet(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    work = tmp_path / "work"
+    work.mkdir()
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    extracted_windows: list[AnalysisWindow] = []
+
+    async def extract_video(
+        source_path: Path,
+        output_path: Path,
+        window: AnalysisWindow,
+    ) -> None:
+        assert source_path == source
+        extracted_windows.append(window)
+        output_path.write_bytes(b"continuous-video-chunk")
+
+    async def reject_sparse_sheet(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("visual chunks must not be converted to sparse contact sheets")
+
+    monkeypatch.setattr(processor, "_extract_video", extract_video)
+    monkeypatch.setattr(processor, "_extract_contact_sheet", reject_sparse_sheet)
+    window = AnalysisWindow(start_seconds=50, end_seconds=110, expanded=False)
+
+    prepared = await processor.prepare_visual_chunk(
+        source,
+        window,
+        work,
+        source_offset_seconds=10,
+    )
+
+    assert prepared.video_path.read_bytes() == b"continuous-video-chunk"
+    assert extracted_windows == [
+        AnalysisWindow(start_seconds=60, end_seconds=120, expanded=False)
+    ]

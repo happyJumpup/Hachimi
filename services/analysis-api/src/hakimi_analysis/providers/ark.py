@@ -20,6 +20,8 @@ from hakimi_analysis.providers.base import (
 )
 
 StructuredResult = TypeVar("StructuredResult", bound=BaseModel)
+MAX_INLINE_VIDEO_BYTES = 45_000_000
+VIDEO_SAMPLE_FPS = 1
 
 
 def _validate_visual_result(result: VisualLocalizationResult, window: Segment) -> None:
@@ -41,8 +43,6 @@ class ArkResponsesClient:
         http_client: httpx.AsyncClient,
         visual_model_id: str | None = None,
         retry_delays: tuple[float, ...] = (1.0, 2.0),
-        file_poll_interval_seconds: float = 1.0,
-        file_poll_limit: int = 90,
     ) -> None:
         self._api_key = api_key
         self._model_id = model_id
@@ -50,8 +50,6 @@ class ArkResponsesClient:
         self._base_url = base_url.rstrip("/")
         self._http_client = http_client
         self._retry_delays = retry_delays
-        self._file_poll_interval_seconds = file_poll_interval_seconds
-        self._file_poll_limit = file_poll_limit
 
     async def understand_speech(
         self,
@@ -90,30 +88,31 @@ class ArkResponsesClient:
         window: Segment,
         instructions: str,
     ) -> VisualLocalizationResult:
-        file_id, ready = await self._upload_file(video_path)
-        try:
-            if not ready:
-                await self._wait_for_file(file_id)
-            metadata = {
-                "window": window.model_dump(mode="json"),
-                "time_rule": "Return absolute source-video seconds within this window.",
-            }
-            result = await self._structured_response(
-                instructions=instructions,
-                content=[
-                    {"type": "input_video", "file_id": file_id},
-                    {
-                        "type": "input_text",
-                        "text": json.dumps(metadata, ensure_ascii=False),
-                    },
-                ],
-                result_type=VisualLocalizationResult,
-                schema_name="visual_action_localization",
-            )
-            _validate_visual_result(result, window)
-            return result
-        finally:
-            await self._delete_file(file_id)
+        video_bytes = await self._read_inline_video(video_path)
+        video_url = "data:video/mp4;base64," + base64.b64encode(video_bytes).decode("ascii")
+        metadata = {
+            "window": window.model_dump(mode="json"),
+            "time_rule": "Return absolute source-video seconds within this window.",
+        }
+        result = await self._structured_response(
+            instructions=instructions,
+            content=[
+                {
+                    "type": "input_video",
+                    "video_url": video_url,
+                    "fps": VIDEO_SAMPLE_FPS,
+                },
+                {
+                    "type": "input_text",
+                    "text": json.dumps(metadata, ensure_ascii=False),
+                },
+            ],
+            result_type=VisualLocalizationResult,
+            schema_name="visual_action_localization",
+            model_id=self._visual_model_id,
+        )
+        _validate_visual_result(result, window)
+        return result
 
     async def locate_visual_contact_sheet(
         self,
@@ -148,74 +147,47 @@ class ArkResponsesClient:
         _validate_visual_result(result, window)
         return result
 
-    async def _upload_file(self, path: Path) -> tuple[str, bool]:
-        file_bytes = await asyncio.to_thread(path.read_bytes)
-        response = await request_with_retry(
-            self._http_client,
-            "POST",
-            f"{self._base_url}/files",
-            retry_delays=self._retry_delays,
-            headers=self._auth_headers(),
-            data={
-                "purpose": "user_data",
-                "preprocess_configs[video][fps]": "1",
-            },
-            files={"file": (path.name, file_bytes, "video/mp4")},
-        )
-        raise_for_provider_status(response, "方舟文件")
+    async def _read_inline_video(self, path: Path) -> bytes:
         try:
-            payload = response.json()
-            file_id = str(payload["id"])
-            status = str(payload.get("status", ""))
-        except (KeyError, TypeError, ValueError) as error:
-            raise ProviderSchemaError("方舟文件上传返回格式无效") from error
-        ready = status in {"processed", "succeeded", "completed", "active"}
-        return file_id, ready
-
-    async def _wait_for_file(self, file_id: str) -> None:
-        for _ in range(self._file_poll_limit):
-            response = await request_with_retry(
-                self._http_client,
-                "GET",
-                f"{self._base_url}/files/{file_id}",
-                retry_delays=self._retry_delays,
-                headers=self._auth_headers(),
+            size = path.stat().st_size
+        except OSError as error:
+            raise ProviderError(
+                "media_error",
+                "visual chunk is unavailable",
+                retryable=False,
+            ) from error
+        if size > MAX_INLINE_VIDEO_BYTES:
+            raise ProviderError(
+                "media_error",
+                "visual chunk exceeds the inline provider request limit",
+                retryable=False,
             )
-            raise_for_provider_status(response, "方舟文件")
-            try:
-                status = str(response.json().get("status", ""))
-            except (TypeError, ValueError) as error:
-                raise ProviderSchemaError("方舟文件状态返回格式无效") from error
-            if status in {"processed", "succeeded", "completed", "active"}:
-                return
-            if status in {"failed", "error", "cancelled"}:
-                raise ProviderError(
-                    "provider_error",
-                    "方舟视频预处理失败",
-                    retryable=False,
-                )
-            await asyncio.sleep(self._file_poll_interval_seconds)
-        raise ProviderError(
-            "provider_error",
-            "方舟视频预处理超时",
-            retryable=True,
-        )
 
-    async def _delete_file(self, file_id: str) -> None:
-        response = await request_with_retry(
-            self._http_client,
-            "DELETE",
-            f"{self._base_url}/files/{file_id}",
-            retry_delays=self._retry_delays,
-            headers=self._auth_headers(),
-        )
-        raise_for_provider_status(response, "方舟文件清理")
+        read_task = asyncio.create_task(asyncio.to_thread(path.read_bytes))
+        try:
+            video_bytes = await asyncio.shield(read_task)
+        except asyncio.CancelledError:
+            await asyncio.shield(asyncio.gather(read_task, return_exceptions=True))
+            raise
+        except OSError as error:
+            raise ProviderError(
+                "media_error",
+                "visual chunk could not be read",
+                retryable=False,
+            ) from error
+        if len(video_bytes) > MAX_INLINE_VIDEO_BYTES:
+            raise ProviderError(
+                "media_error",
+                "visual chunk exceeds the inline provider request limit",
+                retryable=False,
+            )
+        return video_bytes
 
     async def _structured_response(
         self,
         *,
         instructions: str,
-        content: list[dict[str, str]],
+        content: list[dict[str, Any]],
         result_type: type[StructuredResult],
         schema_name: str,
         model_id: str | None = None,

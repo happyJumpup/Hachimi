@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hakimi_analysis.models import SourceSummary
 
-MAX_ANALYZABLE_SOURCE_DURATION_SECONDS = 60.0
+MAX_ANALYZABLE_SOURCE_DURATION_SECONDS = 300.0
 
 
 @dataclass(frozen=True, slots=True)

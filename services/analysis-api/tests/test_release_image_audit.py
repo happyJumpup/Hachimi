@@ -38,3 +38,13 @@ def test_release_audit_allows_only_registered_pet_visuals() -> None:
         PurePosixPath("workspace/apps/web/dist/assets/idle-content-hash.webp"),
         content_sha256=registered_pet_hash,
     ) is None
+
+
+def test_release_audit_allows_only_the_registered_ffmpeg_runtime_path() -> None:
+    audit = load_audit_module()
+
+    assert audit._violation(PurePosixPath("opt/trainpal/ffmpeg"), is_file=False) is None
+    assert audit._violation(PurePosixPath("opt/trainpal/ffmpeg/bin/ffmpeg")) is None
+    assert "bundled FFmpeg" in audit._violation(
+        PurePosixPath("usr/local/bin/ffmpeg")
+    )

@@ -210,7 +210,7 @@ def create_app(
     web_static_root: Path | None = None,
     trusted_proxy_cidrs: list[str] | None = None,
     local_upload_enabled: bool = True,
-    local_analysis_max_seconds: float = 60,
+    local_analysis_max_seconds: float = 300,
     local_upload_max_bytes: int = 256 * 1024 * 1024,
     local_upload_temp_root: Path | None = None,
     local_duration_probe: Callable[[Path], float] | None = None,
@@ -218,9 +218,9 @@ def create_app(
     if (
         not math.isfinite(local_analysis_max_seconds)
         or local_analysis_max_seconds <= 0
-        or local_analysis_max_seconds > 600
+        or local_analysis_max_seconds > 300
     ):
-        raise ValueError("local analysis limit must be between 0 and 600 seconds")
+        raise ValueError("local analysis limit must be between 0 and 300 seconds")
     if local_upload_max_bytes < 1:
         raise ValueError("local upload byte limit must be positive")
     duration_probe = local_duration_probe or probe_duration_sync
@@ -768,7 +768,7 @@ async def _write_upload(media: UploadFile, destination: Path, *, max_bytes: int)
 
 
 async def _remove_upload_directory(directory: Path) -> None:
-    await asyncio.to_thread(shutil.rmtree, directory, True)
+    await asyncio.to_thread(shutil.rmtree, directory)
 
 
 async def _run_cleanup_to_completion(cleanup: Awaitable[None]) -> None:

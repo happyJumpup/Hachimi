@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -147,35 +148,39 @@ async def test_access_session_does_not_claim_analysis_is_available_while_not_rea
 def configured_readiness(
     tmp_path: Path,
     *,
+    controlled_sources: bool = True,
     include_web_root: bool = True,
-    trusted_proxy_cidrs: str = "172.30.248.2/32",
+    trusted_proxy_cidrs: str = "",
     judge_access_code: str = "judge-access-code-at-least-16-bytes",
     include_ffmpeg: bool = True,
+    include_ffmpeg_receipt: bool = True,
     ffmpeg_audit_passes: bool = True,
+    settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
-    media_root.mkdir()
     media_path = media_root / "arm-01.mp4"
-    media_path.write_bytes(b"team-owned-video")
     manifest_path = tmp_path / "sources.json"
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "sources": [
-                    {
-                        "id": "arm-01",
-                        "title": "手臂训练 01",
-                        "media_path": "arm-01.mp4",
-                        "duration_seconds": 60,
-                        "sha256": hashlib.sha256(b"team-owned-video").hexdigest(),
-                        "origin_url": None,
-                    }
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
+    if controlled_sources:
+        media_root.mkdir()
+        media_path.write_bytes(b"team-owned-video")
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "sources": [
+                        {
+                            "id": "arm-01",
+                            "title": "手臂训练 01",
+                            "media_path": "arm-01.mp4",
+                            "duration_seconds": 60,
+                            "sha256": hashlib.sha256(b"team-owned-video").hexdigest(),
+                            "origin_url": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
     skills_root = tmp_path / "skills"
     for skill_name in (
         "training-speech-understanding",
@@ -189,32 +194,50 @@ def configured_readiness(
     if include_web_root:
         web_static_root.mkdir()
         (web_static_root / "index.html").write_text("<main>ready</main>", encoding="utf-8")
-    ffmpeg_path = tmp_path / "ffmpeg"
+    ffmpeg_root = tmp_path / "opt" / "trainpal" / "ffmpeg"
+    ffmpeg_path = ffmpeg_root / "bin" / "ffmpeg"
+    ffmpeg_receipt_path = ffmpeg_root / "receipt.json"
     if include_ffmpeg:
+        ffmpeg_path.parent.mkdir(parents=True)
         ffmpeg_path.write_bytes(b"server-managed-ffmpeg")
+        if include_ffmpeg_receipt:
+            ffmpeg_receipt_path.write_text("{}", encoding="utf-8")
     ffmpeg_sha256 = hashlib.sha256(b"server-managed-ffmpeg").hexdigest()
-    settings = Settings(
-        _env_file=None,
-        app_env="production",
-        analysis_provider="cloud",
-        ark_api_key="ark-key",
-        volc_asr_api_key="asr-key",
-        source_manifest_path=manifest_path,
-        source_media_root=media_root,
-        public_media_base_url="https://media.example.com/hachimi/",
-        judge_access_code=judge_access_code,
-        access_cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
-        web_static_root=web_static_root,
-        trusted_proxy_cidrs=trusted_proxy_cidrs,
-        imageio_ffmpeg_exe=ffmpeg_path if include_ffmpeg else None,
-        ffmpeg_expected_sha256=ffmpeg_sha256 if include_ffmpeg else None,
-        ffmpeg_expected_configuration_sha256="c" * 64 if include_ffmpeg else None,
-    )
-    catalog = SourceCatalog.from_manifest(
-        manifest_path=manifest_path,
-        media_root=media_root,
-        public_media_base_url="https://media.example.com/hachimi/",
-        duration_probe=lambda _: 60,
+    settings_kwargs: dict[str, Any] = {
+        "_env_file": None,
+        "app_env": "production",
+        "analysis_provider": "cloud",
+        "ark_api_key": "ark-key",
+        "volc_asr_api_key": "asr-key",
+        "source_manifest_path": manifest_path if controlled_sources else None,
+        "source_media_root": media_root if controlled_sources else None,
+        "public_media_base_url": (
+            "https://media.example.com/hachimi/" if controlled_sources else None
+        ),
+        "judge_access_code": judge_access_code,
+        "access_cookie_secret": "cookie-signing-secret-with-at-least-32-bytes",
+        "judge_analysis_concurrency": 3,
+        "public_analysis_concurrency": 0,
+        "web_static_root": web_static_root,
+        "trusted_proxy_cidrs": trusted_proxy_cidrs,
+        "imageio_ffmpeg_exe": ffmpeg_path if include_ffmpeg else None,
+        "ffmpeg_build_receipt_path": (
+            ffmpeg_receipt_path if include_ffmpeg and include_ffmpeg_receipt else None
+        ),
+        "ffmpeg_expected_sha256": ffmpeg_sha256 if include_ffmpeg else None,
+        "ffmpeg_expected_configuration_sha256": "c" * 64 if include_ffmpeg else None,
+    }
+    settings_kwargs.update(settings_overrides or {})
+    settings = Settings(**settings_kwargs)
+    catalog = (
+        SourceCatalog.from_manifest(
+            manifest_path=manifest_path,
+            media_root=media_root,
+            public_media_base_url="https://media.example.com/hachimi/",
+            duration_probe=lambda _: 60,
+        )
+        if controlled_sources
+        else EmptySourceCatalog()
     )
     return (
         ProductionReadiness(
@@ -223,7 +246,7 @@ def configured_readiness(
             temp_root=tmp_path / "analysis-runs",
             skills_root=skills_root,
             duration_probe=lambda _: 60,
-            ffmpeg_runtime_probe=lambda *_: ffmpeg_audit_passes,
+            ffmpeg_receipt_probe=lambda *_: ffmpeg_audit_passes,
         ),
         media_path,
     )
@@ -281,6 +304,53 @@ async def test_production_ready_rejects_ffmpeg_that_fails_runtime_audit(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_production_ready_rejects_legacy_hashes_without_signed_build_receipt(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(tmp_path, include_ffmpeg_receipt=False)
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "not_ready",
+        "code": "media_processor_unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    ("setting_name", "unsafe_value"),
+    [
+        ("local_upload_enabled", False),
+        ("local_analysis_max_seconds", 299),
+        ("local_upload_max_bytes", 128 * 1024 * 1024),
+        ("analysis_chunk_timeout_seconds", 19),
+        ("analysis_visual_chunk_seconds", 50),
+        ("analysis_visual_overlap_seconds", 5),
+        ("run_timeout_seconds", 179),
+        ("judge_analysis_concurrency", 2),
+        ("public_analysis_concurrency", 1),
+        ("trusted_proxy_cidrs", "10.0.0.0/8"),
+    ],
+)
+def test_production_ready_rejects_competition_profile_drift(
+    tmp_path: Path,
+    setting_name: str,
+    unsafe_value: object,
+) -> None:
+    readiness, _ = configured_readiness(
+        tmp_path,
+        settings_overrides={setting_name: unsafe_value},
+    )
+
+    assert readiness.check() == "competition_configuration_invalid"
+
+
+@pytest.mark.asyncio
 async def test_production_ready_requires_built_web_entrypoint(tmp_path: Path) -> None:
     readiness, _ = configured_readiness(tmp_path, include_web_root=False)
     app = create_app(app_env="production", readiness=readiness)
@@ -295,7 +365,9 @@ async def test_production_ready_requires_built_web_entrypoint(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_production_ready_requires_trusted_proxy_configuration(tmp_path: Path) -> None:
+async def test_production_ready_uses_direct_peer_when_no_trusted_proxy_is_configured(
+    tmp_path: Path,
+) -> None:
     readiness, _ = configured_readiness(tmp_path, trusted_proxy_cidrs="")
     app = create_app(app_env="production", readiness=readiness)
 
@@ -304,11 +376,28 @@ async def test_production_ready_requires_trusted_proxy_configuration(tmp_path: P
     ) as client:
         response = await client.get("/api/v1/ready")
 
-    assert response.status_code == 503
-    assert response.json() == {
-        "status": "not_ready",
-        "code": "proxy_configuration_invalid",
-    }
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+@pytest.mark.asyncio
+async def test_production_ready_accepts_local_upload_without_controlled_catalog(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(
+        tmp_path,
+        controlled_sources=False,
+        trusted_proxy_cidrs="",
+    )
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
 
 
 @pytest.mark.asyncio

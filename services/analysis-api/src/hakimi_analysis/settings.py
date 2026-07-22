@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     smoke_annotations_path: Path | None = None
     web_static_root: Path | None = None
     imageio_ffmpeg_exe: Path | None = None
+    ffmpeg_build_receipt_path: Path | None = None
     ffmpeg_expected_sha256: str | None = None
     ffmpeg_expected_configuration_sha256: str | None = None
     judge_access_code: SecretStr | None = None
@@ -44,15 +45,20 @@ class Settings(BaseSettings):
     run_ttl_seconds: int = Field(default=600, ge=1)
     run_timeout_seconds: int = Field(default=180, ge=1)
     local_upload_enabled: bool = True
-    local_analysis_max_seconds: float = Field(default=60, gt=0, le=600)
+    local_analysis_max_seconds: float = Field(default=300, gt=0, le=300)
     local_upload_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
     analysis_evidence_timeout_seconds: float = Field(default=11.5, gt=0)
+    analysis_chunk_timeout_seconds: float = Field(default=20.0, gt=0)
+    analysis_visual_chunk_seconds: float = Field(default=60.0, gt=0, le=300)
+    analysis_visual_overlap_seconds: float = Field(default=10.0, ge=0)
     analysis_latency_target_max_seconds_per_video_minute: float = Field(default=15.0, gt=0)
 
     @model_validator(mode="after")
     def reject_runtime_test_provider(self) -> "Settings":
         if self.analysis_provider == "test" and self.app_env != "test":
             raise ValueError("test analysis provider is allowed only when APP_ENV=test")
+        if self.analysis_visual_overlap_seconds >= self.analysis_visual_chunk_seconds:
+            raise ValueError("visual chunk overlap must be shorter than the chunk")
         return self
 
     @field_validator("trusted_proxy_cidrs")

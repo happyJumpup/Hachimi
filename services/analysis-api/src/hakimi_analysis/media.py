@@ -61,6 +61,12 @@ class PreparedMedia:
     contact_sheet_ready: asyncio.Task[None] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedVisualChunk:
+    video_path: Path
+    window: AnalysisWindow
+
+
 class MediaProcessingError(RuntimeError):
     pass
 
@@ -93,6 +99,7 @@ class LocalMediaProcessor:
         duration_seconds: float,
         *,
         start_seconds: float = 0,
+        include_contact_sheet: bool = True,
     ) -> AsyncIterator[PreparedMedia]:
         if not source_path.is_file():
             raise MediaProcessingError("configured source video is unavailable")
@@ -135,14 +142,20 @@ class LocalMediaProcessor:
             }
             if start_seconds > 0:
                 contact_sheet_kwargs["window"] = extraction_window
-            contact_sheet_task = asyncio.create_task(
-                self._extract_contact_sheet(
-                    source_path,
-                    contact_sheet_path,
-                    **contact_sheet_kwargs,
+            contact_sheet_task = (
+                asyncio.create_task(
+                    self._extract_contact_sheet(
+                        source_path,
+                        contact_sheet_path,
+                        **contact_sheet_kwargs,
+                    )
                 )
+                if include_contact_sheet
+                else None
             )
-            extraction_tasks = (audio_task, contact_sheet_task)
+            extraction_tasks = tuple(
+                task for task in (audio_task, contact_sheet_task) if task is not None
+            )
             try:
                 await audio_task
                 yield PreparedMedia(
@@ -150,8 +163,8 @@ class LocalMediaProcessor:
                     video_path=source_path,
                     audio_path=audio_path,
                     window=window,
-                    contact_sheet_path=contact_sheet_path,
-                    contact_sheet_timestamps=timestamps,
+                    contact_sheet_path=contact_sheet_path if include_contact_sheet else None,
+                    contact_sheet_timestamps=timestamps if include_contact_sheet else (),
                     contact_sheet_ready=contact_sheet_task,
                 )
             finally:
@@ -159,6 +172,32 @@ class LocalMediaProcessor:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*extraction_tasks, return_exceptions=True)
+
+    async def prepare_visual_chunk(
+        self,
+        source_path: Path,
+        window: AnalysisWindow,
+        directory: Path,
+        *,
+        source_offset_seconds: float = 0,
+    ) -> PreparedVisualChunk:
+        if not source_path.is_file():
+            raise MediaProcessingError("configured source video is unavailable")
+        if not directory.is_dir():
+            raise MediaProcessingError("analysis temporary directory is unavailable")
+        if window.duration_seconds <= 0 or source_offset_seconds < 0:
+            raise MediaProcessingError("visual analysis window is invalid")
+        extraction_window = AnalysisWindow(
+            start_seconds=source_offset_seconds + window.start_seconds,
+            end_seconds=source_offset_seconds + window.end_seconds,
+            expanded=False,
+        )
+        output_path = directory / f"visual-chunk-{round(window.start_seconds * 1000):09d}.mp4"
+        await self._extract_video(source_path, output_path, extraction_window)
+        return PreparedVisualChunk(
+            video_path=output_path,
+            window=window,
+        )
 
     @asynccontextmanager
     async def prepare(
@@ -209,10 +248,18 @@ class LocalMediaProcessor:
             "-t",
             f"{window.duration_seconds:.3f}",
             "-an",
+            "-vf",
+            "scale=w='min(1280,iw)':h=-2",
+            "-r",
+            "15",
             "-c:v",
             "mpeg4",
-            "-q:v",
-            "4",
+            "-b:v",
+            "4000k",
+            "-maxrate",
+            "4000k",
+            "-bufsize",
+            "8000k",
             "-pix_fmt",
             "yuv420p",
             "-movflags",

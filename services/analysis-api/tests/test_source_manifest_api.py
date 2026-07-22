@@ -104,7 +104,7 @@ async def test_manifest_sources_expose_origin_and_redirect_to_controlled_cdn(
 def test_manifest_rejects_media_longer_than_full_source_boundary(tmp_path: Path) -> None:
     manifest_path = write_manifest(tmp_path)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    payload["sources"][0]["duration_seconds"] = 60
+    payload["sources"][0]["duration_seconds"] = 300
     manifest_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(SourceManifestError):
@@ -112,7 +112,7 @@ def test_manifest_rejects_media_longer_than_full_source_boundary(tmp_path: Path)
             manifest_path=manifest_path,
             media_root=tmp_path / "media",
             public_media_base_url="https://media.example.com/hachimi/",
-            duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 60.1,
+            duration_probe=lambda path: 48 if path.name == "arm-02.mp4" else 300.1,
         )
 
 

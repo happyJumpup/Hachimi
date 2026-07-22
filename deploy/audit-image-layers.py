@@ -62,6 +62,7 @@ FORBIDDEN_PREFIXES = tuple(
 )
 WEB_DIST = PurePosixPath("workspace/apps/web/dist")
 ANALYSIS_TEMP = PurePosixPath("workspace/tmp/analysis-runs")
+REGISTERED_FFMPEG = PurePosixPath("opt/trainpal/ffmpeg/bin/ffmpeg")
 
 
 class ImageAuditError(RuntimeError):
@@ -85,11 +86,18 @@ def _whiteout_target(path: PurePosixPath) -> PurePosixPath | None:
     return path.parent / path.name.removeprefix(".wh.")
 
 
-def _violation(path: PurePosixPath, *, content_sha256: str | None = None) -> str | None:
+def _violation(
+    path: PurePosixPath,
+    *,
+    content_sha256: str | None = None,
+    is_file: bool = True,
+) -> str | None:
     lowered = str(path).lower()
     basename = path.name.lower()
 
-    if basename in {"ffmpeg", "ffmpeg.exe"}:
+    if is_file and basename in {"ffmpeg", "ffmpeg.exe"}:
+        if path == REGISTERED_FFMPEG:
+            return None
         return "bundled FFmpeg executable"
     if "imageio_ffmpeg/binaries/ffmpeg-" in lowered:
         return "imageio-ffmpeg wheel binary"
@@ -157,6 +165,7 @@ def _audit_layer(archive: tarfile.TarFile, layer_name: str) -> None:
                 reason = _violation(
                     candidate,
                     content_sha256=content_sha256 if candidate == path else None,
+                    is_file=member.isfile() if candidate == path else True,
                 )
                 if reason is not None:
                     raise ImageAuditError(f"{reason} found in image layer: {candidate}")

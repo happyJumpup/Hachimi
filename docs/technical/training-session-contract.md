@@ -2,7 +2,7 @@
 
 > 状态：下一轮本地视频原型已冻结；训练状态机继续沿用已验收基线
 >
-> 更新日期：2026-07-21
+> 更新日期：2026-07-23
 
 ## 1. 边界与原则
 
@@ -93,13 +93,6 @@ interface DraftSourceRef {
   kind?: 'controlled' | 'local'
   localMedia?: LocalMediaFingerprint
 }
-
-type SegmentRole = 'follow_along' | 'teaching_demo' | 'unknown'
-
-interface DraftItem {
-  // 既有字段保持不变
-  segmentRole?: SourcedValue<SegmentRole>
-}
 ```
 
 - 草稿继续 300ms 防抖自动保存。
@@ -111,14 +104,14 @@ interface DraftItem {
 - 本地导入生成规范小写 `local:<UUID>`，先完成能力、类型、大小和时长检查，再把 Blob 与指纹写入 `localMedia`。保存失败时可保留当前标签页内存 Blob，但不能写入“已保存到本机”状态。
 - 本地视频动作的 `DraftSourceRef.kind='local'`，`sourceId` 等于 `LocalSourceMedia.sourceId`，并嵌入不含 Blob 的指纹；受控来源可显式写 `controlled`，旧数据缺少 `kind` 时仍按受控来源读取。
 - 重新选择媒体时，用户选中的文件必须通过基本指纹与时长校验后才可替换相同 `sourceId` 的 Blob。替换媒体不改写方案、场次或记录快照。
-- 新候选加入草稿时把 `segment_role` 写入可选 `DraftItem.segmentRole`：Agent 明确值使用 `video` 来源，用户确认或修改后使用 `user` 来源；该字段不使用 `rule`。旧草稿缺少字段时按 `unknown` 行为处理，不进行破坏性迁移。
+- 新候选加入草稿前必须处理 `needs_confirmation`；公开候选和 `DraftItem` 都不保存 `segment_role`。旧草稿若仍有历史 `segmentRole` 字段只允许兼容读取并在下一次规范化写入时删除，不能继续影响运行时判断。
 
 ### 2.2 展开式执行时间线
 
 - 从来源视频得到的候选按绝对开始时间排序。循环或重复出现的动作不去重，每次出现都创建不同 ID 的扁平 `DraftItem`，例如 `A1 → B1 → A2 → B2`。
 - 轮次只作为可选展示标签，不参与训练状态机。每个 `DraftItem.sets` 只表示该次动作安排内的连续组数，不能用 `sets=2` 把 `A → B` 的两轮折叠成 `A(2组) → B(2组)`。
-- `segment_role='follow_along'` 时，明确的动作时长、休息和顺序可以写入 `video` 来源值；`teaching_demo` 的时间只写入演示片段，绝不自动写入训练时长，训练参数继续使用明确口令、规则默认值或用户值。
-- `segment_role='unknown'` 且会改变参数时，加入草稿前要求一次确认。训练执行器只消费确认后的扁平安排，不在运行时重新调用 Agent 或推断段类型。
+- 只有带时间的明确口令或其他可定位来源证据可以写入 `video` 来源的动作时长、次数、组数和休息；来源片段长度本身绝不自动写入训练时长，缺失值由用户或已有规则明确补充。
+- 证据不足或冲突且会改变训练参数时，加入草稿前要求一次确认。训练执行器只消费确认后的扁平安排，不在运行时重新调用 Agent 或推断段类型。
 
 ### 2.3 方案快照、训练场次与记录
 

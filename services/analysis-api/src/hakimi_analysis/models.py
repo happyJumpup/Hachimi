@@ -24,7 +24,7 @@ class NotReadyResponse(StrictModel):
 
 class CapabilitiesView(StrictModel):
     local_upload_enabled: bool
-    local_analysis_max_seconds: float = Field(gt=0, le=600)
+    local_analysis_max_seconds: float = Field(gt=0, le=300)
     local_upload_max_bytes: int = Field(ge=1)
 
 
@@ -55,6 +55,7 @@ class RunStatus(StrEnum):
 class CoverageStatus(StrEnum):
     COMPLETE = "complete"
     PARTIAL = "partial"
+    INSUFFICIENT = "insufficient"
 
 
 class CoverageGapReason(StrEnum):
@@ -140,7 +141,6 @@ class AnalysisCandidate(StrictModel):
     segment: Segment
     parameters: CandidateParameters
     evidence: list[EvidenceSpan]
-    segment_role: SegmentRole
     needs_confirmation: bool
 
 
@@ -230,7 +230,7 @@ class AnalysisRunView(StrictModel):
     stage: RunStage
     candidates: list[AnalysisCandidate] = Field(default_factory=list)
     warnings: list[AnalysisWarning] = Field(default_factory=list)
-    empty_reason: Literal["no_evidence"] | None = None
+    empty_reason: Literal["no_evidence", "insufficient_evidence"] | None = None
     error: AnalysisError | None = None
     source_duration_seconds: float = Field(gt=0)
     processed_seconds: float = Field(default=0, ge=0)
@@ -238,7 +238,7 @@ class AnalysisRunView(StrictModel):
         default=0,
         ge=0,
         description=(
-            "While running, the conservative maximum evidence count from completed branches; "
+            "While running, the conservative maximum evidence count from completed evidence; "
             "at terminal completion, the exact fused candidate count."
         ),
     )

@@ -19,7 +19,7 @@ EmitCallback = Callable[[RunStage, str, dict[str, object]], Awaitable[None]]
 class PipelineOutput:
     candidates: list[AnalysisCandidate] = field(default_factory=list)
     warnings: list[AnalysisWarning] = field(default_factory=list)
-    empty_reason: Literal["no_evidence"] | None = None
+    empty_reason: Literal["no_evidence", "insufficient_evidence"] | None = None
     coverage_status: CoverageStatus = CoverageStatus.COMPLETE
     coverage_gaps: list[CoverageGap] = field(default_factory=list)
     processed_seconds: float | None = None
@@ -31,10 +31,14 @@ class PipelineOutput:
             raise ValueError("processed_seconds must be finite and not negative")
         if self.coverage_status == CoverageStatus.COMPLETE and self.coverage_gaps:
             raise ValueError("complete pipeline output cannot contain coverage gaps")
-        if self.coverage_status == CoverageStatus.PARTIAL and (
+        if self.coverage_status in {CoverageStatus.PARTIAL, CoverageStatus.INSUFFICIENT} and (
             not self.coverage_gaps or self.processed_seconds is None
         ):
-            raise ValueError("partial pipeline output requires gaps and processed_seconds")
+            raise ValueError("incomplete pipeline output requires gaps and processed_seconds")
+        if self.coverage_status == CoverageStatus.INSUFFICIENT and (
+            self.candidates or self.empty_reason != "insufficient_evidence"
+        ):
+            raise ValueError("insufficient pipeline output cannot contain candidates")
         for index in range(1, len(self.coverage_gaps)):
             previous = self.coverage_gaps[index - 1]
             current = self.coverage_gaps[index]

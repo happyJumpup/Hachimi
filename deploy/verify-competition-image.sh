@@ -99,11 +99,11 @@ audit_output="$({
     find / -xdev -type f \( \
       -name "ffmpeg" -o -name "ffmpeg.exe" -o \
       -path "*/imageio_ffmpeg/binaries/ffmpeg-*" \
-    \) -print 2>/dev/null || true
-
-    if [ -e /opt/hachimi/bin/ffmpeg ]; then
-      printf "%s\n" /opt/hachimi/bin/ffmpeg
-    fi
+    \) -print 2>/dev/null | while IFS= read -r ffmpeg_path; do
+      if [ "${ffmpeg_path}" != "/opt/trainpal/ffmpeg/bin/ffmpeg" ]; then
+        printf "%s\n" "${ffmpeg_path}"
+      fi
+    done
 
     find /workspace/tmp/analysis-runs -mindepth 1 -print -quit
   '
@@ -114,13 +114,28 @@ if [[ -n "${audit_output}" ]]; then
   fail "forbidden release content is present"
 fi
 
+docker_cmd run --rm \
+  --entrypoint /workspace/services/analysis-api/.venv/bin/python \
+  "${image_ref}" \
+  -c 'from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path("/opt/trainpal/ffmpeg/bin/ffmpeg"), Path("/opt/trainpal/ffmpeg/receipt.json")) else 1)' \
+  || fail "registered FFmpeg build receipt is invalid"
+
 docker_cmd run --detach \
   --name "${smoke_name}" \
   --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=64m,mode=1777 \
   --tmpfs /workspace/tmp/analysis-runs:rw,noexec,nosuid,size=128m,uid=10001,gid=10001,mode=0700 \
-  --env APP_ENV=test \
-  --env ANALYSIS_PROVIDER=test \
+  --env APP_ENV=production \
+  --env ANALYSIS_PROVIDER=cloud \
+  --env ARK_API_KEY=image-audit-provider-key \
+  --env VOLC_ASR_API_KEY=image-audit-asr-key \
+  --env JUDGE_ACCESS_CODE=image-audit-judge-code-32-bytes \
+  --env ACCESS_COOKIE_SECRET=image-audit-cookie-secret-at-least-32-bytes \
+  --env CORS_ORIGINS=https://image-audit.invalid \
+  --env LOCAL_UPLOAD_ENABLED=true \
+  --env TRUSTED_PROXY_CIDRS= \
+  --env PUBLIC_ANALYSIS_CONCURRENCY=0 \
+  --env JUDGE_ANALYSIS_CONCURRENCY=3 \
   --publish 127.0.0.1::8000 \
   "${image_ref}" >/dev/null
 
@@ -150,6 +165,12 @@ if [[ "${healthy}" != "true" ]]; then
 fi
 grep --fixed-strings --quiet '"status":"ok"' "${work_dir}/health.json" \
   || fail "health endpoint returned an unexpected payload"
+
+ready_status="$(curl --silent --show-error --output "${work_dir}/ready.json" \
+  --write-out '%{http_code}' "${base_url}/api/v1/ready")"
+[[ "${ready_status}" == "200" ]] || fail "ready endpoint returned HTTP ${ready_status}"
+grep --fixed-strings --quiet '"status":"ready"' "${work_dir}/ready.json" \
+  || fail "ready endpoint returned an unexpected payload"
 
 root_status="$(curl --silent --show-error --output "${work_dir}/root.html" \
   --write-out '%{http_code}' "${base_url}/")"

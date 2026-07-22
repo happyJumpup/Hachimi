@@ -5,10 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from hakimi_analysis.media import AnalysisWindow, PreparedMedia
+from hakimi_analysis.media import AnalysisWindow, PreparedMedia, PreparedVisualChunk
 from hakimi_analysis.models import (
     CoverageStatus,
     RunStage,
+    Segment,
     SpeechSignal,
     SpeechUnderstandingResult,
     Transcript,
@@ -16,8 +17,11 @@ from hakimi_analysis.models import (
     VisualLocalizationResult,
     VisualSegment,
 )
-from hakimi_analysis.orchestration import OrchestratedAnalysisPipeline, SkillRepository
-from hakimi_analysis.pipeline import PipelineFailure
+from hakimi_analysis.orchestration import (
+    OrchestratedAnalysisPipeline,
+    SkillRepository,
+    build_visual_chunks,
+)
 from hakimi_analysis.providers.base import ProviderError
 from hakimi_analysis.sources import VideoSource
 
@@ -27,6 +31,7 @@ class FakeMediaProcessor:
         self.directory = directory
         self.windows: list[AnalysisWindow] = []
         self.prepare_calls: list[tuple[Path, float, float]] = []
+        self.visual_prepare_calls: list[AnalysisWindow] = []
         self.exited = asyncio.Event()
 
     @asynccontextmanager
@@ -36,6 +41,7 @@ class FakeMediaProcessor:
         duration_seconds: float,
         *,
         start_seconds: float = 0,
+        include_contact_sheet: bool = True,
     ) -> AsyncIterator[PreparedMedia]:
         self.prepare_calls.append((source_path, duration_seconds, start_seconds))
         window = AnalysisWindow(
@@ -50,17 +56,38 @@ class FakeMediaProcessor:
                 video_path=self.directory / "video.mp4",
                 audio_path=self.directory / "audio.wav",
                 window=window,
-                contact_sheet_path=self.directory / "contact-sheet.jpg",
-                contact_sheet_timestamps=(0, 3, 6),
+                contact_sheet_path=(
+                    self.directory / "contact-sheet.jpg" if include_contact_sheet else None
+                ),
+                contact_sheet_timestamps=(0, 3, 6) if include_contact_sheet else (),
             )
         finally:
             self.exited.set()
 
+    async def prepare_visual_chunk(
+        self,
+        source_path: Path,
+        window: AnalysisWindow,
+        directory: Path,
+        *,
+        source_offset_seconds: float = 0,
+    ) -> PreparedVisualChunk:
+        del source_path, directory, source_offset_seconds
+        self.visual_prepare_calls.append(window)
+        return PreparedVisualChunk(
+            video_path=self.directory / f"chunk-{len(self.visual_prepare_calls)}.mp4",
+            window=window,
+        )
+
 
 class FakeAsr:
+    def __init__(self) -> None:
+        self.calls = 0
+
     async def recognize(
         self, *, audio_path: Path, window_start_seconds: float, request_id: str
     ) -> Transcript:
+        self.calls += 1
         await asyncio.sleep(0)
         return Transcript(
             text="做拖拽弯举",
@@ -86,6 +113,12 @@ class EmptyAsr(FakeAsr):
         del kwargs
         await asyncio.sleep(0)
         return Transcript(text="", utterances=[])
+
+
+class FailingAsr(FakeAsr):
+    async def recognize(self, **kwargs: object) -> Transcript:
+        del kwargs
+        raise ProviderError("provider_error", "speech failed", retryable=True)
 
 
 class BlockingAsr(FakeAsr):
@@ -137,6 +170,7 @@ class FakeArk:
         self.active_branches = 0
         self.max_active_branches = 0
         self.speech_transcript: dict[str, object] | None = None
+        self.visual_video_paths: list[Path] = []
 
     async def understand_speech(self, **kwargs: object) -> SpeechUnderstandingResult:
         transcript = kwargs.get("transcript")
@@ -162,7 +196,10 @@ class FakeArk:
             ]
         )
 
-    async def locate_visual(self, **_: object) -> VisualLocalizationResult:
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
+        video_path = kwargs.get("video_path")
+        if isinstance(video_path, Path):
+            self.visual_video_paths.append(video_path)
         self.active_branches += 1
         self.max_active_branches = max(self.max_active_branches, self.active_branches)
         await asyncio.sleep(0.01)
@@ -183,7 +220,80 @@ class FakeArk:
         )
 
     async def locate_visual_contact_sheet(self, **kwargs: object) -> VisualLocalizationResult:
-        return await self.locate_visual(**kwargs)
+        del kwargs
+        raise AssertionError("the five-minute baseline must submit video chunks, not sparse sheets")
+
+
+class ChunkAwareArk(FakeArk):
+    def __init__(self, *, failed_start: float | None = None, fail_all: bool = False) -> None:
+        super().__init__()
+        self.failed_start = failed_start
+        self.fail_all = fail_all
+        self.visual_windows: list[AnalysisWindow] = []
+
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
+        video_path = kwargs.get("video_path")
+        if isinstance(video_path, Path):
+            self.visual_video_paths.append(video_path)
+        window = kwargs["window"]
+        assert isinstance(window, Segment)
+        start_seconds = window.start_seconds
+        end_seconds = window.end_seconds
+        self.visual_windows.append(
+            AnalysisWindow(start_seconds=start_seconds, end_seconds=end_seconds, expanded=False)
+        )
+        if self.fail_all or self.failed_start == start_seconds:
+            raise ProviderError("provider_error", "visual failed", retryable=True)
+        if start_seconds == 0:
+            segment = VisualSegment(
+                action_name="深蹲",
+                start_seconds=55,
+                end_seconds=59,
+                visual_cue="下蹲后站起",
+            )
+        elif start_seconds == 50:
+            segment = VisualSegment(
+                action_name="深蹲",
+                start_seconds=55,
+                end_seconds=61,
+                visual_cue="下蹲后站起",
+            )
+        else:
+            segment = VisualSegment(
+                action_name="平板支撑",
+                start_seconds=max(start_seconds, 110),
+                end_seconds=min(end_seconds, 115),
+                visual_cue="保持躯干稳定",
+            )
+        return VisualLocalizationResult(segments=[segment])
+
+
+class InterleavedDuplicateArk(FakeArk):
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
+        window = kwargs["window"]
+        assert isinstance(window, Segment)
+        return VisualLocalizationResult(
+            segments=[
+                VisualSegment(
+                    action_name="深蹲",
+                    start_seconds=4,
+                    end_seconds=12,
+                    visual_cue="下蹲后站起",
+                ),
+                VisualSegment(
+                    action_name="开合跳",
+                    start_seconds=6,
+                    end_seconds=9,
+                    visual_cue="双脚开合",
+                ),
+                VisualSegment(
+                    action_name="深蹲",
+                    start_seconds=10,
+                    end_seconds=16,
+                    visual_cue="重复下蹲",
+                ),
+            ]
+        )
 
 
 class BlockingVisualArk(FakeArk):
@@ -192,7 +302,7 @@ class BlockingVisualArk(FakeArk):
         self.started = asyncio.Event()
         self.cancelled = asyncio.Event()
 
-    async def locate_visual_contact_sheet(self, **kwargs: object) -> VisualLocalizationResult:
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
         del kwargs
         self.started.set()
         try:
@@ -205,7 +315,7 @@ class BlockingVisualArk(FakeArk):
 
 
 class SlowVisualArk(FakeArk):
-    async def locate_visual_contact_sheet(self, **kwargs: object) -> VisualLocalizationResult:
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
         del kwargs
         await asyncio.sleep(30)
         raise AssertionError("slow visual analysis should be cancelled by the evidence budget")
@@ -233,6 +343,23 @@ def skills() -> SkillRepository:
         fusion_instructions="fusion skill",
         fusion_version="test-fusion",
     )
+
+
+def long_source(tmp_path: Path) -> VideoSource:
+    return VideoSource(
+        id="local:62f31c4b-bd1c-4b6a-8ad8-c6121b56135a",
+        title="本地导入视频",
+        path=tmp_path / "source.mp4",
+        duration_seconds=130,
+    )
+
+
+def test_visual_chunk_windows_cover_the_complete_source_with_bounded_overlap() -> None:
+    assert build_visual_chunks(130, chunk_seconds=60, overlap_seconds=10) == [
+        AnalysisWindow(start_seconds=0, end_seconds=60, expanded=False),
+        AnalysisWindow(start_seconds=50, end_seconds=110, expanded=False),
+        AnalysisWindow(start_seconds=100, end_seconds=130, expanded=False),
+    ]
 
 
 def test_skill_repository_loads_all_three_versioned_contracts() -> None:
@@ -268,6 +395,80 @@ async def test_speech_and_visual_branches_run_in_parallel_and_fuse(tmp_path: Pat
     utterances = ark.speech_transcript["utterances"]
     assert isinstance(utterances, list)
     assert all(isinstance(utterance, dict) and "words" not in utterance for utterance in utterances)
+
+
+@pytest.mark.asyncio
+async def test_long_source_runs_asr_once_and_deduplicates_overlapping_visual_chunks(
+    tmp_path: Path,
+) -> None:
+    media = FakeMediaProcessor(tmp_path)
+    asr = FakeAsr()
+    ark = ChunkAwareArk()
+    pipeline = OrchestratedAnalysisPipeline(
+        media=media,
+        asr=asr,
+        ark=ark,
+        skills=skills(),
+        visual_chunk_seconds=60,
+        visual_overlap_seconds=10,
+    )
+
+    output = await pipeline.analyze(long_source(tmp_path), None, no_op_emit)
+
+    assert asr.calls == 1
+    assert all(path.suffix == ".mp4" for path in ark.visual_video_paths)
+    assert media.visual_prepare_calls == [
+        AnalysisWindow(start_seconds=0, end_seconds=60, expanded=False),
+        AnalysisWindow(start_seconds=50, end_seconds=110, expanded=False),
+        AnalysisWindow(start_seconds=100, end_seconds=130, expanded=False),
+    ]
+    assert output.coverage_status == CoverageStatus.COMPLETE
+    assert [candidate.name for candidate in output.candidates].count("深蹲") == 1
+
+
+@pytest.mark.asyncio
+async def test_visual_deduplication_is_not_changed_by_interleaved_actions(
+    tmp_path: Path,
+) -> None:
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=EmptyAsr(),
+        ark=InterleavedDuplicateArk(),
+        skills=skills(),
+    )
+
+    output = await pipeline.analyze(source(tmp_path), None, no_op_emit)
+
+    assert [candidate.name for candidate in output.candidates] == ["深蹲", "开合跳"]
+    assert output.candidates[0].segment == Segment(start_seconds=4, end_seconds=16)
+
+
+@pytest.mark.asyncio
+async def test_failed_middle_visual_chunk_keeps_results_and_reports_only_uncovered_core(
+    tmp_path: Path,
+) -> None:
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=FakeAsr(),
+        ark=ChunkAwareArk(failed_start=50),
+        skills=skills(),
+        visual_chunk_seconds=60,
+        visual_overlap_seconds=10,
+    )
+
+    output = await pipeline.analyze(long_source(tmp_path), None, no_op_emit)
+
+    assert output.coverage_status == CoverageStatus.PARTIAL
+    assert output.processed_seconds == 90
+    assert [gap.model_dump(mode="json") for gap in output.coverage_gaps] == [
+        {
+            "start_seconds": 60.0,
+            "end_seconds": 100.0,
+            "reason": "provider_error",
+            "retryable": True,
+        }
+    ]
+    assert output.candidates
 
 
 @pytest.mark.asyncio
@@ -344,7 +545,7 @@ async def test_slow_visual_branch_returns_speech_evidence_with_warning(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_both_branches_timing_out_is_an_explicit_failure(tmp_path: Path) -> None:
+async def test_both_branches_timing_out_is_explicitly_insufficient(tmp_path: Path) -> None:
     pipeline = OrchestratedAnalysisPipeline(
         media=FakeMediaProcessor(tmp_path),
         asr=SlowAsr(),
@@ -353,10 +554,12 @@ async def test_both_branches_timing_out_is_an_explicit_failure(tmp_path: Path) -
         evidence_timeout_seconds=0.1,
     )
 
-    with pytest.raises(PipelineFailure) as caught:
-        await pipeline.analyze(source(tmp_path), None, no_op_emit)
+    output = await pipeline.analyze(source(tmp_path), None, no_op_emit)
 
-    assert caught.value.code == "timeout"
+    assert output.coverage_status == CoverageStatus.INSUFFICIENT
+    assert output.empty_reason == "insufficient_evidence"
+    assert output.processed_seconds == 0
+    assert output.coverage_gaps[0].reason == "timeout"
 
 
 @pytest.mark.asyncio
@@ -371,10 +574,11 @@ async def test_empty_speech_and_visual_timeout_is_not_reported_as_no_evidence(
         evidence_timeout_seconds=0.1,
     )
 
-    with pytest.raises(PipelineFailure) as caught:
-        await pipeline.analyze(source(tmp_path), None, no_op_emit)
+    output = await pipeline.analyze(source(tmp_path), None, no_op_emit)
 
-    assert caught.value.code == "timeout"
+    assert output.coverage_status == CoverageStatus.INSUFFICIENT
+    assert output.empty_reason == "insufficient_evidence"
+    assert output.coverage_gaps[0].reason == "timeout"
 
 
 @pytest.mark.asyncio
@@ -476,7 +680,9 @@ async def test_full_source_is_analyzed_once_then_no_evidence_returns_empty(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_system_failure_without_evidence_is_not_reported_as_empty(tmp_path: Path) -> None:
+async def test_system_failure_without_evidence_is_reported_as_insufficient(
+    tmp_path: Path,
+) -> None:
     pipeline = OrchestratedAnalysisPipeline(
         media=FakeMediaProcessor(tmp_path),
         asr=FakeAsr(),
@@ -484,7 +690,112 @@ async def test_system_failure_without_evidence_is_not_reported_as_empty(tmp_path
         skills=skills(),
     )
 
-    with pytest.raises(PipelineFailure) as caught:
-        await pipeline.analyze(source(tmp_path), 45, no_op_emit)
+    output = await pipeline.analyze(source(tmp_path), 45, no_op_emit)
 
-    assert caught.value.code == "provider_error"
+    assert output.coverage_status == CoverageStatus.INSUFFICIENT
+    assert output.empty_reason == "insufficient_evidence"
+    assert output.coverage_gaps[0].reason == "provider_error"
+
+
+@pytest.mark.asyncio
+async def test_failed_speech_with_reliably_empty_visual_is_insufficient(tmp_path: Path) -> None:
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=FailingAsr(),
+        ark=FakeArk(empty=True),
+        skills=skills(),
+    )
+
+    output = await pipeline.analyze(source(tmp_path), None, no_op_emit)
+
+    assert output.coverage_status == CoverageStatus.INSUFFICIENT
+    assert output.empty_reason == "insufficient_evidence"
+    assert output.processed_seconds == 0
+    assert [gap.model_dump(mode="json") for gap in output.coverage_gaps] == [
+        {
+            "start_seconds": 0,
+            "end_seconds": 54,
+            "reason": "provider_error",
+            "retryable": True,
+        }
+    ]
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+class BudgetAdvancingArk(ChunkAwareArk):
+    def __init__(self, clock: FakeClock) -> None:
+        super().__init__()
+        self._clock = clock
+
+    async def locate_visual(self, **kwargs: object) -> VisualLocalizationResult:
+        result = await super().locate_visual(**kwargs)
+        self._clock.value += 25
+        return result
+
+
+@pytest.mark.asyncio
+async def test_run_budget_returns_completed_chunks_as_partial_before_outer_timeout(
+    tmp_path: Path,
+) -> None:
+    clock = FakeClock()
+    ark = BudgetAdvancingArk(clock)
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=EmptyAsr(),
+        ark=ark,
+        skills=skills(),
+        visual_chunk_seconds=60,
+        visual_overlap_seconds=10,
+        run_timeout_seconds=70,
+        completion_margin_seconds=10,
+        clock=clock,
+    )
+
+    output = await pipeline.analyze(long_source(tmp_path), None, no_op_emit)
+
+    assert len(ark.visual_windows) == 2
+    assert output.coverage_status == CoverageStatus.PARTIAL
+    assert output.processed_seconds == 110
+    assert [gap.model_dump(mode="json") for gap in output.coverage_gaps] == [
+        {
+            "start_seconds": 110,
+            "end_seconds": 130,
+            "reason": "timeout",
+            "retryable": True,
+        }
+    ]
+    assert output.candidates
+
+
+@pytest.mark.asyncio
+async def test_run_budget_bounds_speech_and_preserves_completed_visual_evidence(
+    tmp_path: Path,
+) -> None:
+    asr = BlockingAsr()
+    pipeline = OrchestratedAnalysisPipeline(
+        media=FakeMediaProcessor(tmp_path),
+        asr=asr,
+        ark=FakeArk(),
+        skills=skills(),
+        evidence_timeout_seconds=30,
+        visual_chunk_timeout_seconds=0.02,
+        run_timeout_seconds=0.2,
+        completion_margin_seconds=0.08,
+    )
+
+    output = await asyncio.wait_for(
+        pipeline.analyze(source(tmp_path), None, no_op_emit),
+        timeout=0.5,
+    )
+
+    assert asr.cancelled.is_set()
+    assert output.coverage_status == CoverageStatus.COMPLETE
+    assert output.candidates
+    assert {warning.code for warning in output.warnings} == {"speech_unavailable"}

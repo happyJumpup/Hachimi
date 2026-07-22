@@ -21,7 +21,7 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'CloudBase CLI deploy command check failed.'
     }
-    foreach ($requiredOption in @('--env-id', '--serviceName', '--port', '--imageUrl', '--traffic')) {
+    foreach ($requiredOption in @('--env-id', '--serviceName', '--port', '--source', '--traffic')) {
         $helpText = if ($requiredOption -eq '--env-id') { $globalHelp } else { $deployHelp }
         if (-not $helpText.Contains($requiredOption)) {
             throw "CloudBase CLI 3.6.4 is missing required option: $requiredOption"

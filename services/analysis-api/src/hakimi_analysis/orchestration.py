@@ -1,20 +1,29 @@
 import asyncio
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
+from time import monotonic
 from typing import Any, Protocol
 from uuid import uuid4
 
 from hakimi_analysis.fusion import CandidateFusionSkill
 from hakimi_analysis.media import (
+    AnalysisWindow,
     LocalMediaProcessor,
     MediaProcessingError,
     PreparedMedia,
+    PreparedVisualChunk,
 )
 from hakimi_analysis.models import (
     AnalysisWarning,
+    CoverageGap,
+    CoverageGapReason,
+    CoverageStatus,
     RunStage,
     Segment,
+    SegmentRole,
     SpeechSignal,
     SpeechUnderstandingResult,
     Transcript,
@@ -33,7 +42,17 @@ class MediaProcessor(Protocol):
         duration_seconds: float,
         *,
         start_seconds: float = 0,
+        include_contact_sheet: bool = True,
     ) -> AbstractAsyncContextManager[PreparedMedia]: ...
+
+    async def prepare_visual_chunk(
+        self,
+        source_path: Path,
+        window: AnalysisWindow,
+        directory: Path,
+        *,
+        source_offset_seconds: float = 0,
+    ) -> PreparedVisualChunk: ...
 
 
 class SpeechRecognizer(Protocol):
@@ -62,16 +81,6 @@ class ArkAnalyzer(Protocol):
         window: Segment,
         instructions: str,
     ) -> VisualLocalizationResult: ...
-
-    async def locate_visual_contact_sheet(
-        self,
-        *,
-        image_path: Path,
-        frame_times_seconds: tuple[float, ...],
-        window: Segment,
-        instructions: str,
-    ) -> VisualLocalizationResult: ...
-
 
 @dataclass(frozen=True, slots=True)
 class SkillRepository:
@@ -110,13 +119,37 @@ def _skill_version(instructions: str) -> str:
 
 
 @dataclass(slots=True)
-class BranchResults:
-    speech: list[SpeechSignal] | ProviderError
-    visual: list[VisualSegment] | ProviderError
+class VisualChunkResults:
+    segments: list[VisualSegment]
+    successful_windows: list[AnalysisWindow]
+    failures: list[tuple[AnalysisWindow, ProviderError]]
 
-    @property
-    def both_successful(self) -> bool:
-        return isinstance(self.speech, list) and isinstance(self.visual, list)
+
+def build_visual_chunks(
+    duration_seconds: float,
+    *,
+    chunk_seconds: float,
+    overlap_seconds: float,
+) -> list[AnalysisWindow]:
+    if duration_seconds <= 0 or chunk_seconds <= 0:
+        raise ValueError("visual chunk durations must be positive")
+    if overlap_seconds < 0 or overlap_seconds >= chunk_seconds:
+        raise ValueError("visual chunk overlap must be shorter than the chunk")
+    windows: list[AnalysisWindow] = []
+    start_seconds = 0.0
+    while start_seconds < duration_seconds:
+        end_seconds = min(duration_seconds, start_seconds + chunk_seconds)
+        windows.append(
+            AnalysisWindow(
+                start_seconds=start_seconds,
+                end_seconds=end_seconds,
+                expanded=False,
+            )
+        )
+        if end_seconds >= duration_seconds:
+            break
+        start_seconds = end_seconds - overlap_seconds
+    return windows
 
 
 class OrchestratedAnalysisPipeline:
@@ -128,12 +161,37 @@ class OrchestratedAnalysisPipeline:
         ark: ArkAnalyzer,
         skills: SkillRepository,
         evidence_timeout_seconds: float = 11.5,
+        visual_chunk_timeout_seconds: float | None = None,
+        visual_chunk_seconds: float = 60,
+        visual_overlap_seconds: float = 10,
+        run_timeout_seconds: float = 180,
+        completion_margin_seconds: float = 10,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
         self._media = media
         self._asr = asr
         self._ark = ark
         self._skills = skills
         self._evidence_timeout_seconds = evidence_timeout_seconds
+        self._visual_chunk_timeout_seconds = (
+            evidence_timeout_seconds
+            if visual_chunk_timeout_seconds is None
+            else visual_chunk_timeout_seconds
+        )
+        self._visual_chunk_seconds = visual_chunk_seconds
+        self._visual_overlap_seconds = visual_overlap_seconds
+        if run_timeout_seconds <= 0 or completion_margin_seconds < 0:
+            raise ValueError("run budget and completion margin must be valid")
+        if completion_margin_seconds >= run_timeout_seconds:
+            raise ValueError("completion margin must be shorter than the run budget")
+        self._run_timeout_seconds = run_timeout_seconds
+        self._completion_margin_seconds = completion_margin_seconds
+        self._clock = clock
+        build_visual_chunks(
+            1,
+            chunk_seconds=self._visual_chunk_seconds,
+            overlap_seconds=self._visual_overlap_seconds,
+        )
         self._fusion = CandidateFusionSkill(
             instructions=skills.fusion_instructions,
             version=skills.fusion_version,
@@ -146,23 +204,36 @@ class OrchestratedAnalysisPipeline:
         emit: EmitCallback,
     ) -> PipelineOutput:
         del trigger_seconds
+        evidence_deadline = (
+            self._clock() + self._run_timeout_seconds - self._completion_margin_seconds
+        )
         await emit(
             RunStage.PREPARING_MEDIA,
             "stage.changed",
             {"analysis_scope": "full_source"},
         )
         try:
-            prepare_kwargs = (
-                {"start_seconds": source.analysis_start_seconds}
-                if source.analysis_start_seconds > 0
-                else {}
-            )
             async with self._media.prepare_source(
                 source.path,
                 source.analysis_duration_seconds,
-                **prepare_kwargs,
+                start_seconds=source.analysis_start_seconds,
+                include_contact_sheet=False,
             ) as prepared:
-                results = await self._analyze_branches(prepared, emit)
+                speech_task = asyncio.create_task(
+                    self._timed_speech_branch(prepared, emit, deadline=evidence_deadline)
+                )
+                try:
+                    visual_results = await self._analyze_visual_chunks(
+                        source,
+                        prepared,
+                        emit,
+                        deadline=evidence_deadline,
+                    )
+                    speech_result = await speech_task
+                finally:
+                    if not speech_task.done():
+                        speech_task.cancel()
+                    await asyncio.gather(speech_task, return_exceptions=True)
         except MediaProcessingError as error:
             raise PipelineFailure(
                 "media_error",
@@ -170,29 +241,46 @@ class OrchestratedAnalysisPipeline:
                 retryable=False,
             ) from error
 
-        speech_signals = results.speech if isinstance(results.speech, list) else []
-        visual_segments = results.visual if isinstance(results.visual, list) else []
+        speech_signals = speech_result if isinstance(speech_result, list) else []
+        visual_segments = _deduplicate_visual_segments(visual_results.segments)
+        coverage_gaps = _coverage_gaps(
+            source.analysis_duration_seconds,
+            visual_results.successful_windows,
+            visual_results.failures,
+        )
+        if isinstance(speech_result, ProviderError) and not visual_segments and not coverage_gaps:
+            coverage_gaps = [
+                CoverageGap(
+                    start_seconds=0,
+                    end_seconds=source.analysis_duration_seconds,
+                    reason=_coverage_gap_reason(speech_result),
+                    retryable=True,
+                )
+            ]
+        processed_seconds = source.analysis_duration_seconds - sum(
+            gap.end_seconds - gap.start_seconds for gap in coverage_gaps
+        )
+        warnings: list[AnalysisWarning] = []
+        if isinstance(speech_result, ProviderError):
+            warnings.append(
+                AnalysisWarning(
+                    code="speech_unavailable",
+                    message="语音依据暂不可用，请重点确认动作名称和参数",
+                )
+            )
+        if visual_results.failures:
+            warnings.append(
+                AnalysisWarning(
+                    code="visual_unavailable",
+                    message="部分画面依据暂不可用，请重试覆盖缺口",
+                )
+            )
         if speech_signals or visual_segments:
             await emit(
                 RunStage.FUSING_CANDIDATES,
                 "stage.changed",
                 {"skill_version": self._fusion.version},
             )
-            warnings: list[AnalysisWarning] = []
-            if isinstance(results.speech, ProviderError):
-                warnings.append(
-                    AnalysisWarning(
-                        code="speech_unavailable",
-                        message="语音依据暂不可用，请重点确认动作名称和参数",
-                    )
-                )
-            if isinstance(results.visual, ProviderError):
-                warnings.append(
-                    AnalysisWarning(
-                        code="visual_unavailable",
-                        message="画面依据暂不可用，请重点确认演示时间段",
-                    )
-                )
             return PipelineOutput(
                 candidates=self._fusion.run(
                     source_id=source.id,
@@ -200,61 +288,129 @@ class OrchestratedAnalysisPipeline:
                     visual_segments=visual_segments,
                 ),
                 warnings=warnings,
-                # This single-pass provider path cannot localize skipped spans reliably.
-                # It therefore keeps the complete default instead of inventing partial gaps.
+                coverage_status=(
+                    CoverageStatus.PARTIAL if coverage_gaps else CoverageStatus.COMPLETE
+                ),
+                coverage_gaps=coverage_gaps,
+                processed_seconds=processed_seconds if coverage_gaps else None,
             )
 
-        if results.both_successful:
-            return PipelineOutput(candidates=[], empty_reason="no_evidence")
+        if coverage_gaps:
+            return PipelineOutput(
+                candidates=[],
+                warnings=warnings,
+                empty_reason="insufficient_evidence",
+                coverage_status=CoverageStatus.INSUFFICIENT,
+                coverage_gaps=coverage_gaps,
+                processed_seconds=processed_seconds,
+            )
+        return PipelineOutput(candidates=[], warnings=warnings, empty_reason="no_evidence")
 
-        branch_error = (
-            results.speech if isinstance(results.speech, ProviderError) else results.visual
-        )
-        if not isinstance(branch_error, ProviderError):
-            raise AssertionError("failed analysis has no provider error")
-        raise PipelineFailure(
-            branch_error.code,
-            str(branch_error),
-            retryable=branch_error.retryable,
-        ) from branch_error
-
-    async def _analyze_branches(
+    async def _timed_speech_branch(
         self,
         prepared: PreparedMedia,
         emit: EmitCallback,
-    ) -> BranchResults:
-        await emit(RunStage.ANALYZING_EVIDENCE, "stage.changed", {})
-        speech_task = asyncio.create_task(self._speech_branch(prepared, emit))
-        visual_task = asyncio.create_task(self._visual_branch(prepared, emit))
-        tasks = {speech_task, visual_task}
+        *,
+        deadline: float,
+    ) -> list[SpeechSignal] | ProviderError:
+        remaining_seconds = deadline - self._clock()
+        if remaining_seconds <= 0:
+            return ProviderError("timeout", "run budget exhausted before speech", retryable=True)
         try:
-            _done, pending = await asyncio.wait(
-                tasks,
-                timeout=self._evidence_timeout_seconds,
+            async with asyncio.timeout(min(self._evidence_timeout_seconds, remaining_seconds)):
+                return await self._speech_branch(prepared, emit)
+        except TimeoutError:
+            return ProviderError("timeout", "speech evidence budget exceeded", retryable=True)
+        except ProviderError as error:
+            return error
+        except Exception:
+            return ProviderError("provider_error", "speech branch failed", retryable=True)
+
+    async def _analyze_visual_chunks(
+        self,
+        source: VideoSource,
+        prepared: PreparedMedia,
+        emit: EmitCallback,
+        *,
+        deadline: float,
+    ) -> VisualChunkResults:
+        windows = build_visual_chunks(
+            source.analysis_duration_seconds,
+            chunk_seconds=self._visual_chunk_seconds,
+            overlap_seconds=self._visual_overlap_seconds,
+        )
+        segments: list[VisualSegment] = []
+        successful_windows: list[AnalysisWindow] = []
+        failures: list[tuple[AnalysisWindow, ProviderError]] = []
+        for index, window in enumerate(windows, start=1):
+            remaining_seconds = deadline - self._clock()
+            if remaining_seconds < self._visual_chunk_timeout_seconds:
+                budget_error = ProviderError(
+                    "timeout", "run budget exhausted before visual chunk", retryable=True
+                )
+                failures.extend((remaining, budget_error) for remaining in windows[index - 1 :])
+                break
+            await emit(
+                RunStage.ANALYZING_EVIDENCE,
+                "visual_chunk.started",
+                {
+                    "chunk_index": index,
+                    "chunk_count": len(windows),
+                    "start_seconds": window.start_seconds,
+                    "end_seconds": window.end_seconds,
+                },
             )
-            for task in pending:
-                task.cancel()
-            speech_result, visual_result = await asyncio.gather(
-                speech_task,
-                visual_task,
-                return_exceptions=True,
-            )
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-        if speech_task in pending:
-            speech_result = ProviderError(
-                "timeout", "speech evidence budget exceeded", retryable=True
-            )
-        if visual_task in pending:
-            visual_result = ProviderError(
-                "timeout", "visual evidence budget exceeded", retryable=True
-            )
-        return BranchResults(
-            speech=self._normalize_speech_result(speech_result),
-            visual=self._normalize_visual_result(visual_result),
+            try:
+                async with asyncio.timeout(
+                    min(self._visual_chunk_timeout_seconds, remaining_seconds)
+                ):
+                    chunk = await self._media.prepare_visual_chunk(
+                        source.path,
+                        window,
+                        prepared.directory,
+                        source_offset_seconds=source.analysis_start_seconds,
+                    )
+                    result = await self._ark.locate_visual(
+                        video_path=chunk.video_path,
+                        window=Segment(
+                            start_seconds=window.start_seconds,
+                            end_seconds=window.end_seconds,
+                        ),
+                        instructions=self._skills.visual_instructions,
+                    )
+            except TimeoutError:
+                timeout_error = ProviderError(
+                    "timeout", "visual chunk evidence budget exceeded", retryable=True
+                )
+                failures.append((window, timeout_error))
+            except MediaProcessingError:
+                media_error = ProviderError("media_error", "visual chunk failed", retryable=True)
+                failures.append((window, media_error))
+            except ProviderError as provider_error:
+                failures.append((window, provider_error))
+            except Exception:
+                unexpected_error = ProviderError(
+                    "provider_error", "visual chunk failed", retryable=True
+                )
+                failures.append((window, unexpected_error))
+            else:
+                segments.extend(result.segments)
+                successful_windows.append(window)
+                processed_seconds = _covered_seconds(successful_windows)
+                await emit(
+                    RunStage.ANALYZING_EVIDENCE,
+                    "visual_chunk.completed",
+                    {
+                        "chunk_index": index,
+                        "chunk_count": len(windows),
+                        "processed_seconds": processed_seconds,
+                        "evidence_count": len(result.segments),
+                    },
+                )
+        return VisualChunkResults(
+            segments=segments,
+            successful_windows=successful_windows,
+            failures=failures,
         )
 
     async def _speech_branch(
@@ -305,67 +461,126 @@ class OrchestratedAnalysisPipeline:
         )
         return result.signals
 
-    async def _visual_branch(
-        self,
-        prepared: PreparedMedia,
-        emit: EmitCallback,
-    ) -> list[VisualSegment]:
-        await emit(
-            RunStage.ANALYZING_EVIDENCE,
-            "branch.started",
-            {"branch": "visual", "skill_version": self._skills.visual_version},
-        )
-        if prepared.contact_sheet_ready is not None:
-            await prepared.contact_sheet_ready
-        if prepared.contact_sheet_path is None:
-            raise ProviderError(
-                "media_error",
-                "visual contact sheet is unavailable",
-                retryable=False,
-            )
-        result = await self._ark.locate_visual_contact_sheet(
-            image_path=prepared.contact_sheet_path,
-            frame_times_seconds=prepared.contact_sheet_timestamps,
-            window=Segment(
-                start_seconds=prepared.window.start_seconds,
-                end_seconds=prepared.window.end_seconds,
+
+def _covered_seconds(windows: list[AnalysisWindow]) -> float:
+    if not windows:
+        return 0.0
+    ordered = sorted(windows, key=lambda window: (window.start_seconds, window.end_seconds))
+    covered = 0.0
+    current_start = ordered[0].start_seconds
+    current_end = ordered[0].end_seconds
+    for window in ordered[1:]:
+        if window.start_seconds <= current_end:
+            current_end = max(current_end, window.end_seconds)
+            continue
+        covered += current_end - current_start
+        current_start = window.start_seconds
+        current_end = window.end_seconds
+    return covered + current_end - current_start
+
+
+def _coverage_gaps(
+    duration_seconds: float,
+    successful_windows: list[AnalysisWindow],
+    failures: list[tuple[AnalysisWindow, ProviderError]],
+) -> list[CoverageGap]:
+    if not failures:
+        return []
+    boundaries = {0.0, duration_seconds}
+    for window in successful_windows:
+        boundaries.update((window.start_seconds, window.end_seconds))
+    for window, _error in failures:
+        boundaries.update((window.start_seconds, window.end_seconds))
+    ordered = sorted(boundaries)
+    gaps: list[CoverageGap] = []
+    for start_seconds, end_seconds in pairwise(ordered):
+        if end_seconds <= start_seconds:
+            continue
+        midpoint = (start_seconds + end_seconds) / 2
+        if any(
+            window.start_seconds <= midpoint < window.end_seconds
+            for window in successful_windows
+        ):
+            continue
+        error = next(
+            (
+                failed_error
+                for window, failed_error in failures
+                if window.start_seconds <= midpoint < window.end_seconds
             ),
-            instructions=self._skills.visual_instructions,
+            ProviderError("provider_error", "visual coverage unavailable", retryable=True),
         )
-        await emit(
-            RunStage.ANALYZING_EVIDENCE,
-            "branch.completed",
-            {"branch": "visual", "evidence_count": len(result.segments)},
-        )
-        return result.segments
-
-    @staticmethod
-    def _normalize_speech_result(
-        result: list[SpeechSignal] | BaseException,
-    ) -> list[SpeechSignal] | ProviderError:
-        if isinstance(result, ProviderError):
-            return result
-        if isinstance(result, BaseException):
-            return ProviderError(
-                "provider_error",
-                "speech branch failed",
-                retryable=True,
+        reason = _coverage_gap_reason(error)
+        if gaps and gaps[-1].end_seconds == start_seconds and gaps[-1].reason == reason:
+            gaps[-1] = gaps[-1].model_copy(update={"end_seconds": end_seconds})
+        else:
+            gaps.append(
+                CoverageGap(
+                    start_seconds=start_seconds,
+                    end_seconds=end_seconds,
+                    reason=reason,
+                    retryable=True,
+                )
             )
-        return result
+    return gaps
 
-    @staticmethod
-    def _normalize_visual_result(
-        result: list[VisualSegment] | BaseException,
-    ) -> list[VisualSegment] | ProviderError:
-        if isinstance(result, ProviderError):
-            return result
-        if isinstance(result, BaseException):
-            return ProviderError(
-                "provider_error",
-                "visual branch failed",
-                retryable=True,
+
+def _coverage_gap_reason(error: ProviderError) -> CoverageGapReason:
+    if error.code == "timeout":
+        return CoverageGapReason.TIMEOUT
+    if error.code == "media_error":
+        return CoverageGapReason.MEDIA_ERROR
+    if error.code == "provider_error":
+        return CoverageGapReason.PROVIDER_ERROR
+    return CoverageGapReason.UNKNOWN
+
+
+def _normalized_visual_action(name: str | None) -> str:
+    if name is None:
+        return ""
+    return "".join(character for character in name.casefold() if character.isalnum())
+
+
+def _deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSegment]:
+    grouped: dict[str, list[VisualSegment]] = {}
+    ungrouped: list[VisualSegment] = []
+    for segment in sorted(segments, key=lambda item: (item.start_seconds, item.end_seconds)):
+        action_key = _normalized_visual_action(segment.action_name)
+        if not action_key:
+            ungrouped.append(segment)
+            continue
+        action_segments = grouped.setdefault(action_key, [])
+        if action_segments and segment.start_seconds <= action_segments[-1].end_seconds:
+            previous = action_segments[-1]
+            role = (
+                previous.segment_role
+                if previous.segment_role == segment.segment_role
+                else SegmentRole.UNKNOWN
             )
-        return result
+            action_segments[-1] = VisualSegment(
+                action_name=previous.action_name,
+                start_seconds=min(previous.start_seconds, segment.start_seconds),
+                end_seconds=max(previous.end_seconds, segment.end_seconds),
+                visual_cue=previous.visual_cue,
+                segment_role=role,
+            )
+            continue
+        action_segments.append(segment)
+    return sorted(
+        [segment for action_segments in grouped.values() for segment in action_segments]
+        + ungrouped,
+        key=lambda item: (
+            item.start_seconds,
+            item.end_seconds,
+            _normalized_visual_action(item.action_name),
+            item.visual_cue,
+        ),
+    )
 
 
-__all__ = ["LocalMediaProcessor", "OrchestratedAnalysisPipeline", "SkillRepository"]
+__all__ = [
+    "LocalMediaProcessor",
+    "OrchestratedAnalysisPipeline",
+    "SkillRepository",
+    "build_visual_chunks",
+]

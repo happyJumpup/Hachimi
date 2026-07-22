@@ -13,7 +13,6 @@ from hakimi_analysis.models import (
     EvidenceType,
     RunStage,
     Segment,
-    SegmentRole,
 )
 from hakimi_analysis.orchestration import OrchestratedAnalysisPipeline, SkillRepository
 from hakimi_analysis.pipeline import AnalysisPipeline, EmitCallback, PipelineFailure, PipelineOutput
@@ -75,7 +74,6 @@ class DeterministicTestPipeline:
                             end_seconds=end,
                         ),
                     ],
-                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=True,
                 )
             ]
@@ -167,6 +165,10 @@ def build_pipeline(
         ark=ark,
         skills=skills,
         evidence_timeout_seconds=settings.analysis_evidence_timeout_seconds,
+        visual_chunk_timeout_seconds=settings.analysis_chunk_timeout_seconds,
+        visual_chunk_seconds=settings.analysis_visual_chunk_seconds,
+        visual_overlap_seconds=settings.analysis_visual_overlap_seconds,
+        run_timeout_seconds=settings.run_timeout_seconds,
     )
 
 

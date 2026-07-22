@@ -149,18 +149,28 @@ class AnalysisRunManager:
             data: dict[str, object],
         ) -> None:
             record.view.stage = stage
-            if event_type == "branch.completed":
+            if event_type in {"branch.completed", "visual_chunk.completed"}:
                 evidence_count = data.get("evidence_count")
                 if (
                     isinstance(evidence_count, int)
                     and not isinstance(evidence_count, bool)
                     and evidence_count >= 0
                 ):
-                    record.view.processed_seconds = source.analysis_duration_seconds
                     record.view.discovered_candidate_count = max(
                         record.view.discovered_candidate_count,
                         evidence_count,
                     )
+            processed_seconds = data.get("processed_seconds")
+            if (
+                isinstance(processed_seconds, int | float)
+                and not isinstance(processed_seconds, bool)
+                and math.isfinite(processed_seconds)
+                and 0 <= processed_seconds <= source.analysis_duration_seconds
+            ):
+                record.view.processed_seconds = max(
+                    record.view.processed_seconds,
+                    float(processed_seconds),
+                )
             record.view.updated_at = datetime.now(UTC)
             await self._event(record, event_type, {"stage": stage.value, **data})
 

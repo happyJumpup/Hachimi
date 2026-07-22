@@ -106,6 +106,73 @@ def _segment_role(
     return SegmentRole.UNKNOWN
 
 
+def _speech_signal_quality(
+    signal: SpeechSignal,
+) -> tuple[int, int, tuple[int, int, int, int], str, str]:
+    def sortable(value: int | None) -> int:
+        return -1 if value is None else value
+
+    parameter_values = (
+        signal.sets,
+        signal.reps,
+        signal.duration_seconds,
+        signal.rest_seconds,
+    )
+    return (
+        sum(value is not None for value in parameter_values),
+        int(signal.segment_role != SegmentRole.UNKNOWN),
+        (
+            sortable(signal.sets),
+            sortable(signal.reps),
+            sortable(signal.duration_seconds),
+            sortable(signal.rest_seconds),
+        ),
+        signal.action_name.casefold(),
+        signal.evidence_text,
+    )
+
+
+def _deduplicate_speech_signals(signals: list[SpeechSignal]) -> list[SpeechSignal]:
+    grouped: dict[str, list[SpeechSignal]] = {}
+    for signal in sorted(
+        signals,
+        key=lambda item: (
+            item.start_seconds,
+            item.end_seconds,
+            _normalized_action_name(item.action_name),
+            item.evidence_text,
+        ),
+    ):
+        action_key = _normalized_action_name(signal.action_name)
+        action_signals = grouped.setdefault(action_key, [])
+        if action_signals and signal.start_seconds <= action_signals[-1].end_seconds:
+            previous = action_signals[-1]
+            preferred = max((previous, signal), key=_speech_signal_quality)
+            role = (
+                previous.segment_role
+                if previous.segment_role == signal.segment_role
+                else SegmentRole.UNKNOWN
+            )
+            action_signals[-1] = preferred.model_copy(
+                update={
+                    "start_seconds": min(previous.start_seconds, signal.start_seconds),
+                    "end_seconds": max(previous.end_seconds, signal.end_seconds),
+                    "segment_role": role,
+                }
+            )
+            continue
+        action_signals.append(signal)
+    return sorted(
+        [signal for action_signals in grouped.values() for signal in action_signals],
+        key=lambda item: (
+            item.start_seconds,
+            item.end_seconds,
+            _normalized_action_name(item.action_name),
+            item.evidence_text,
+        ),
+    )
+
+
 def fuse_candidates(
     *,
     source_id: str,
@@ -114,6 +181,7 @@ def fuse_candidates(
 ) -> list[AnalysisCandidate]:
     candidates: list[AnalysisCandidate] = []
     matched_visual_indexes: set[int] = set()
+    speech_signals = _deduplicate_speech_signals(speech_signals)
 
     for speech in speech_signals:
         matches = [
@@ -177,7 +245,6 @@ def fuse_candidates(
                 segment=Segment(start_seconds=start_seconds, end_seconds=end_seconds),
                 parameters=_parameters(speech),
                 evidence=evidence,
-                segment_role=segment_role,
                 needs_confirmation=(
                     visual is None
                     or visual.action_name is None
@@ -206,7 +273,6 @@ def fuse_candidates(
                         end_seconds=visual.end_seconds,
                     )
                 ],
-                segment_role=_segment_role(None, visual),
                 needs_confirmation=True,
             )
         )

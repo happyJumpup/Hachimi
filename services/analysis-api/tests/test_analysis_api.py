@@ -19,7 +19,6 @@ from hakimi_analysis.models import (
     EvidenceType,
     RunStage,
     Segment,
-    SegmentRole,
 )
 from hakimi_analysis.observability import ALLOWED_LOG_FIELDS
 from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
@@ -50,7 +49,6 @@ class SuccessfulPipeline:
                             end_seconds=51,
                         )
                     ],
-                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=True,
                 )
             ]
@@ -120,6 +118,29 @@ class PartialCoveragePipeline:
         )
 
 
+class InsufficientCoveragePipeline:
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del source, trigger_seconds, emit
+        return PipelineOutput(
+            empty_reason="insufficient_evidence",
+            coverage_status=CoverageStatus.INSUFFICIENT,
+            processed_seconds=24,
+            coverage_gaps=[
+                CoverageGap(
+                    start_seconds=24,
+                    end_seconds=54,
+                    reason="timeout",
+                    retryable=True,
+                )
+            ],
+        )
+
+
 class ProvisionalProgressPipeline:
     def __init__(self) -> None:
         self.emitted = asyncio.Event()
@@ -134,8 +155,8 @@ class ProvisionalProgressPipeline:
         del source, trigger_seconds
         await emit(
             RunStage.ANALYZING_EVIDENCE,
-            "branch.completed",
-            {"branch": "visual", "evidence_count": 2},
+            "visual_chunk.completed",
+            {"branch": "visual", "evidence_count": 2, "processed_seconds": 54.0},
         )
         self.emitted.set()
         await self.release.wait()
@@ -306,6 +327,38 @@ async def test_injected_reliable_partial_output_is_returned_by_get_and_sse(
     assert json.dumps(expected_gap, ensure_ascii=False) in events.text
 
 
+@pytest.mark.asyncio
+async def test_insufficient_evidence_is_a_completed_retryable_coverage_outcome(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        catalog=source_catalog(tmp_path),
+        pipeline=InsufficientCoveragePipeline(),
+        access=make_test_access(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        created = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "legacy-arm-workout"},
+        )
+        completed = await wait_for_status(client, created.json()["id"], "completed")
+
+    assert completed["coverage_status"] == "insufficient"
+    assert completed["empty_reason"] == "insufficient_evidence"
+    assert completed["candidates"] == []
+    assert completed["processed_seconds"] == 24.0
+    assert completed["coverage_gaps"] == [
+        {
+            "start_seconds": 24.0,
+            "end_seconds": 54.0,
+            "reason": "timeout",
+            "retryable": True,
+        }
+    ]
+
+
 def test_coverage_gap_reason_rejects_non_allowlisted_provider_text() -> None:
     with pytest.raises(ValidationError):
         CoverageGap(
@@ -396,7 +449,7 @@ async def test_inconsistent_partial_coverage_fails_closed_as_a_schema_error(tmp_
 
 
 @pytest.mark.asyncio
-async def test_completed_full_range_branch_updates_real_provisional_get_and_sse_progress(
+async def test_completed_visual_chunk_updates_real_provisional_get_and_sse_progress(
     tmp_path: Path,
 ) -> None:
     pipeline = ProvisionalProgressPipeline()
@@ -421,11 +474,11 @@ async def test_completed_full_range_branch_updates_real_provisional_get_and_sse_
     stream = stream_run_events(manager, created.id, connected)
     for _ in range(10):
         event = await anext(stream)
-        if "event: branch.completed" in event:
+        if "event: visual_chunk.completed" in event:
             payload = json.loads(event.split("data: ", maxsplit=1)[1])
             break
     else:
-        raise AssertionError("branch.completed event not replayed")
+        raise AssertionError("visual_chunk.completed event not replayed")
     assert payload["data"]["processed_seconds"] == 54.0
     assert payload["data"]["discovered_candidate_count"] == 2
     await stream.aclose()

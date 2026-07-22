@@ -1,5 +1,5 @@
 from hakimi_analysis.fusion import fuse_candidates
-from hakimi_analysis.models import SegmentRole, SpeechSignal, VisualSegment
+from hakimi_analysis.models import Segment, SegmentRole, SpeechSignal, VisualSegment
 
 
 def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
@@ -38,7 +38,6 @@ def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
     assert candidate.parameters.sets == 3
     assert candidate.parameters.reps == 10
     assert [item.type for item in candidate.evidence] == ["speech", "visual"]
-    assert candidate.segment_role == SegmentRole.FOLLOW_ALONG
     assert candidate.needs_confirmation is False
 
 
@@ -133,7 +132,47 @@ def test_no_evidence_produces_no_candidates() -> None:
     assert fuse_candidates(source_id="source-a", speech_signals=[], visual_segments=[]) == []
 
 
-def test_conflicting_segment_roles_remain_unknown_and_need_confirmation() -> None:
+def test_overlapping_duplicate_speech_signals_become_one_deterministic_candidate() -> None:
+    sparse = SpeechSignal(
+        action_name="Squat",
+        sets=None,
+        reps=None,
+        duration_seconds=None,
+        rest_seconds=None,
+        start_seconds=10,
+        end_seconds=18,
+        evidence_text="squat",
+    )
+    parameterized = SpeechSignal(
+        action_name="squat",
+        sets=3,
+        reps=10,
+        duration_seconds=None,
+        rest_seconds=30,
+        start_seconds=12,
+        end_seconds=20,
+        evidence_text="three sets of ten squats",
+    )
+
+    forward = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[sparse, parameterized],
+        visual_segments=[],
+    )
+    reversed_order = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[parameterized, sparse],
+        visual_segments=[],
+    )
+
+    assert len(forward) == 1
+    assert forward == reversed_order
+    assert forward[0].segment == Segment(start_seconds=10, end_seconds=20)
+    assert forward[0].parameters.sets == 3
+    assert forward[0].parameters.reps == 10
+
+
+def test_conflicting_internal_segment_roles_require_confirmation_without_being_exposed() -> None:
     candidates = fuse_candidates(
         source_id="source-a",
         speech_signals=[
@@ -161,8 +200,8 @@ def test_conflicting_segment_roles_remain_unknown_and_need_confirmation() -> Non
     )
 
     assert len(candidates) == 1
-    assert candidates[0].segment_role == SegmentRole.UNKNOWN
     assert candidates[0].needs_confirmation is True
+    assert "segment_role" not in candidates[0].model_dump()
 
 
 def test_teaching_demo_length_does_not_become_a_training_duration() -> None:
@@ -193,13 +232,12 @@ def test_teaching_demo_length_does_not_become_a_training_duration() -> None:
     )
 
     assert len(candidates) == 1
-    assert candidates[0].segment_role == SegmentRole.TEACHING_DEMO
     assert candidates[0].parameters.mode is None
     assert candidates[0].parameters.duration_seconds is None
     assert candidates[0].needs_confirmation is False
 
 
-def test_speech_only_explicit_segment_role_is_preserved_but_needs_confirmation() -> None:
+def test_speech_only_internal_segment_role_still_needs_confirmation() -> None:
     candidates = fuse_candidates(
         source_id="source-a",
         speech_signals=[
@@ -218,11 +256,11 @@ def test_speech_only_explicit_segment_role_is_preserved_but_needs_confirmation()
         visual_segments=[],
     )
 
-    assert candidates[0].segment_role == SegmentRole.FOLLOW_ALONG
     assert candidates[0].needs_confirmation is True
+    assert "segment_role" not in candidates[0].model_dump()
 
 
-def test_visual_only_explicit_segment_role_is_preserved_but_needs_confirmation() -> None:
+def test_visual_only_internal_segment_role_still_needs_confirmation() -> None:
     candidates = fuse_candidates(
         source_id="source-a",
         speech_signals=[],
@@ -237,5 +275,5 @@ def test_visual_only_explicit_segment_role_is_preserved_but_needs_confirmation()
         ],
     )
 
-    assert candidates[0].segment_role == SegmentRole.TEACHING_DEMO
     assert candidates[0].needs_confirmation is True
+    assert "segment_role" not in candidates[0].model_dump()

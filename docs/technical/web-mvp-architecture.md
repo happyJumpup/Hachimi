@@ -2,7 +2,7 @@
 
 > 状态：下一轮原型已冻结；实现通过验收前不得表述为全部完成
 >
-> 更新日期：2026-07-21
+> 更新日期：2026-07-23
 >
 > 适用范围：独立 Web 原型；竞赛受控来源部署细节继续见历史 Runbook
 
@@ -13,9 +13,9 @@
 - 本地视频导入是主入口，受控视频源是明确标注的快速体验兜底。客户端不能提交任意服务器路径、远程 URL、平台 Cookie 或登录态。
 - 原视频只在当前设备浏览器长期保存。服务端上传副本和分析材料只属于单次运行，并在所有终态清理。
 - 分析只由用户显式创建。页面切换、刷新或 SSE 断线不取消；显式取消、更换来源、运行安全边界或进程丢失才结束运行。
-- 产品目标为完整覆盖不超过 10 分钟的视频，但部署能力以 `GET /api/v1/capabilities` 为准。今晚安全默认仍是经过验证的 60 秒。
+- 当前竞赛能力为完整覆盖不超过 5 分钟的源文件，`GET /api/v1/capabilities` 返回 300 秒和 256 MiB 的真实边界。7／19 分钟原片必须先在应用外裁成不超过 5 分钟，不能用首次请求的内部区间冒充完整分析。
 - 过程反馈来自真实处理位置和暂时发现的动作线索数。部分结果必须明确覆盖缺口并允许逐段重试，不能把系统错误伪装成没有动作。
-- 当前 production Provider 保持不变，仍按单次全范围执行，只能可靠返回完整覆盖或整体失败，尚不能可靠定位 `partial` 时间缺口。已完成的 native audio/video benchmark 没有产生质量冠军或验证长视频生产路线；`partial`／缺口重试现阶段只完成公共合同与测试 Provider 验证，仍是后续必须补齐的生产验收目标。生产环境不使用测试 Provider 或预置候选回退。
+- 当前 production Provider 保持火山 ASR、Ark Seed 和确定性融合，但视觉改为连续 MP4 的 60 秒分块、10 秒重叠、单并发顺序处理，不以稀疏截图冒充完整窗口。内部视觉块以有界码率转码后直接作为 Ark Responses API 的 Base64 视频输入，不创建方舟 Files API 托管文件；超过 45,000,000 bytes 的块明确成为 `media_error` 覆盖缺口。语音与视觉共享 170 秒证据截止时间，并为 180 秒外层上限预留 10 秒终态和清理余量。目标 CloudBase 上的真实短视频、五分钟样本、三并发和清理仍须通过 Canary 才能宣称交付。生产环境不使用测试 Provider 或预置候选回退。
 
 ## 2. 运行拓扑与数据所有权
 
@@ -34,7 +34,7 @@ flowchart LR
 | --- | --- | --- |
 | 本地来源媒体 Blob 与元数据 | 浏览器 IndexedDB | 同设备持久化；用户可清除或重新选择恢复 |
 | 受控来源清单与分析媒体 | 服务端受控配置 | 随部署版本更新 |
-| 上传副本、音频、帧、转录、提示与模型原始响应 | 单次运行临时目录或内存 | 成功、部分完成、失败、取消均清理 |
+| 上传副本、音频、视觉块、转录、提示与模型原始响应 | 单次运行临时目录或内存 | 成功、部分完成、失败、取消均清理；当前 Ark 路径不创建托管文件 |
 | Analysis Run 状态、事件和容量占用 | 单 FastAPI 进程 | 活跃期及短时终态 TTL；重启即丢失 |
 | 草稿、方案、场次、记录、档案、偏好 | 浏览器 IndexedDB | 同设备持久化；用户可清除 |
 | 完成海报 | 浏览器即时生成 | 分享或下载，不保存为数据库 Blob |
@@ -82,8 +82,8 @@ interface CapabilitiesView {
 }
 ```
 
-接口不返回未来 10 分钟目标、Provider 名称、内部模型 ID 或密钥。前端不得用编译时常量扩大这些值。能力读取失败时，本地上传失败关闭，受控快速体验仍可用。
-`local_analysis_max_seconds` 必须在 `(0, 600]` 内，`local_upload_max_bytes` 必须为正整数；功能关闭时仍返回配置边界，由 `local_upload_enabled` 单独控制创建能力。
+接口不返回未来目标、Provider 名称、内部模型 ID 或密钥。前端不得用编译时常量扩大这些值。能力读取失败时，本地上传失败关闭，受控快速体验仍可用。
+`local_analysis_max_seconds` 必须在 `(0, 300]` 内，且比赛生产配置固定为 `300`；`local_upload_max_bytes` 必须为正整数。功能关闭时仍返回配置边界，由 `local_upload_enabled` 单独控制创建能力。
 
 ### 4.2 本地分析创建
 
@@ -130,31 +130,31 @@ interface AnalysisRunView {
   source_duration_seconds: number
   processed_seconds: number
   discovered_candidate_count: number
-  coverage_status: 'complete' | 'partial' | null
+  coverage_status: 'complete' | 'partial' | 'insufficient' | null
   coverage_gaps: CoverageGap[]
 }
 ```
 
-- `AnalysisCandidate` 增加必填 `segment_role: 'follow_along' | 'teaching_demo' | 'unknown'`。只有一侧提供明确角色时保留该角色；两侧都明确且一致时保留共同角色，冲突或都未知时输出 `unknown`。`unknown` 和单一证据分支候选必须 `needs_confirmation=true`；教学演示片段长度不得映射到 `parameters.duration_seconds`。
+- 公开和持久化的 `AnalysisCandidate` 不包含 `segment_role`。Provider 内部角色只能影响 `needs_confirmation`，不能成为 wire contract 或要求用户判断“教学／跟练”的产品步骤；来源片段长度不得自动映射到 `parameters.duration_seconds`。
 - `source_duration_seconds` 是有限正数且表示原视频完整时长；`processed_seconds` 是本次请求范围已经实际处理的有限非负时长，必须在 `[0, requested range length]` 内单调前进。
 - `discovered_candidate_count` 是非负整数；非终态表示已完成证据分支返回的只读动作线索数，允许在融合时收敛，可靠终态才表示融合候选数。
-- 排队、运行、失败和取消时 `coverage_status=null`。可靠终态的请求范围完整时为 `complete`；仍有系统未知区间时为 `partial`，并提供非重叠、按时间排序的 `coverage_gaps`。
+- 排队、运行、失败和取消时 `coverage_status=null`。可靠终态的请求范围完整时为 `complete`；有可靠候选但仍有系统未知区间时为 `partial`；没有足够可靠候选且存在未检查区间时为 `insufficient`。后二者都提供非重叠、按时间排序的 `coverage_gaps`。
 - 当前产品中的部分结果缺口必须可单独重试；`reason` 是独立、版本化的公开安全枚举，非白名单值不能进入 GET／SSE。用户界面只展示自然中文，不显示 Provider 正文。
 - 区间重试是新的 Analysis Run。其 `coverage_status=complete` 表示该请求区间完整；客户端把结果合并回来源级覆盖状态，而不是修改旧运行记录。
 
 SSE 包络继续使用 `{sequence,type,run_id,timestamp,data}`，每个事件的 `data` 携带最新进度／覆盖快照。浏览器断线后先 GET 快照，再重连事件流；客户端只应用当前来源与 `run_id` 的事件，并对重放 `sequence` 保持幂等。服务器不能把连接关闭当作取消信号。运行代次仍隔离迟到事件，旧来源结果不得覆盖当前来源。
 
-服务端流程保持“确定性媒体处理 + 动作分析 Agent 协调 Skills”。现有 production Provider、配置和进程安全超时继续生效；它当前不可靠产出可定位的 `partial` 缺口，测试 Provider 通过只证明公共合同和合并路径。既有 benchmark 没有选出质量冠军，本合同不切换 Provider，也不沿用旧单样本延迟作为长视频承诺；真实缺口定位与重试仍须单独完成生产验收。
+服务端流程保持“确定性媒体处理 + 动作分析 Agent 协调 Skills”。全范围只抽取一次音频并执行一次 ASR；视觉块分别受 20 秒限制，语音与视觉共享运行内证据截止时间，整次运行受 180 秒限制。视觉块使用连续 MP4 的 Base64 内联请求，并显式路由到视觉模型；不允许在取消竞态下改用会遗留未知远端 ID 的临时上传。既有或在途 benchmark 未通过全部硬门槛前不切换 Provider，也不沿用旧单样本延迟作为五分钟承诺；真实缺口定位与重试仍须完成目标部署验收。
 
 ## 6. 覆盖合并与来源时间线
 
 - 客户端以 `local_source_id` 作为来源边界，将成功区间内的新候选按绝对开始时间合并，并只移除实际覆盖的缺口。
 - 用户已经校正的候选优先；新候选与其时间重叠时要求确认，不能静默覆盖。重试失败保留旧候选和缺口。
 - 正常分析完成但没有动作证据的区间属于已覆盖区域，不生成 `coverage_gaps`；整段无证据才返回空结果。
-- Agent 通过公开 `segment_role` 区分跟练执行段与教学演示段。`follow_along` 的来源顺序、时长和休息可成为视频默认值；`teaching_demo` 只提供预览与出处；`unknown` 在影响参数时要求确认。
+- Agent 只把带时间的语音或其他可定位证据写入训练参数。没有证据的组数、次数、时长、休息和重量都保持为空；内部角色冲突或单一证据分支只表现为 `needs_confirmation=true`。
 - 重复和循环动作按来源绝对顺序形成展开式执行时间线。传给方案的每次动作出现都是独立、扁平的 `DraftItem`；不新增嵌套循环状态机。
 
-今晚纵切片不要求独立时间线编辑器或新的嵌套公开 Schema；只要 Provider 返回重复候选，Web 就按绝对时间展开。无法可靠判断段类型且会影响参数时，候选必须保持需确认状态。
+当前纵切片不要求独立时间线编辑器或新的嵌套公开 Schema；只要 Provider 返回重复候选，Web 就按绝对时间展开。证据不足或冲突且会影响参数时，候选必须保持需确认状态。
 
 ## 7. 安全、隐私与失败行为
 
@@ -180,7 +180,7 @@ SSE 包络继续使用 `{sequence,type,run_id,timestamp,data}`，每个事件的
 - 进度只来自实际处理位置；中间候选只读；完整、空、部分和失败语义分离。
 - 覆盖缺口逐段重试，绝对时间合并正确，失败不丢失可靠结果或重试入口。
 - IndexedDB v2→v3 无损升级，本地 Blob 可恢复播放；写入失败、清除数据和重新选择文件行为可验证。
-- 每个终态都确认本地与 Provider 临时材料清理；日志、错误和前端构建不含文件名、内容、密钥或 Provider 正文。
+- 每个终态都确认本地临时材料清理，并确认当前 Ark 路径没有创建 Provider 托管文件；日志、错误和前端构建不含文件名、内容、密钥或 Provider 正文。
 
 ## 10. 关联决策
 

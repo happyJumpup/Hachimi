@@ -1,8 +1,11 @@
-# Server-managed FFmpeg runtime
+# Audited FFmpeg runtime
 
-The production application image intentionally removes the executable bundled by
-`imageio-ffmpeg`. The Tencent Cloud host supplies one separately managed executable
-at `/opt/hachimi/shared/bin/ffmpeg`, mounted read-only into the application.
+The production image removes the executable bundled by `imageio-ffmpeg` and builds
+FFmpeg 8.1.2 from the official signed source release. The multi-stage Docker build
+downloads the tarball and detached signature from `ffmpeg.org`, imports the official
+release key, checks fingerprint
+`FCF986EA15E6E293A5644F10B4322F04D67658D8`, and verifies the signature before
+compiling.
 
 Before release, record all of the following in the deployment evidence:
 
@@ -12,17 +15,20 @@ Before release, record all of the following in the deployment evidence:
 - the exact applicable LGPL/GPL license text and corresponding-source location;
 - the release owner and reviewer who checked the record.
 
-Set `FFMPEG_EXPECTED_SHA256` and `FFMPEG_EXPECTED_CONFIGURATION_SHA256` to the two
-audited digests. Production readiness verifies the executable bit, binary digest,
-successful `ffmpeg -version` execution, exact configuration-line digest and absence
-of `--enable-gpl` / `--enable-nonfree` before accepting traffic.
+The runtime is installed under `/opt/trainpal/ffmpeg` with shared libraries and the
+applicable LGPL text. `/opt/trainpal/ffmpeg/receipt.json` records the source URL,
+signing-key fingerprint, version, binary SHA-256, complete configure line, and its
+SHA-256. Production readiness binds that receipt to the executable and rejects a
+version, hash, configure-line, path, GPL, or nonfree mismatch.
 
-For the intended LGPL boundary, use an unmodified build without `--enable-gpl` or
-`--enable-nonfree`. The application uses FFmpeg's built-in `mpeg4` encoder for
+The build is unmodified and does not enable `--enable-gpl` or `--enable-nonfree`.
+Shared libraries preserve the relinking boundary. The application uses FFmpeg's
+built-in `mpeg4` encoder for
 accurate non-keyframe video windows and PCM audio extraction; it does not require
 `libx264` or another GPL encoder. If the supplied
 binary enables GPL components, the release owner must satisfy the resulting GPL
 distribution obligations before deployment. This file is an engineering release
 gate, not legal advice.
 
-Authoritative reference: <https://ffmpeg.org/legal.html>.
+Official source and verification instructions: <https://ffmpeg.org/download.html>.
+Licensing reference: <https://ffmpeg.org/legal.html>.

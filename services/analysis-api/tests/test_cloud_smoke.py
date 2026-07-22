@@ -23,7 +23,6 @@ from hakimi_analysis.models import (
     EvidenceType,
     RunStage,
     Segment,
-    SegmentRole,
 )
 from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
 from hakimi_analysis.settings import Settings
@@ -272,7 +271,6 @@ class SuccessfulCloudPipeline:
                         )
                         for evidence_type in self._evidence_types
                     ],
-                    segment_role=SegmentRole.UNKNOWN,
                     needs_confirmation=self._missing_branch is not None,
                 )
             ],

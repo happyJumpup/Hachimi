@@ -22,6 +22,22 @@ def test_analysis_candidate_requires_an_absolute_segment() -> None:
         )
 
 
+def test_analysis_candidate_rejects_the_legacy_public_segment_role() -> None:
+    with pytest.raises(ValidationError):
+        AnalysisCandidate.model_validate(
+            {
+                "id": "candidate-1",
+                "name": "拖拽弯举",
+                "source_id": "source-1",
+                "segment": {"start_seconds": 1, "end_seconds": 2},
+                "parameters": {},
+                "evidence": [],
+                "segment_role": "unknown",
+                "needs_confirmation": True,
+            }
+        )
+
+
 def test_openapi_documents_actual_readiness_and_analysis_errors() -> None:
     schema = create_app(pipeline=UnconfiguredPipeline()).openapi()
     paths = schema["paths"]
@@ -77,10 +93,11 @@ def test_openapi_documents_actual_readiness_and_analysis_errors() -> None:
         ] == {"$ref": "#/components/schemas/ApiErrorResponse"}
 
     candidate_schema = schema["components"]["schemas"]["AnalysisCandidate"]
-    assert "segment_role" in candidate_schema["required"]
+    assert "segment_role" not in candidate_schema["properties"]
+    assert "SegmentRole" not in schema["components"]["schemas"]
     run_schema = schema["components"]["schemas"]["AnalysisRunView"]
     progress_description = run_schema["properties"]["discovered_candidate_count"][
         "description"
     ]
-    assert "completed branches" in progress_description
+    assert "completed evidence" in progress_description
     assert "exact fused candidate count" in progress_description

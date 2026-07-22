@@ -9,7 +9,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-EXPECTED_ENVIRONMENT = "bizhao-d8grp8yqd81759fbb"
 EXPECTED_REGION = "ap-shanghai"
 EXPECTED_SERVICE = "trainpal-demo"
 LATEST_ALLOWED_DEMO_END = datetime.fromisoformat("2026-07-25T00:00:00+08:00")
@@ -20,25 +19,25 @@ EXPECTED_SECRET_KEYS = [
     "VOLC_ASR_API_KEY",
 ]
 EXPECTED_NONSECRET_KEYS = [
+    "ANALYSIS_CHUNK_TIMEOUT_SECONDS",
+    "ANALYSIS_EVIDENCE_TIMEOUT_SECONDS",
     "ANALYSIS_PROVIDER",
+    "ANALYSIS_VISUAL_CHUNK_SECONDS",
+    "ANALYSIS_VISUAL_OVERLAP_SECONDS",
     "APP_ENV",
     "ARK_BASE_URL",
     "ARK_MODEL_ID",
     "ARK_VISUAL_MODEL_ID",
     "CORS_ORIGINS",
-    "FFMPEG_EXPECTED_CONFIGURATION_SHA256",
-    "FFMPEG_EXPECTED_SHA256",
+    "FFMPEG_BUILD_RECEIPT_PATH",
     "IMAGEIO_FFMPEG_EXE",
     "JUDGE_ANALYSIS_CONCURRENCY",
     "LOCAL_ANALYSIS_MAX_SECONDS",
     "LOCAL_UPLOAD_ENABLED",
+    "LOCAL_UPLOAD_MAX_BYTES",
     "PUBLIC_ANALYSIS_CONCURRENCY",
-    "PUBLIC_MEDIA_BASE_URL",
     "RUN_TIMEOUT_SECONDS",
     "RUN_TTL_SECONDS",
-    "SMOKE_ANNOTATIONS_PATH",
-    "SOURCE_MANIFEST_PATH",
-    "SOURCE_MEDIA_ROOT",
     "TRUSTED_PROXY_CIDRS",
     "VOLC_ASR_RESOURCE_ID",
     "VOLC_ASR_URL",
@@ -84,7 +83,7 @@ def validate(plan: dict[str, Any]) -> None:
         {
             "schema_version",
             "purpose",
-            "environment_id",
+            "environment_id_committed",
             "region",
             "service_name",
             "container",
@@ -107,8 +106,8 @@ def validate(plan: dict[str, Any]) -> None:
         "audited CloudBase Run foundation plan; not an importable Tencent Cloud API payload"
     ):
         fail("unexpected plan purpose")
-    if plan.get("environment_id") != EXPECTED_ENVIRONMENT:
-        fail("unexpected CloudBase environment")
+    if plan.get("environment_id_committed") is not False:
+        fail("CloudBase account identifiers must not be committed")
     if plan.get("region") != EXPECTED_REGION:
         fail("unexpected CloudBase region")
     if plan.get("service_name") != EXPECTED_SERVICE:
@@ -153,6 +152,10 @@ def validate(plan: dict[str, Any]) -> None:
             "run_timeout_seconds",
             "local_upload_enabled",
             "local_analysis_max_seconds",
+            "local_upload_max_bytes",
+            "analysis_chunk_timeout_seconds",
+            "analysis_visual_chunk_seconds",
+            "analysis_visual_overlap_seconds",
             "unauthenticated_page_browse",
             "judge_code_required_for_paid_analysis",
             "anonymous_paid_analysis",
@@ -164,12 +167,13 @@ def validate(plan: dict[str, Any]) -> None:
     assets = expect_keys(
         plan["asset_contract"],
         {
+            "controlled_sources_required",
             "source_manifest_path",
             "source_media_root",
             "ffmpeg_path",
+            "ffmpeg_receipt_path",
             "smoke_annotations_path",
-            "must_verify_ffmpeg_sha256",
-            "must_verify_ffmpeg_configuration_sha256",
+            "must_verify_ffmpeg_receipt",
             "assets_deferred_until_content_approval",
         },
         "asset_contract",
@@ -285,38 +289,34 @@ def validate(plan: dict[str, Any]) -> None:
         fail("application analysis timeout must remain 180 seconds")
     if runtime.get("local_upload_enabled") is not True:
         fail("local upload must remain enabled")
-    if runtime.get("local_analysis_max_seconds") != 60:
-        fail("local analysis must remain capped at 60 seconds")
+    if runtime.get("local_analysis_max_seconds") != 300:
+        fail("local analysis must remain capped at 300 seconds")
+    if runtime.get("local_upload_max_bytes") != 268435456:
+        fail("local upload must remain capped at 256 MiB")
+    if runtime.get("analysis_chunk_timeout_seconds") != 20:
+        fail("visual chunk timeout must remain 20 seconds")
+    if runtime.get("analysis_visual_chunk_seconds") != 60:
+        fail("visual chunks must remain 60 seconds")
+    if runtime.get("analysis_visual_overlap_seconds") != 10:
+        fail("visual chunk overlap must remain 10 seconds")
     if runtime.get("active_run_state") != "single-process-memory":
         fail("run-state contract changed without an architecture decision")
     if runtime.get("raw_media_persistence") != "forbidden":
         fail("raw media persistence must remain forbidden")
 
-    required_paths = (
-        "source_manifest_path",
-        "source_media_root",
-        "ffmpeg_path",
-        "smoke_annotations_path",
-    )
-    for key in required_paths:
-        value = assets.get(key)
-        if not isinstance(value, str) or not value.startswith("/"):
-            fail(f"{key} must be an absolute container path")
-    expected_paths = {
-        "source_manifest_path": "/config/media-manifest.json",
-        "source_media_root": "/mnt/trainpal/media",
-        "ffmpeg_path": "/opt/trainpal/bin/ffmpeg",
-        "smoke_annotations_path": "/config/smoke-annotations.json",
-    }
-    for key, expected in expected_paths.items():
-        if assets.get(key) != expected:
-            fail(f"unexpected {key}")
+    if assets.get("controlled_sources_required") is not False:
+        fail("competition readiness must allow local-upload-only operation")
+    for key in ("source_manifest_path", "source_media_root", "smoke_annotations_path"):
+        if assets.get(key) is not None:
+            fail(f"{key} must remain unset until controlled content is approved")
+    if assets.get("ffmpeg_path") != "/opt/trainpal/ffmpeg/bin/ffmpeg":
+        fail("unexpected ffmpeg_path")
+    if assets.get("ffmpeg_receipt_path") != "/opt/trainpal/ffmpeg/receipt.json":
+        fail("unexpected ffmpeg_receipt_path")
     if assets.get("assets_deferred_until_content_approval") is not True:
         fail("content assets must remain deferred")
-    if assets.get("must_verify_ffmpeg_sha256") is not True:
-        fail("FFmpeg binary hash verification must remain enabled")
-    if assets.get("must_verify_ffmpeg_configuration_sha256") is not True:
-        fail("FFmpeg configuration hash verification must remain enabled")
+    if assets.get("must_verify_ffmpeg_receipt") is not True:
+        fail("FFmpeg build receipt verification must remain enabled")
 
     if private_gates != {
         "immutable_image_verified": True,
