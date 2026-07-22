@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GYMTI 猫咪陪练匹配</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="stage" aria-hidden="true">
+      <header class="mock-topbar">
+        <div class="brand-mark">G</div>
+        <div>
+          <p>TrainPal GYMTI</p>
+          <strong>今天适合被哪只猫盯着练？</strong>
+        </div>
+        <span id="healthStatus">读取题库中</span>
+      </header>
+
+      <section class="mock-board">
+        <article>
+          <span>01</span>
+          <strong>灵魂电量诊断</strong>
+          <p>下班后的训练启动方式</p>
+        </article>
+        <article>
+          <span>02</span>
+          <strong>训练偏好扫描</strong>
+          <p>力量、燃脂、体态、续命</p>
+        </article>
+        <article>
+          <span>03</span>
+          <strong>猫咪语气校准</strong>
+          <p>提醒、纠错、召回、吐槽上限</p>
+        </article>
+        <article class="wide">
+          <span>RESULT</span>
+          <strong>GYMTI × 桌宠匹配</strong>
+          <p>用 5-8 题收敛结果，再生成一只会说人话的健身猫。</p>
+        </article>
+      </section>
+    </div>
+
+    <div class="veil"></div>
+    <main class="drawer" id="app" aria-live="polite"></main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
