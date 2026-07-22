@@ -24,6 +24,7 @@ EXPECTED_NONSECRET_KEYS = [
     "ANALYSIS_CLEANUP_RESERVE_SECONDS",
     "ANALYSIS_EVIDENCE_DEADLINE_SECONDS",
     "ANALYSIS_MAX_ATTEMPTS_PER_VISUAL_PROVIDER",
+    "ANALYSIS_MAX_SOURCE_BYTES",
     "ANALYSIS_MAX_VISUAL_CALLS",
     "ANALYSIS_MAX_VISUAL_CHUNKS",
     "ANALYSIS_PROVIDER",
@@ -173,6 +174,7 @@ def validate(plan: dict[str, Any]) -> None:
             "local_analysis_max_seconds",
             "published_analysis_max_seconds",
             "local_upload_max_bytes",
+            "analysis_max_source_bytes",
             "analysis_speech_timeout_seconds",
             "analysis_evidence_deadline_seconds",
             "analysis_cleanup_reserve_seconds",
@@ -326,8 +328,10 @@ def validate(plan: dict[str, Any]) -> None:
         fail("local analysis must remain capped at 300 seconds")
     if runtime.get("published_analysis_max_seconds") != 60:
         fail("the foundation must publish only 60 seconds before canary receipt")
-    if runtime.get("local_upload_max_bytes") != 268435456:
-        fail("local upload must remain capped at 256 MiB")
+    if runtime.get("local_upload_max_bytes") != 19922944:
+        fail("public local upload must remain capped at 19 MiB")
+    if runtime.get("analysis_max_source_bytes") != 268435456:
+        fail("internal Provider source limit must remain capped at 256 MiB")
     if runtime.get("analysis_chunk_timeout_seconds") != 20:
         fail("visual chunk timeout must remain 20 seconds")
     if runtime.get("analysis_speech_timeout_seconds") != 45:

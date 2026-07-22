@@ -2,7 +2,8 @@
 
 set -Eeuo pipefail
 
-readonly image_ref="${1:?usage: verify-competition-image.sh <image-ref>}"
+readonly image_ref="${1:?usage: verify-competition-image.sh <image-ref> <expected-commit-sha>}"
+readonly expected_commit_sha="${2:?usage: verify-competition-image.sh <image-ref> <expected-commit-sha>}"
 readonly smoke_name="hachimi-image-smoke-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-0}-$$"
 readonly work_dir="$(mktemp -d)"
 
@@ -35,10 +36,35 @@ fail() {
 
 docker_cmd image inspect "${image_ref}" >/dev/null
 
+if [[ ! "${expected_commit_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+  fail "expected commit SHA must be 40 lowercase hexadecimal characters"
+fi
+
 readonly configured_user="$(docker_cmd image inspect --format '{{.Config.User}}' "${image_ref}")"
 if [[ "${configured_user}" != "10001:10001" ]]; then
   fail "runtime user must be 10001:10001, got '${configured_user}'"
 fi
+
+docker_cmd run --rm \
+  --entrypoint /workspace/services/analysis-api/.venv/bin/python \
+  "${image_ref}" \
+  -c 'import json, os, stat, sys
+path = "/workspace/build-metadata.json"
+metadata_stat = os.stat(path)
+payload = json.loads(open(path, encoding="utf-8").read())
+valid = (
+    stat.S_ISREG(metadata_stat.st_mode)
+    and metadata_stat.st_uid == 0
+    and metadata_stat.st_gid == 0
+    and metadata_stat.st_mode & 0o022 == 0
+    and set(payload) == {"schema_version", "commit_sha"}
+    and type(payload["schema_version"]) is int
+    and payload["schema_version"] == 1
+    and payload["commit_sha"] == sys.argv[1]
+)
+raise SystemExit(0 if valid else 1)' \
+  "${expected_commit_sha}" \
+  || fail "immutable build metadata is missing, writable, or mismatched"
 
 readonly saved_image="${work_dir}/image.tar"
 docker_cmd image save "${image_ref}" >"${saved_image}"

@@ -102,6 +102,8 @@ RUN uv sync --project services/analysis-api --frozen --no-dev \
 
 FROM python:3.12-slim-bookworm AS app-runtime
 
+ARG TRAINPAL_BUILD_COMMIT_SHA=""
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/workspace/services/analysis-api/src \
@@ -116,6 +118,7 @@ COPY --from=ffmpeg-builder /opt/trainpal/ffmpeg /opt/trainpal/ffmpeg
 COPY services/analysis-api/src services/analysis-api/src
 COPY services/analysis-api/provider-contracts services/analysis-api/provider-contracts
 COPY skills skills
+COPY .trainpal-build-metadata.json /workspace/build-metadata.json
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY licenses licenses
 COPY --from=web-builder /workspace/apps/web/dist apps/web/dist
@@ -123,6 +126,11 @@ COPY --from=web-builder /workspace/apps/web/dist apps/web/dist
 RUN test -z "$(find /workspace/services/analysis-api/.venv/lib -type f -path '*/imageio_ffmpeg/binaries/ffmpeg-*' -print -quit)" \
     && test -x /opt/trainpal/ffmpeg/bin/ffmpeg \
     && test -f /opt/trainpal/ffmpeg/receipt.json \
+    && if [ -n "${TRAINPAL_BUILD_COMMIT_SHA}" ]; then \
+        printf '%s' "${TRAINPAL_BUILD_COMMIT_SHA}" | grep -Eq '^[0-9a-f]{40}$'; \
+        printf '{"schema_version":1,"commit_sha":"%s"}\n' \
+            "${TRAINPAL_BUILD_COMMIT_SHA}" > /workspace/build-metadata.json; \
+    fi \
     && groupadd --system --gid 10001 hachimi \
     && useradd --system --uid 10001 --gid hachimi --home-dir /nonexistent --shell /usr/sbin/nologin hachimi \
     && mkdir -p /workspace/tmp/analysis-runs \

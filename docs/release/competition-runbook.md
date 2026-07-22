@@ -1,6 +1,6 @@
 # TrainPal 竞赛版发布、验收与回滚手册
 
-> 状态：CloudBase Run 基础合同已审计；服务创建、素材接入、公网 canary 与发布验收尚未留有通过记录
+> 状态：旧 B／`trainpal-demo-009` 已通过源码包临时上线；当前 Provider v1 尚未部署，五分钟完整质量与 300 秒发布闸门未通过
 >
 > 更新日期：2026-07-23
 >
@@ -18,15 +18,9 @@
 - 同源 SPA + FastAPI 镜像、健康／就绪、访问分级和测试 Provider 隔离的工程基线；
 - 现有真实云内容理解 Provider 的本地受控样本 smoke 基线。
 
-尚未完成或没有可审计通过记录：
+旧 B／`trainpal-demo-009` 已通过 CloudBase 源码包临时上线。已实测 295 秒、约 15.1 MiB 请求和三路评委并发，第四路返回 429；但三次公开分析均为 `partial`。这些记录只证明旧版本的请求 envelope 与并发保护，不证明五分钟完整分析质量。
 
-- `trainpal-demo` 服务的私有部署与不可变镜像 digest 登记；
-- 最终本地上传／受控媒体、来源清单、smoke 标注和 FFmpeg 审计材料接入；
-- CloudBase 内部路径上的 `/ready`、真实分析和清理门禁；
-- 未公布公网 canary、三路真实并发、超额 429、第二浏览器、回滚与恢复；
-- 最终公网链接公告与真机验收。
-
-因此当前状态是“可执行的发布基础”，不是“公网演示已上线”。任一门禁失败时，保持或恢复公网关闭。
+当前 Provider v1 尚未完成或没有可审计通过记录的项目包括：真实 Qwen 预检与结构／证据门禁、COS 主动删除与生命周期、完整样本质量、取消与熔断 canary、`B→C→B→C` 回滚、第二浏览器和真机验收。GHCR 目标环境拉取也未通过。因此当前结论是“不切线上”；任一门禁失败时，保持或恢复公网关闭。
 
 ## 2. 发布不变量
 
@@ -58,7 +52,7 @@ flowchart LR
 
 | 项目 | 值 |
 | --- | --- |
-| CloudBase 环境 | `bizhao-d8grp8yqd81759fbb`，`ap-shanghai` |
+| CloudBase 环境 | `<operator-supplied>`，`ap-shanghai` |
 | 服务名 | `trainpal-demo` |
 | 容器端口 | `8000` |
 | CPU / 内存 | 2 vCPU / 4 GiB |
@@ -111,8 +105,10 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `LOCAL_ANALYSIS_MAX_SECONDS` | 代码和私有验收上限 `300`，不直接对用户公布 |
 | `PUBLISHED_ANALYSIS_MAX_SECONDS` | 默认 `60`；五分钟 Canary 收据与当前部署 commit 匹配后才设为 `300` |
 | `PROVIDER_CONFORMANCE_REPORT_JSON` | 发布 300 秒时注入真实 runner 的脱敏聚合报告；Prompt 哈希、主备模型、24 个计分单元和质量门槛必须与部署配置一致 |
-| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入绑定 conformance 报告哈希、主备模型和 Canary 结果的脱敏收据，并绑定完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH` |
-| `LOCAL_UPLOAD_MAX_BYTES` | 与 CloudBase 和应用请求体上限协调，不能无界 |
+| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入绑定 conformance 报告哈希、主备模型、Prompt/ASR context 哈希、非秘密 Provider 配置摘要、延迟指标和 Canary 结果的脱敏收据，并绑定完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH` |
+| `TRAINPAL_BUILD_COMMIT_SHA` | 可选镜像构建路径的 Docker 参数，GitHub Actions 会自动注入。默认 CloudBase 源码包路径则由 `package-source.ps1` 写入 `.trainpal-build-metadata.json`。镜像内指纹、`DEPLOYMENT_COMMIT_SHA` 和 Canary receipt 三者不一致时，300 秒 fail-closed |
+| `LOCAL_UPLOAD_MAX_BYTES` | 对外上传与 `/capabilities` 固定 `19922944`（19 MiB），低于 CloudBase 公网 20 MB 请求 envelope |
+| `ANALYSIS_MAX_SOURCE_BYTES` | Provider 内部与受控来源的代码上限 `268435456`（256 MiB），不得用它放宽公网上传 |
 | `RUN_TIMEOUT_SECONDS` | `180` |
 | `RUN_TTL_SECONDS` | `600` |
 | `ANALYSIS_SPEECH_TIMEOUT_SECONDS` | `45` |
@@ -146,7 +142,7 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 - 清单、缓存和对象三方哈希必须一致；缺失、多余、符号链接、路径越界、传输不完整或哈希不符都阻止就绪。
 - 当前基础计划的 `assets_deferred_until_content_approval=true`。在素材、清单、公共基址与哈希审批前，不得把任何临时测试视频带入公网部署。
 
-FFmpeg 不进入 Git 或 GHCR 镜像。发布人必须记录版本、完整配置行、二进制与配置行两个 SHA-256、适用许可和源码位置；二进制以只读方式挂载。预期配置不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。如实际配置不同，先履行对应许可义务，再继续发布。
+FFmpeg 不进入 Git；部署镜像在构建阶段从官方签名源码生成并嵌入唯一的 LGPL-only 运行时。发布人必须记录版本、完整配置行、二进制与配置行两个 SHA-256、适用许可和源码位置。预期配置不得包含 `--enable-gpl`、`--enable-nonfree` 或 `libx264`。如实际配置不同，先履行对应许可义务，再继续发布。
 
 ## 7. 素材与权属
 
@@ -167,13 +163,15 @@ FFmpeg 不进入 Git 或 GHCR 镜像。发布人必须记录版本、完整配�
 1. 在干净检出上安装锁定依赖并生成 API 类型，确认生成物无意外 diff。
 2. 运行 `pnpm check`、端到端测试和 CloudBase 基础预检。
 3. 构建同源多阶段镜像；运行镜像验证，确认非 root、只读运行、SPA history、API 404、健康接口和禁入文件。
-4. 审计镜像最终文件系统及各层，确认没有 `.env*`、媒体、音频、帧、转录、模型响应、Trace、源映射、云 Key、本机路径或 FFmpeg 二进制。
-5. 推送并记录不可变完整提交 SHA 与 registry digest；不能以 `latest` 作为发布或回滚依据。
-6. 保留至少一个上一版不可变镜像及兼容的非秘密配置快照。
+4. 审计镜像最终文件系统及各层，确认没有 `.env*`、媒体、音频、帧、转录、模型响应、Trace、源映射、云 Key、本机路径，以及第二份或未登记的 FFmpeg 二进制；只允许构建收据绑定的 `/opt/trainpal/ffmpeg/bin/ffmpeg`。
+5. 默认 CloudBase 源码包路线记录完整 commit SHA、平台 Build ID 和兼容配置快照。只有目标环境真实验证 GHCR 拉取后，才额外记录 registry digest；不能以 `latest` 作为发布或回滚依据。
+6. 保留至少一个上一版不可变源码 commit/构建版本及兼容的非秘密配置快照。
 
-当前镜像路径继续使用仓库既有发布标识，例如 `ghcr.io/happyjumpup/hachimi:<full-sha>`。这是基础设施兼容路径，不得出现在用户产品命名中。
+`ghcr.io/happyjumpup/hachimi:<full-sha>` 只保留为可选供应链路径。目标 CloudBase 环境此前拉取失败，在真实拉取、启动与回滚通过前不得视为生产可用，也不得替换已验证的源码包路径。
 
 ## 9. CloudBase 部署顺序
+
+截至 2026-07-23，发布工作树已确认线上版本为 `trainpal-demo-009`，与 B 的运行源 `81de88d` 一致，且使用 CloudBase 源码包构建。295 秒、约 15.1 MiB 视频可完成请求，3 路评委并发成功且第 4 路返回 429；但 3 次公开分析均为 `partial` coverage。因此当前只能确认 300 秒/CloudBase 20 MB/前端 19 MB envelope 和并发保护，不能宣称五分钟完整质量达标。Provider v1 未通过真实 Qwen/COS/完整样本门槛前，发布建议是“不切线上”。
 
 ### 9.1 本地预检
 
@@ -186,14 +184,14 @@ FFmpeg 不进入 Git 或 GHCR 镜像。发布人必须记录版本、完整配�
 ### 9.2 私有基础版本
 
 1. 在 CloudBase 控制台确认目标账号、环境、服务、价格和附加资源成本。
-2. 使用不可变镜像 digest 通过已验证的 CloudBase CLI 3.6.4 命令创建 `trainpal-demo`；保留交互式最终确认，不增加 `--force` 或猜测的 dry-run 参数。
+2. 使用 `deploy/cloudbase/deploy-source.ps1` 从指定完整 commit 生成干净源码包，注入构建 commit 元数据，再通过已验证的 CloudBase CLI 3.6.4 `--source` 路径创建 `trainpal-demo`；保留交互式最终确认，不增加 `--force`。
 3. 保持公网和 HTTP Access 关闭，配置非秘密值并无回显转移秘密。
 4. 接入已批准的媒体／FFmpeg 合同，通过内部 `/health`、`/ready`、真实分析、SSE、清理和本地上传门禁。
-5. 记录该版本 digest 与兼容配置快照，作为回滚基线。
+5. 记录该版本的 commit SHA、CloudBase Build ID 与兼容配置快照，作为回滚基线。
 
 ### 9.3 候选版本与 canary
 
-1. 构建不同不可变 digest 的候选版本，在公网仍关闭时部署为第二版本。
+1. 从不同完整 commit 生成可审计源码包，在公网仍关闭时部署为第二版本。
 2. 通过全部私有门禁并确认上一版本可回滚。
 3. 短时开启未公布公网 canary，依次验证公网健康／就绪、评委分析、第二浏览器、三路并发、超额 429、回滚、再前滚。
 4. 任何失败都立即关闭公网；全部通过才公告链接并在评审前把最小实例设为 1。
@@ -299,7 +297,7 @@ MP4 保存在演示电脑和团队受控云盘各一份，记录 SHA-256 与时�
 
 ### 回滚步骤
 
-1. 记录故障时间、当前 digest、配置修订、脱敏错误码和影响范围；不要先删除证据。
+1. 记录故障时间、当前 commit SHA、CloudBase Build ID、配置修订、脱敏错误码和影响范围；若目标环境已验证可选 GHCR 路径，再同时记录 digest。不要先删除证据。
 2. 关闭公网开关与映射，停止新分析。
 3. 切换到上一不可变版本及其兼容非秘密配置快照。
 4. 验证内部健康／就绪、一个脱敏真实 smoke、本地上传与快速体验训练。
@@ -311,7 +309,7 @@ CloudBase 总授权上限为人民币 300 元，精确窗口与估算以基础�
 
 ## 17. 发布检查单
 
-- [ ] 最终提交 SHA、镜像 digest、上一版本和兼容配置快照已记录。
+- [ ] 最终提交 SHA、CloudBase Build ID、上一版本和兼容配置快照已记录；仅在目标环境已验证 GHCR 路径时额外记录镜像 digest。
 - [ ] CloudBase 基础预检、完整测试、镜像审计与素材权属全绿。
 - [ ] 最终媒体、清单、FFmpeg 和哈希接入，私有 `/ready` 通过。
 - [ ] 本地上传与受控快速体验均符合能力和清理边界。
