@@ -1,6 +1,44 @@
 {
   "components": {
     "schemas": {
+      "AccessSessionView": {
+        "additionalProperties": false,
+        "properties": {
+          "can_analyze": {
+            "title": "Can Analyze",
+            "type": "boolean"
+          },
+          "retry_after_seconds": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retry After Seconds"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/AccessTier"
+          }
+        },
+        "required": [
+          "tier",
+          "can_analyze"
+        ],
+        "title": "AccessSessionView",
+        "type": "object"
+      },
+      "AccessTier": {
+        "enum": [
+          "public",
+          "judge"
+        ],
+        "title": "AccessTier",
+        "type": "string"
+      },
       "ActionMode": {
         "enum": [
           "reps",
@@ -36,14 +74,7 @@
             "$ref": "#/components/schemas/CandidateParameters"
           },
           "segment": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/Segment"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/Segment"
           },
           "source_id": {
             "title": "Source Id",
@@ -95,15 +126,42 @@
             "title": "Candidates",
             "type": "array"
           },
+          "coverage_gaps": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageGap"
+            },
+            "title": "Coverage Gaps",
+            "type": "array"
+          },
+          "coverage_status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CoverageStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
             "type": "string"
           },
+          "discovered_candidate_count": {
+            "default": 0,
+            "description": "While running, the conservative maximum evidence count from completed evidence; at terminal completion, the exact fused candidate count.",
+            "minimum": 0.0,
+            "title": "Discovered Candidate Count",
+            "type": "integer"
+          },
           "empty_reason": {
             "anyOf": [
               {
-                "const": "no_evidence",
+                "enum": [
+                  "no_evidence",
+                  "insufficient_evidence"
+                ],
                 "type": "string"
               },
               {
@@ -126,6 +184,17 @@
             "title": "Id",
             "type": "string"
           },
+          "processed_seconds": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Processed Seconds",
+            "type": "number"
+          },
+          "source_duration_seconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "Source Duration Seconds",
+            "type": "number"
+          },
           "source_id": {
             "title": "Source Id",
             "type": "string"
@@ -137,8 +206,15 @@
             "$ref": "#/components/schemas/RunStatus"
           },
           "trigger_seconds": {
-            "title": "Trigger Seconds",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trigger Seconds"
           },
           "updated_at": {
             "format": "date-time",
@@ -158,7 +234,8 @@
           "source_id",
           "trigger_seconds",
           "status",
-          "stage"
+          "stage",
+          "source_duration_seconds"
         ],
         "title": "AnalysisRunView",
         "type": "object"
@@ -184,6 +261,63 @@
           "message"
         ],
         "title": "AnalysisWarning",
+        "type": "object"
+      },
+      "ApiErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "ApiErrorResponse",
+        "type": "object"
+      },
+      "Body_create_local_run_api_v1_analysis_runs_local_post": {
+        "properties": {
+          "local_source_id": {
+            "title": "Local Source Id",
+            "type": "string"
+          },
+          "media": {
+            "contentMediaType": "application/octet-stream",
+            "title": "Media",
+            "type": "string"
+          },
+          "range_end_seconds": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range End Seconds"
+          },
+          "range_start_seconds": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Range Start Seconds"
+          }
+        },
+        "required": [
+          "media",
+          "local_source_id"
+        ],
+        "title": "Body_create_local_run_api_v1_analysis_runs_local_post",
         "type": "object"
       },
       "CandidateParameters": {
@@ -251,23 +385,109 @@
         "title": "CandidateParameters",
         "type": "object"
       },
+      "CapabilitiesView": {
+        "additionalProperties": false,
+        "properties": {
+          "local_analysis_max_seconds": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 300.0,
+            "title": "Local Analysis Max Seconds",
+            "type": "number"
+          },
+          "local_upload_enabled": {
+            "title": "Local Upload Enabled",
+            "type": "boolean"
+          },
+          "local_upload_max_bytes": {
+            "minimum": 1.0,
+            "title": "Local Upload Max Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "local_upload_enabled",
+          "local_analysis_max_seconds",
+          "local_upload_max_bytes"
+        ],
+        "title": "CapabilitiesView",
+        "type": "object"
+      },
+      "CoverageGap": {
+        "additionalProperties": false,
+        "properties": {
+          "end_seconds": {
+            "exclusiveMinimum": 0.0,
+            "title": "End Seconds",
+            "type": "number"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/CoverageGapReason"
+          },
+          "retryable": {
+            "const": true,
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "start_seconds": {
+            "minimum": 0.0,
+            "title": "Start Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "start_seconds",
+          "end_seconds",
+          "reason",
+          "retryable"
+        ],
+        "title": "CoverageGap",
+        "type": "object"
+      },
+      "CoverageGapReason": {
+        "enum": [
+          "provider_error",
+          "timeout",
+          "media_error",
+          "unknown"
+        ],
+        "title": "CoverageGapReason",
+        "type": "string"
+      },
+      "CoverageStatus": {
+        "enum": [
+          "complete",
+          "partial",
+          "insufficient"
+        ],
+        "title": "CoverageStatus",
+        "type": "string"
+      },
       "CreateAnalysisRunRequest": {
         "additionalProperties": false,
         "properties": {
           "source_id": {
+            "maxLength": 128,
             "minLength": 1,
             "title": "Source Id",
             "type": "string"
           },
           "trigger_seconds": {
-            "minimum": 0.0,
-            "title": "Trigger Seconds",
-            "type": "number"
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "deprecated": true,
+            "description": "Deprecated compatibility metadata; full-source analysis ignores it.",
+            "title": "Trigger Seconds"
           }
         },
         "required": [
-          "source_id",
-          "trigger_seconds"
+          "source_id"
         ],
         "title": "CreateAnalysisRunRequest",
         "type": "object"
@@ -317,6 +537,220 @@
         "title": "EvidenceType",
         "type": "string"
       },
+      "GymtiAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "option_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Option Id",
+            "type": "string"
+          },
+          "question_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Question Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "option_id"
+        ],
+        "title": "GymtiAnswer",
+        "type": "object"
+      },
+      "GymtiNarrativeSnapshotView": {
+        "additionalProperties": false,
+        "properties": {
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "template"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 600,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "version",
+          "generated_at",
+          "text"
+        ],
+        "title": "GymtiNarrativeSnapshotView",
+        "type": "object"
+      },
+      "GymtiNextQuestionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "answered": {
+            "items": {
+              "$ref": "#/components/schemas/GymtiAnswer"
+            },
+            "maxItems": 8,
+            "title": "Answered",
+            "type": "array"
+          },
+          "candidate_question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Candidate Question Ids",
+            "type": "array"
+          },
+          "questionnaire_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Questionnaire Version",
+            "type": "string"
+          },
+          "scoring_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Scoring Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "questionnaire_version",
+          "scoring_version",
+          "candidate_question_ids"
+        ],
+        "title": "GymtiNextQuestionRequest",
+        "type": "object"
+      },
+      "GymtiNextQuestionView": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "local_fallback"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "source",
+          "version"
+        ],
+        "title": "GymtiNextQuestionView",
+        "type": "object"
+      },
+      "GymtiResultNarrativeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "answered": {
+            "items": {
+              "$ref": "#/components/schemas/GymtiAnswer"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Answered",
+            "type": "array"
+          },
+          "coach_style_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Coach Style Id",
+            "type": "string"
+          },
+          "formal_result_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Formal Result Id",
+            "type": "string"
+          },
+          "questionnaire_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Questionnaire Version",
+            "type": "string"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Reason Codes",
+            "type": "array"
+          },
+          "scoring_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Scoring Version",
+            "type": "string"
+          },
+          "secondary_result_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\S{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Result Id"
+          }
+        },
+        "required": [
+          "questionnaire_version",
+          "scoring_version",
+          "answered",
+          "formal_result_id",
+          "coach_style_id",
+          "reason_codes"
+        ],
+        "title": "GymtiResultNarrativeRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -328,6 +762,42 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "NotReadyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "status": {
+            "const": "not_ready",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "code"
+        ],
+        "title": "NotReadyResponse",
+        "type": "object"
+      },
+      "ReadyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "ready",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ReadyResponse",
         "type": "object"
       },
       "RunStage": {
@@ -391,6 +861,17 @@
             "title": "Media Url",
             "type": "string"
           },
+          "origin_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin Url"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -403,6 +884,22 @@
           "duration_seconds"
         ],
         "title": "SourceSummary",
+        "type": "object"
+      },
+      "UpgradeAccessSessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "access_code": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Access Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_code"
+        ],
+        "title": "UpgradeAccessSessionRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -453,6 +950,60 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/access/session": {
+      "get": {
+        "operationId": "get_access_session_api_v1_access_session_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Access Session"
+      },
+      "post": {
+        "operationId": "upgrade_access_session_api_v1_access_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeAccessSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessSessionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upgrade Access Session"
+      }
+    },
     "/api/v1/analysis-runs": {
       "post": {
         "operationId": "create_run_api_v1_analysis_runs_post",
@@ -477,6 +1028,36 @@
             },
             "description": "Successful Response"
           },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "可信代理提供的客户端地址无效。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "受控视频源不存在。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -486,9 +1067,153 @@
               }
             },
             "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "分析容量或调用频率已达到限制。",
+            "headers": {
+              "Retry-After": {
+                "description": "再次尝试前需要等待的秒数。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "生产分析服务尚未就绪。"
           }
         },
         "summary": "Create Run"
+      }
+    },
+    "/api/v1/analysis-runs/local": {
+      "post": {
+        "operationId": "create_local_run_api_v1_analysis_runs_local_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_local_run_api_v1_analysis_runs_local_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "可信代理提供的客户端地址无效。"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "本地视频导入未启用。"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "上传媒体超过大小限制。"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "上传媒体类型不受支持。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "媒体或分析范围无效。"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "分析容量或调用频率已达到限制。",
+            "headers": {
+              "Retry-After": {
+                "description": "再次尝试前需要等待的秒数。",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "生产分析服务尚未就绪。"
+          }
+        },
+        "summary": "Create Local Run"
       }
     },
     "/api/v1/analysis-runs/{run_id}": {
@@ -515,6 +1240,26 @@
               }
             },
             "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "分析请求不存在、已过期或不属于当前会话。"
           },
           "422": {
             "content": {
@@ -553,6 +1298,16 @@
             },
             "description": "Successful Response"
           },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "分析请求不存在、已过期或不属于当前会话。"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -584,11 +1339,23 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
               }
             },
-            "description": "Successful Response"
+            "description": "分析阶段与终态事件流。"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "分析请求不存在、已过期或不属于当前会话。"
           },
           "422": {
             "content": {
@@ -602,6 +1369,140 @@
           }
         },
         "summary": "Run Events"
+      }
+    },
+    "/api/v1/capabilities": {
+      "get": {
+        "operationId": "capabilities_api_v1_capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilitiesView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities"
+      }
+    },
+    "/api/v1/gymti/next-question": {
+      "post": {
+        "operationId": "gymti_next_question_api_v1_gymti_next_question_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GymtiNextQuestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GymtiNextQuestionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "问卷上下文与当前合同不匹配。"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "GYMTI 问卷合同暂不可用。"
+          }
+        },
+        "summary": "Gymti Next Question"
+      }
+    },
+    "/api/v1/gymti/result-narrative": {
+      "post": {
+        "operationId": "gymti_result_narrative_api_v1_gymti_result_narrative_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GymtiResultNarrativeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GymtiNarrativeSnapshotView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "正式结果与当前合同不匹配。"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "GYMTI 问卷合同暂不可用。"
+          }
+        },
+        "summary": "Gymti Result Narrative"
       }
     },
     "/api/v1/health": {
@@ -624,6 +1525,34 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/api/v1/ready": {
+      "get": {
+        "operationId": "ready_api_v1_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotReadyResponse"
+                }
+              }
+            },
+            "description": "生产就绪检查未通过，返回脱敏错误码。"
+          }
+        },
+        "summary": "Ready"
       }
     },
     "/api/v1/sources": {
@@ -664,6 +1593,11 @@
         ],
         "responses": {
           "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
             "description": "Successful Response"
           },
           "422": {

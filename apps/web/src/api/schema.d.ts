@@ -4,6 +4,24 @@
  */
 
 export interface paths {
+    "/api/v1/access/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Access Session */
+        get: operations["get_access_session_api_v1_access_session_get"];
+        put?: never;
+        /** Upgrade Access Session */
+        post: operations["upgrade_access_session_api_v1_access_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analysis-runs": {
         parameters: {
             query?: never;
@@ -15,6 +33,23 @@ export interface paths {
         put?: never;
         /** Create Run */
         post: operations["create_run_api_v1_analysis_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analysis-runs/local": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Local Run */
+        post: operations["create_local_run_api_v1_analysis_runs_local_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -56,6 +91,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Capabilities */
+        get: operations["capabilities_api_v1_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gymti/next-question": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Gymti Next Question */
+        post: operations["gymti_next_question_api_v1_gymti_next_question_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gymti/result-narrative": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Gymti Result Narrative */
+        post: operations["gymti_result_narrative_api_v1_gymti_result_narrative_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -65,6 +151,23 @@ export interface paths {
         };
         /** Health */
         get: operations["health_api_v1_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ready": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ready */
+        get: operations["ready_api_v1_ready_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -111,6 +214,19 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccessSessionView */
+        AccessSessionView: {
+            /** Can Analyze */
+            can_analyze: boolean;
+            /** Retry After Seconds */
+            retry_after_seconds?: number | null;
+            tier: components["schemas"]["AccessTier"];
+        };
+        /**
+         * AccessTier
+         * @enum {string}
+         */
+        AccessTier: "public" | "judge";
         /**
          * ActionMode
          * @enum {string}
@@ -127,7 +243,7 @@ export interface components {
             /** Needs Confirmation */
             needs_confirmation: boolean;
             parameters: components["schemas"]["CandidateParameters"];
-            segment: components["schemas"]["Segment"] | null;
+            segment: components["schemas"]["Segment"];
             /** Source Id */
             source_id: string;
         };
@@ -143,22 +259,38 @@ export interface components {
         AnalysisRunView: {
             /** Candidates */
             candidates?: components["schemas"]["AnalysisCandidate"][];
+            /** Coverage Gaps */
+            coverage_gaps?: components["schemas"]["CoverageGap"][];
+            coverage_status?: components["schemas"]["CoverageStatus"] | null;
             /**
              * Created At
              * Format: date-time
              */
             created_at?: string;
+            /**
+             * Discovered Candidate Count
+             * @description While running, the conservative maximum evidence count from completed evidence; at terminal completion, the exact fused candidate count.
+             * @default 0
+             */
+            discovered_candidate_count: number;
             /** Empty Reason */
-            empty_reason?: "no_evidence" | null;
+            empty_reason?: ("no_evidence" | "insufficient_evidence") | null;
             error?: components["schemas"]["AnalysisError"] | null;
             /** Id */
             id: string;
+            /**
+             * Processed Seconds
+             * @default 0
+             */
+            processed_seconds: number;
+            /** Source Duration Seconds */
+            source_duration_seconds: number;
             /** Source Id */
             source_id: string;
             stage: components["schemas"]["RunStage"];
             status: components["schemas"]["RunStatus"];
             /** Trigger Seconds */
-            trigger_seconds: number;
+            trigger_seconds: number | null;
             /**
              * Updated At
              * Format: date-time
@@ -177,6 +309,22 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** ApiErrorResponse */
+        ApiErrorResponse: {
+            /** Detail */
+            detail: string;
+        };
+        /** Body_create_local_run_api_v1_analysis_runs_local_post */
+        Body_create_local_run_api_v1_analysis_runs_local_post: {
+            /** Local Source Id */
+            local_source_id: string;
+            /** Media */
+            media: string;
+            /** Range End Seconds */
+            range_end_seconds?: number | null;
+            /** Range Start Seconds */
+            range_start_seconds?: number | null;
+        };
         /** CandidateParameters */
         CandidateParameters: {
             /** Duration Seconds */
@@ -189,12 +337,48 @@ export interface components {
             /** Sets */
             sets?: number | null;
         };
+        /** CapabilitiesView */
+        CapabilitiesView: {
+            /** Local Analysis Max Seconds */
+            local_analysis_max_seconds: number;
+            /** Local Upload Enabled */
+            local_upload_enabled: boolean;
+            /** Local Upload Max Bytes */
+            local_upload_max_bytes: number;
+        };
+        /** CoverageGap */
+        CoverageGap: {
+            /** End Seconds */
+            end_seconds: number;
+            reason: components["schemas"]["CoverageGapReason"];
+            /**
+             * Retryable
+             * @constant
+             */
+            retryable: true;
+            /** Start Seconds */
+            start_seconds: number;
+        };
+        /**
+         * CoverageGapReason
+         * @enum {string}
+         */
+        CoverageGapReason: "provider_error" | "timeout" | "media_error" | "unknown";
+        /**
+         * CoverageStatus
+         * @enum {string}
+         */
+        CoverageStatus: "complete" | "partial" | "insufficient";
         /** CreateAnalysisRunRequest */
         CreateAnalysisRunRequest: {
             /** Source Id */
             source_id: string;
-            /** Trigger Seconds */
-            trigger_seconds: number;
+            /**
+             * Trigger Seconds
+             * @deprecated
+             * @description Deprecated compatibility metadata; full-source analysis ignores it.
+             */
+            trigger_seconds?: number | null;
         };
         /**
          * ErrorCode
@@ -214,10 +398,96 @@ export interface components {
          * @enum {string}
          */
         EvidenceType: "speech" | "visual";
+        /** GymtiAnswer */
+        GymtiAnswer: {
+            /** Option Id */
+            option_id: string;
+            /** Question Id */
+            question_id: string;
+        };
+        /** GymtiNarrativeSnapshotView */
+        GymtiNarrativeSnapshotView: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Model */
+            model?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "template";
+            /** Text */
+            text: string;
+            /** Version */
+            version: string;
+        };
+        /** GymtiNextQuestionRequest */
+        GymtiNextQuestionRequest: {
+            /** Answered */
+            answered?: components["schemas"]["GymtiAnswer"][];
+            /** Candidate Question Ids */
+            candidate_question_ids: string[];
+            /** Questionnaire Version */
+            questionnaire_version: string;
+            /** Scoring Version */
+            scoring_version: string;
+        };
+        /** GymtiNextQuestionView */
+        GymtiNextQuestionView: {
+            /** Model */
+            model?: string | null;
+            /** Question Id */
+            question_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "local_fallback";
+            /** Version */
+            version: string;
+        };
+        /** GymtiResultNarrativeRequest */
+        GymtiResultNarrativeRequest: {
+            /** Answered */
+            answered: components["schemas"]["GymtiAnswer"][];
+            /** Coach Style Id */
+            coach_style_id: string;
+            /** Formal Result Id */
+            formal_result_id: string;
+            /** Questionnaire Version */
+            questionnaire_version: string;
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Scoring Version */
+            scoring_version: string;
+            /** Secondary Result Id */
+            secondary_result_id?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** NotReadyResponse */
+        NotReadyResponse: {
+            /** Code */
+            code: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "not_ready";
+        };
+        /** ReadyResponse */
+        ReadyResponse: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "ready";
         };
         /**
          * RunStage
@@ -244,8 +514,15 @@ export interface components {
             id: string;
             /** Media Url */
             media_url: string;
+            /** Origin Url */
+            origin_url?: string | null;
             /** Title */
             title: string;
+        };
+        /** UpgradeAccessSessionRequest */
+        UpgradeAccessSessionRequest: {
+            /** Access Code */
+            access_code: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -269,6 +546,59 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    get_access_session_api_v1_access_session_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSessionView"];
+                };
+            };
+        };
+    };
+    upgrade_access_session_api_v1_access_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeAccessSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessSessionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_run_api_v1_analysis_runs_post: {
         parameters: {
             query?: never;
@@ -291,6 +621,33 @@ export interface operations {
                     "application/json": components["schemas"]["AnalysisRunView"];
                 };
             };
+            /** @description 可信代理提供的客户端地址无效。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 受控视频源不存在。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -298,6 +655,124 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description 分析容量或调用频率已达到限制。 */
+            429: {
+                headers: {
+                    /** @description 再次尝试前需要等待的秒数。 */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 生产分析服务尚未就绪。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    create_local_run_api_v1_analysis_runs_local_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_local_run_api_v1_analysis_runs_local_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisRunView"];
+                };
+            };
+            /** @description 可信代理提供的客户端地址无效。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 本地视频导入未启用。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 上传媒体超过大小限制。 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 上传媒体类型不受支持。 */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 媒体或分析范围无效。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 分析容量或调用频率已达到限制。 */
+            429: {
+                headers: {
+                    /** @description 再次尝试前需要等待的秒数。 */
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 生产分析服务尚未就绪。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
         };
@@ -320,6 +795,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalysisRunView"];
+                };
+            };
+            /** @description 分析请求不存在、已过期或不属于当前会话。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -353,6 +837,24 @@ export interface operations {
                     "application/json": components["schemas"]["AnalysisRunView"];
                 };
             };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 分析请求不存在、已过期或不属于当前会话。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -375,13 +877,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description 分析阶段与终态事件流。 */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "text/event-stream": string;
+                };
+            };
+            /** @description 分析请求不存在、已过期或不属于当前会话。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -391,6 +902,128 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capabilities_api_v1_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapabilitiesView"];
+                };
+            };
+        };
+    };
+    gymti_next_question_api_v1_gymti_next_question_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymtiNextQuestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymtiNextQuestionView"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 问卷上下文与当前合同不匹配。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description GYMTI 问卷合同暂不可用。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    gymti_result_narrative_api_v1_gymti_result_narrative_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymtiResultNarrativeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymtiNarrativeSnapshotView"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 正式结果与当前合同不匹配。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description GYMTI 问卷合同暂不可用。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
         };
@@ -413,6 +1046,35 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    ready_api_v1_ready_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReadyResponse"];
+                };
+            };
+            /** @description 生产就绪检查未通过，返回脱敏错误码。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotReadyResponse"];
                 };
             };
         };
@@ -453,7 +1115,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": unknown;
+                };
             };
             /** @description Validation Error */
             422: {

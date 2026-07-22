@@ -7,6 +7,7 @@ from hakimi_analysis.models import (
     EvidenceSpan,
     EvidenceType,
     Segment,
+    SegmentRole,
     SpeechSignal,
     VisualSegment,
 )
@@ -61,6 +62,15 @@ def _overlap_seconds(
     return max(0.0, min(left_end, right_end) - max(left_start, right_start))
 
 
+def _gap_seconds(
+    left_start: float,
+    left_end: float,
+    right_start: float,
+    right_end: float,
+) -> float:
+    return max(0.0, max(left_start, right_start) - min(left_end, right_end))
+
+
 def _parameters(signal: SpeechSignal | None) -> CandidateParameters:
     if signal is None:
         return CandidateParameters()
@@ -82,6 +92,87 @@ def _parameters(signal: SpeechSignal | None) -> CandidateParameters:
     )
 
 
+def _segment_role(
+    speech: SpeechSignal | None,
+    visual: VisualSegment | None,
+) -> SegmentRole:
+    roles = {
+        item.segment_role
+        for item in (speech, visual)
+        if item is not None and item.segment_role != SegmentRole.UNKNOWN
+    }
+    if len(roles) == 1:
+        return next(iter(roles))
+    return SegmentRole.UNKNOWN
+
+
+def _speech_signal_quality(
+    signal: SpeechSignal,
+) -> tuple[int, int, tuple[int, int, int, int], str, str]:
+    def sortable(value: int | None) -> int:
+        return -1 if value is None else value
+
+    parameter_values = (
+        signal.sets,
+        signal.reps,
+        signal.duration_seconds,
+        signal.rest_seconds,
+    )
+    return (
+        sum(value is not None for value in parameter_values),
+        int(signal.segment_role != SegmentRole.UNKNOWN),
+        (
+            sortable(signal.sets),
+            sortable(signal.reps),
+            sortable(signal.duration_seconds),
+            sortable(signal.rest_seconds),
+        ),
+        signal.action_name.casefold(),
+        signal.evidence_text,
+    )
+
+
+def _deduplicate_speech_signals(signals: list[SpeechSignal]) -> list[SpeechSignal]:
+    grouped: dict[str, list[SpeechSignal]] = {}
+    for signal in sorted(
+        signals,
+        key=lambda item: (
+            item.start_seconds,
+            item.end_seconds,
+            _normalized_action_name(item.action_name),
+            item.evidence_text,
+        ),
+    ):
+        action_key = _normalized_action_name(signal.action_name)
+        action_signals = grouped.setdefault(action_key, [])
+        if action_signals and signal.start_seconds <= action_signals[-1].end_seconds:
+            previous = action_signals[-1]
+            preferred = max((previous, signal), key=_speech_signal_quality)
+            role = (
+                previous.segment_role
+                if previous.segment_role == signal.segment_role
+                else SegmentRole.UNKNOWN
+            )
+            action_signals[-1] = preferred.model_copy(
+                update={
+                    "start_seconds": min(previous.start_seconds, signal.start_seconds),
+                    "end_seconds": max(previous.end_seconds, signal.end_seconds),
+                    "segment_role": role,
+                }
+            )
+            continue
+        action_signals.append(signal)
+    return sorted(
+        [signal for action_signals in grouped.values() for signal in action_signals],
+        key=lambda item: (
+            item.start_seconds,
+            item.end_seconds,
+            _normalized_action_name(item.action_name),
+            item.evidence_text,
+        ),
+    )
+
+
 def fuse_candidates(
     *,
     source_id: str,
@@ -90,6 +181,7 @@ def fuse_candidates(
 ) -> list[AnalysisCandidate]:
     candidates: list[AnalysisCandidate] = []
     matched_visual_indexes: set[int] = set()
+    speech_signals = _deduplicate_speech_signals(speech_signals)
 
     for speech in speech_signals:
         matches = [
@@ -101,13 +193,23 @@ def fuse_candidates(
                     visual.start_seconds,
                     visual.end_seconds,
                 ),
+                _gap_seconds(
+                    speech.start_seconds,
+                    speech.end_seconds,
+                    visual.start_seconds,
+                    visual.end_seconds,
+                ),
             )
             for index, visual in enumerate(visual_segments)
             if index not in matched_visual_indexes
             and _same_action(speech.action_name, visual.action_name)
         ]
-        matched_index, overlap = max(matches, key=lambda item: item[1], default=(-1, 0.0))
-        visual = visual_segments[matched_index] if overlap > 0 else None
+        matched_index, overlap, gap = min(
+            matches,
+            key=lambda item: (item[2], -item[1]),
+            default=(-1, 0.0, float("inf")),
+        )
+        visual = visual_segments[matched_index] if overlap > 0 or gap <= 6 else None
         if visual is not None:
             matched_visual_indexes.add(matched_index)
 
@@ -134,6 +236,7 @@ def fuse_candidates(
                     end_seconds=visual.end_seconds,
                 )
             )
+        segment_role = _segment_role(speech, visual)
         candidates.append(
             AnalysisCandidate(
                 id="pending",
@@ -142,7 +245,11 @@ def fuse_candidates(
                 segment=Segment(start_seconds=start_seconds, end_seconds=end_seconds),
                 parameters=_parameters(speech),
                 evidence=evidence,
-                needs_confirmation=visual is None or visual.action_name is None,
+                needs_confirmation=(
+                    visual is None
+                    or visual.action_name is None
+                    or segment_role == SegmentRole.UNKNOWN
+                ),
             )
         )
 

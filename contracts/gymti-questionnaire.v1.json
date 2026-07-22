@@ -1,0 +1,761 @@
+{
+  "version": "gymti-questionnaire.v1",
+  "gymtiTypes": [
+    { "id": "IMNB", "label": "肌！肉！人！" },
+    { "id": "KCAL", "label": "卡路里收纳师" },
+    { "id": "HIDE", "label": "器械区躲猫猫小不点" },
+    { "id": "LIFE", "label": "续命打工人" },
+    { "id": "CURV", "label": "线条精修师" },
+    { "id": "BOOM", "label": "老暴汗家" },
+    { "id": "WINN", "label": "赢麻者" }
+  ],
+  "coachStyleIds": [
+    "hotblood",
+    "gentle",
+    "snarky",
+    "analyst",
+    "comedian",
+    "challenger",
+    "zen"
+  ],
+  "reasonCodes": [
+    { "id": "goal_strength" },
+    { "id": "goal_body_composition" },
+    { "id": "goal_confidence" },
+    { "id": "goal_vitality" },
+    { "id": "goal_body_shape" },
+    { "id": "goal_emotional_release" },
+    { "id": "goal_progress_tracking" },
+    { "id": "preference_energizing" },
+    { "id": "preference_gentle" },
+    { "id": "preference_direct" },
+    { "id": "preference_data" },
+    { "id": "preference_humor" },
+    { "id": "preference_challenge" },
+    { "id": "preference_low_pressure" }
+  ],
+  "rules": {
+    "questionCount": {
+      "minimum": 5,
+      "maximum": 8
+    },
+    "foundationQuestionIds": [
+      "q01_energy_after_work",
+      "q02_gym_attraction",
+      "q03_data_report",
+      "q04_desktop_cat"
+    ],
+    "adaptiveQuestionIds": [
+      "q05_reminder_aversion",
+      "q06_correction_tone",
+      "q07_intensity_view",
+      "q08_return_after_skip",
+      "q09_sarcasm_limit"
+    ],
+    "earlyCompletion": {
+      "afterAnswerCounts": [5, 6, 7],
+      "minimumWinnerScore": 4,
+      "minimumLead": 3,
+      "maximumNoMatchRatioExclusive": 0.5
+    },
+    "terminal": {
+      "answerCount": 8,
+      "scoreBoost": 100
+    }
+  },
+  "questions": [
+    {
+      "id": "q01_energy_after_work",
+      "phase": "foundation",
+      "prompt": "今天本来计划训练，但下班后灵魂只剩 3% 电。你会？",
+      "semanticTags": ["energy", "after_work"],
+      "probeTargets": {
+        "gymtiTypeIds": ["WINN", "IMNB", "LIFE", "HIDE", "BOOM"],
+        "coachStyleIds": ["challenger", "gentle", "zen", "hotblood", "comedian"]
+      },
+      "options": [
+        {
+          "id": "q01_a_commit",
+          "label": "计划就是计划，哪怕只练 30 分钟也要去。",
+          "semanticTags": ["discipline"],
+          "gymtiScores": { "WINN": 1, "IMNB": 1 },
+          "coachStyleScores": { "challenger": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_progress_tracking", "preference_challenge"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q01_b_small_win",
+          "label": "去可以，但请给我一个“今天只要动一动也算赢”的入口。",
+          "semanticTags": ["small_start"],
+          "gymtiScores": { "LIFE": 1, "HIDE": 1 },
+          "coachStyleScores": { "gentle": 1, "zen": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_vitality", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q01_c_music",
+          "label": "不行，我需要一首歌、一个教练和一点灯光，把我从工位残骸里炸出来。",
+          "semanticTags": ["energy_boost"],
+          "gymtiScores": { "BOOM": 2 },
+          "coachStyleScores": { "hotblood": 1, "comedian": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_emotional_release", "preference_energizing"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q01_d_rest",
+          "label": "先躺一下，躺完如果还活着再说。",
+          "semanticTags": ["recovery"],
+          "gymtiScores": { "HIDE": 1, "LIFE": 1, "IMNB": -1, "WINN": -1 },
+          "coachStyleScores": { "zen": 2, "hotblood": -1, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_vitality", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q01_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q02_gym_attraction",
+      "phase": "foundation",
+      "prompt": "健身房里你最容易被什么吸引？",
+      "semanticTags": ["training_preference"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "BOOM", "KCAL", "CURV", "HIDE", "LIFE"],
+        "coachStyleIds": ["analyst", "challenger", "hotblood", "gentle", "zen"]
+      },
+      "options": [
+        {
+          "id": "q02_a_iron",
+          "label": "哑铃、杠铃、器械、深蹲架，钢哥们会说真话。",
+          "semanticTags": ["strength"],
+          "gymtiScores": { "IMNB": 2 },
+          "coachStyleScores": { "analyst": 1, "challenger": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_strength", "preference_data"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q02_b_cardio",
+          "label": "跑步机、单车、爬坡、HIIT，心率上来以后世界会安静一点。",
+          "semanticTags": ["cardio"],
+          "gymtiScores": { "BOOM": 1, "KCAL": 1 },
+          "coachStyleScores": { "hotblood": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_emotional_release", "preference_energizing"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q02_c_shape",
+          "label": "普拉提、瑜伽、臀腿核心、体态纠正，我要的是身体线条开始变靓。",
+          "semanticTags": ["body_shape"],
+          "gymtiScores": { "CURV": 2 },
+          "coachStyleScores": { "gentle": 1, "analyst": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_body_shape", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q02_d_corner",
+          "label": "最角落、最少人、最不会被围观的地方，让我慢慢研究这些器械应该怎么用。",
+          "semanticTags": ["beginner_safety"],
+          "gymtiScores": { "HIDE": 2 },
+          "coachStyleScores": { "gentle": 1, "zen": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_confidence", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q02_e_light",
+          "label": "看起来最不累的器械，拉伸器具或者轻运动最好，我只想简单地缓解腰酸背痛。",
+          "semanticTags": ["low_intensity"],
+          "gymtiScores": { "HIDE": 1, "LIFE": 1, "IMNB": -1, "WINN": -1 },
+          "coachStyleScores": { "zen": 2, "hotblood": -1, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_vitality", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q02_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q03_data_report",
+      "phase": "foundation",
+      "prompt": "健身神往你手机里塞了一份 6 页的《你的身体运行报告》。你第一反应是？",
+      "semanticTags": ["data_relationship"],
+      "probeTargets": {
+        "gymtiTypeIds": ["WINN", "IMNB", "LIFE", "CURV", "KCAL", "HIDE"],
+        "coachStyleIds": ["analyst", "gentle", "comedian"]
+      },
+      "options": [
+        {
+          "id": "q03_a_open",
+          "label": "立刻展开。我要看训练量、负荷、趋势、恢复分、动作质量，以及一切能证明我没有白练的证据。",
+          "semanticTags": ["data_driven"],
+          "gymtiScores": { "WINN": 2, "IMNB": 1 },
+          "coachStyleScores": { "analyst": 2 },
+          "hardBans": [],
+          "reasonCodes": ["goal_progress_tracking", "preference_data"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q03_b_skip_math",
+          "label": "我不爱看数据。神可以全知全能，但我不想在健身过程中重修高数。",
+          "semanticTags": ["data_averse"],
+          "gymtiScores": { "LIFE": 1, "CURV": 1, "WINN": -1 },
+          "coachStyleScores": { "gentle": 1, "comedian": 1, "analyst": -2 },
+          "hardBans": [],
+          "reasonCodes": ["preference_gentle", "preference_humor"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q03_c_mirror",
+          "label": "先翻热量、体重趋势、围度和照片对比。我现在只关心镜子里的我有没有开始变靓。",
+          "semanticTags": ["body_composition"],
+          "gymtiScores": { "KCAL": 2, "CURV": 2 },
+          "coachStyleScores": { "analyst": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_body_composition", "goal_body_shape"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q03_d_start_button",
+          "label": "数据很神圣，但能不能先告诉我今天点哪个按钮、做哪节课、从哪里开始。",
+          "semanticTags": ["guided_start"],
+          "gymtiScores": { "HIDE": 2 },
+          "coachStyleScores": { "gentle": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_confidence", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q03_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q04_desktop_cat",
+      "phase": "foundation",
+      "prompt": "下面四只猫，你最愿意让哪只常驻桌面？",
+      "semanticTags": ["coach_presence"],
+      "probeTargets": {
+        "gymtiTypeIds": ["BOOM", "IMNB", "WINN", "LIFE", "HIDE", "KCAL"],
+        "coachStyleIds": ["hotblood", "analyst", "gentle", "zen", "snarky", "comedian"]
+      },
+      "options": [
+        {
+          "id": "q04_a_flag",
+          "label": "拿着小旗子喊你：“今天快来和我一起突破自己！”",
+          "semanticTags": ["energizing"],
+          "gymtiScores": { "BOOM": 1, "IMNB": 1 },
+          "coachStyleScores": { "hotblood": 3 },
+          "hardBans": [],
+          "reasonCodes": ["preference_energizing", "preference_challenge"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q04_b_report",
+          "label": "戴着眼镜看报表：“动作速度下降 6%，建议降低重量。”",
+          "semanticTags": ["data_feedback"],
+          "gymtiScores": { "WINN": 1, "IMNB": 1 },
+          "coachStyleScores": { "analyst": 3 },
+          "hardBans": [],
+          "reasonCodes": ["goal_progress_tracking", "preference_data"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q04_c_water",
+          "label": "抱着水杯慢慢说：“今天能开始就很好，不必逼自己一定马上变健身达人。”",
+          "semanticTags": ["kind_restart"],
+          "gymtiScores": { "LIFE": 1, "HIDE": 1 },
+          "coachStyleScores": { "gentle": 2, "zen": 1, "snarky": -2, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_gentle", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q04_d_tease",
+          "label": "一边吐槽一边陪你：“才一组就想休息？本喵都还没开始嫌累。”",
+          "semanticTags": ["playful_push"],
+          "gymtiScores": { "BOOM": 1, "KCAL": 1 },
+          "coachStyleScores": { "snarky": 2, "comedian": 1, "gentle": -1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_direct", "preference_humor"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q04_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q05_reminder_aversion",
+      "phase": "adaptive",
+      "prompt": "你最讨厌哪种健身提醒？",
+      "semanticTags": ["reminder_boundary"],
+      "probeTargets": {
+        "gymtiTypeIds": ["WINN", "HIDE", "KCAL", "IMNB", "BOOM", "LIFE"],
+        "coachStyleIds": ["analyst", "hotblood", "comedian", "gentle", "zen", "snarky", "challenger"]
+      },
+      "options": [
+        {
+          "id": "q05_a_vague",
+          "label": "“加油坚持！”太空泛了，我需要具体到今天练什么、练几组、为什么。",
+          "semanticTags": ["specific_guidance"],
+          "gymtiScores": { "WINN": 2 },
+          "coachStyleScores": { "analyst": 2, "hotblood": -1, "comedian": -1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_progress_tracking", "preference_data"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q05_b_self_judgment",
+          "label": "“你又偷懒了。”别骂了，我已经在内心排队审判自己。",
+          "semanticTags": ["harm_boundary"],
+          "gymtiScores": { "HIDE": 1, "KCAL": 1 },
+          "coachStyleScores": { "gentle": 2, "zen": 1, "snarky": -5 },
+          "hardBans": ["snarky"],
+          "reasonCodes": ["preference_gentle", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q05_c_soft",
+          "label": "“休息一天没关系。”有关系，我需要有人把我从沙发上薅起来。",
+          "semanticTags": ["needs_push"],
+          "gymtiScores": { "IMNB": 1, "BOOM": 1 },
+          "coachStyleScores": { "snarky": 1, "hotblood": 1, "gentle": -1, "zen": -1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_direct", "preference_energizing"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q05_d_intense",
+          "label": "“马上开始高强度燃脂！”我只是腰酸，不是要和人生决斗。",
+          "semanticTags": ["intensity_boundary"],
+          "gymtiScores": { "LIFE": 2, "BOOM": -1 },
+          "coachStyleScores": { "zen": 1, "gentle": 1, "hotblood": -2, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_vitality", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q05_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q06_correction_tone",
+      "phase": "adaptive",
+      "prompt": "如果训练中动作做错了，你希望猫咪怎么说？",
+      "semanticTags": ["correction_tone"],
+      "probeTargets": {
+        "gymtiTypeIds": ["HIDE", "LIFE", "IMNB", "BOOM"],
+        "coachStyleIds": ["gentle", "zen", "snarky", "challenger", "comedian"]
+      },
+      "options": [
+        {
+          "id": "q06_a_safe",
+          "label": "“先停一下，本喵帮你把动作拆开，安全比逞强重要。”",
+          "semanticTags": ["safe_guidance"],
+          "gymtiScores": { "HIDE": 1, "LIFE": 1 },
+          "coachStyleScores": { "gentle": 2, "zen": 1, "snarky": -1, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_confidence", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q06_b_joke",
+          "label": "“这个姿势再歪一点，器械都要申请工伤了。”",
+          "semanticTags": ["teasing_correction"],
+          "gymtiScores": { "IMNB": 1, "BOOM": 1 },
+          "coachStyleScores": { "snarky": 2 },
+          "hardBans": [],
+          "reasonCodes": ["preference_direct"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q06_c_bug",
+          "label": "“没事，身体第一次上线这个版本，有 bug 很正常。”",
+          "semanticTags": ["humorous_reassurance"],
+          "gymtiScores": { "HIDE": 1, "LIFE": 1 },
+          "coachStyleScores": { "comedian": 1, "gentle": 1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_humor", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q06_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q07_intensity_view",
+      "phase": "adaptive",
+      "prompt": "你对“练到很累”的看法更接近？",
+      "semanticTags": ["training_intensity"],
+      "probeTargets": {
+        "gymtiTypeIds": ["BOOM", "IMNB", "WINN", "LIFE", "HIDE", "CURV"],
+        "coachStyleIds": ["challenger", "gentle", "zen", "hotblood", "analyst"]
+      },
+      "options": [
+        {
+          "id": "q07_a_evidence",
+          "label": "累是有效的证据，当然前提是别把自己练散架。",
+          "semanticTags": ["intensity_positive"],
+          "gymtiScores": { "BOOM": 1, "IMNB": 1, "WINN": 1 },
+          "coachStyleScores": { "challenger": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_emotional_release", "preference_challenge"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q07_b_quality",
+          "label": "不一定。动作质量、恢复和长期坚持更重要。",
+          "semanticTags": ["quality_over_intensity"],
+          "gymtiScores": { "WINN": 1, "LIFE": 1 },
+          "coachStyleScores": { "gentle": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_vitality", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q07_c_tired",
+          "label": "我怕太累，太累会让我下次不敢打开软件。",
+          "semanticTags": ["low_pressure"],
+          "gymtiScores": { "HIDE": 2, "BOOM": -1, "IMNB": -1 },
+          "coachStyleScores": { "gentle": 1, "zen": 1, "hotblood": -1, "challenger": -2 },
+          "hardBans": [],
+          "reasonCodes": ["goal_confidence", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q07_d_pretty",
+          "label": "累可以，但最好累得好看、有效、别粗暴。",
+          "semanticTags": ["effective_shape"],
+          "gymtiScores": { "CURV": 2 },
+          "coachStyleScores": { "gentle": 1, "analyst": 1 },
+          "hardBans": [],
+          "reasonCodes": ["goal_body_shape", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q07_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q08_return_after_skip",
+      "phase": "adaptive",
+      "prompt": "如果你漏练一天，猫咪最适合怎么叫你回来？",
+      "semanticTags": ["return_prompt"],
+      "probeTargets": {
+        "gymtiTypeIds": ["HIDE", "LIFE", "IMNB", "BOOM", "KCAL", "WINN"],
+        "coachStyleIds": ["gentle", "zen", "snarky", "analyst", "challenger"]
+      },
+      "options": [
+        {
+          "id": "q08_a_eight_minutes",
+          "label": "“没关系，回来就行。今天只做 8 分钟。”",
+          "semanticTags": ["small_restart"],
+          "gymtiScores": { "HIDE": 1, "LIFE": 1 },
+          "coachStyleScores": { "gentle": 2, "zen": 1, "snarky": -2, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_gentle", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q08_b_dumbbell",
+          "label": "“你昨天没来，本喵已经替哑铃记仇了。”",
+          "semanticTags": ["playful_push"],
+          "gymtiScores": { "IMNB": 1, "BOOM": 1 },
+          "coachStyleScores": { "snarky": 2, "gentle": -1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_direct"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q08_c_pattern",
+          "label": "“根据记录，你通常漏一天后会漏三天，要不要现在打断这个魔咒？”",
+          "semanticTags": ["pattern_feedback"],
+          "gymtiScores": { "KCAL": 1, "WINN": 1 },
+          "coachStyleScores": { "analyst": 2 },
+          "hardBans": [],
+          "reasonCodes": ["goal_progress_tracking", "preference_data"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q08_d_open",
+          "label": "“回来吧，今天不审判，只开机。”",
+          "semanticTags": ["nonjudgmental"],
+          "gymtiScores": { "LIFE": 1, "HIDE": 1 },
+          "coachStyleScores": { "zen": 2, "snarky": -2, "challenger": -1 },
+          "hardBans": [],
+          "reasonCodes": ["preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q08_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    },
+    {
+      "id": "q09_sarcasm_limit",
+      "phase": "adaptive",
+      "prompt": "如果猫咪要吐槽你，你能接受的上限是？",
+      "semanticTags": ["sarcasm_boundary"],
+      "probeTargets": {
+        "gymtiTypeIds": ["KCAL", "BOOM", "CURV", "HIDE", "WINN", "IMNB", "LIFE"],
+        "coachStyleIds": ["snarky", "comedian", "analyst", "gentle"]
+      },
+      "options": [
+        {
+          "id": "q09_a_precise",
+          "label": "可以损，但要损得准。别骂身体，骂我那个会自动生成借口的大脑。",
+          "semanticTags": ["accepts_directness"],
+          "gymtiScores": { "KCAL": 1, "BOOM": 1 },
+          "coachStyleScores": { "snarky": 2 },
+          "hardBans": [],
+          "reasonCodes": ["preference_direct"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q09_b_humor_not_attack",
+          "label": "可以幽默，但不要攻击。我需要笑一下，然后继续做动作。",
+          "semanticTags": ["harm_boundary"],
+          "gymtiScores": { "CURV": 1, "HIDE": 1 },
+          "coachStyleScores": { "comedian": 2, "snarky": -5 },
+          "hardBans": ["snarky"],
+          "reasonCodes": ["preference_humor", "preference_gentle"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q09_c_direct_fix",
+          "label": "少说废话，直接告诉我哪里错、怎么改、下一组怎么做。",
+          "semanticTags": ["direct_feedback"],
+          "gymtiScores": { "WINN": 1, "IMNB": 1 },
+          "coachStyleScores": { "analyst": 2 },
+          "hardBans": [],
+          "reasonCodes": ["preference_data", "goal_strength"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q09_d_no_tease",
+          "label": "最好别吐槽。我已经很会自我攻击了，猫咪负责把我捡起来就行。",
+          "semanticTags": ["harm_boundary"],
+          "gymtiScores": { "HIDE": 1, "LIFE": 1 },
+          "coachStyleScores": { "gentle": 2, "snarky": -5 },
+          "hardBans": ["snarky"],
+          "reasonCodes": ["preference_gentle", "preference_low_pressure"],
+          "isNoMatch": false
+        },
+        {
+          "id": "q09_no_match",
+          "label": "都不太像，换个角度问我。",
+          "semanticTags": ["no_match"],
+          "gymtiScores": {},
+          "coachStyleScores": {},
+          "hardBans": [],
+          "reasonCodes": [],
+          "isNoMatch": true
+        }
+      ]
+    }
+  ],
+  "terminalBank": [
+    {
+      "id": "terminal_hotblood_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：当训练气氛被点燃时，你最想先追哪一种变化？",
+      "semanticTags": ["terminal", "energizing"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["hotblood"]
+      },
+      "options": [
+        { "id": "terminal_hotblood_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_energizing"], "isNoMatch": false },
+        { "id": "terminal_hotblood_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_energizing"], "isNoMatch": false },
+        { "id": "terminal_hotblood_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_energizing"], "isNoMatch": false },
+        { "id": "terminal_hotblood_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_energizing"], "isNoMatch": false },
+        { "id": "terminal_hotblood_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_energizing"], "isNoMatch": false },
+        { "id": "terminal_hotblood_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_energizing"], "isNoMatch": false },
+        { "id": "terminal_hotblood_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "hotblood": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_energizing"], "isNoMatch": false }
+      ]
+    },
+    {
+      "id": "terminal_gentle_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：如果有人用不责备的方式陪你重新开始，你最在意哪一种变化？",
+      "semanticTags": ["terminal", "gentle"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["gentle"]
+      },
+      "options": [
+        { "id": "terminal_gentle_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_gentle"], "isNoMatch": false },
+        { "id": "terminal_gentle_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_gentle"], "isNoMatch": false },
+        { "id": "terminal_gentle_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_gentle"], "isNoMatch": false },
+        { "id": "terminal_gentle_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_gentle"], "isNoMatch": false },
+        { "id": "terminal_gentle_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_gentle"], "isNoMatch": false },
+        { "id": "terminal_gentle_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_gentle"], "isNoMatch": false },
+        { "id": "terminal_gentle_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "gentle": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_gentle"], "isNoMatch": false }
+      ]
+    },
+    {
+      "id": "terminal_snarky_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：一句轻微吐槽能帮你启动时，你最想先追哪一种变化？",
+      "semanticTags": ["terminal", "direct"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["snarky"]
+      },
+      "options": [
+        { "id": "terminal_snarky_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_direct"], "isNoMatch": false },
+        { "id": "terminal_snarky_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_direct"], "isNoMatch": false },
+        { "id": "terminal_snarky_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_direct"], "isNoMatch": false },
+        { "id": "terminal_snarky_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_direct"], "isNoMatch": false },
+        { "id": "terminal_snarky_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_direct"], "isNoMatch": false },
+        { "id": "terminal_snarky_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_direct"], "isNoMatch": false },
+        { "id": "terminal_snarky_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "snarky": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_direct"], "isNoMatch": false }
+      ]
+    },
+    {
+      "id": "terminal_analyst_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：有清楚的数据反馈时，你最想先追哪一种变化？",
+      "semanticTags": ["terminal", "data"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["analyst"]
+      },
+      "options": [
+        { "id": "terminal_analyst_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_data"], "isNoMatch": false },
+        { "id": "terminal_analyst_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_data"], "isNoMatch": false },
+        { "id": "terminal_analyst_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_data"], "isNoMatch": false },
+        { "id": "terminal_analyst_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_data"], "isNoMatch": false },
+        { "id": "terminal_analyst_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_data"], "isNoMatch": false },
+        { "id": "terminal_analyst_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_data"], "isNoMatch": false },
+        { "id": "terminal_analyst_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "analyst": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_data"], "isNoMatch": false }
+      ]
+    },
+    {
+      "id": "terminal_comedian_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：让训练有趣一点时，你最想先追哪一种变化？",
+      "semanticTags": ["terminal", "humor"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["comedian"]
+      },
+      "options": [
+        { "id": "terminal_comedian_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_humor"], "isNoMatch": false },
+        { "id": "terminal_comedian_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_humor"], "isNoMatch": false },
+        { "id": "terminal_comedian_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_humor"], "isNoMatch": false },
+        { "id": "terminal_comedian_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_humor"], "isNoMatch": false },
+        { "id": "terminal_comedian_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_humor"], "isNoMatch": false },
+        { "id": "terminal_comedian_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_humor"], "isNoMatch": false },
+        { "id": "terminal_comedian_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "comedian": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_humor"], "isNoMatch": false }
+      ]
+    },
+    {
+      "id": "terminal_challenger_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：有人在关键时刻推你一把时，你最想先追哪一种变化？",
+      "semanticTags": ["terminal", "challenge"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["challenger"]
+      },
+      "options": [
+        { "id": "terminal_challenger_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_challenge"], "isNoMatch": false },
+        { "id": "terminal_challenger_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_challenge"], "isNoMatch": false },
+        { "id": "terminal_challenger_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_challenge"], "isNoMatch": false },
+        { "id": "terminal_challenger_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_challenge"], "isNoMatch": false },
+        { "id": "terminal_challenger_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_challenge"], "isNoMatch": false },
+        { "id": "terminal_challenger_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_challenge"], "isNoMatch": false },
+        { "id": "terminal_challenger_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "challenger": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_challenge"], "isNoMatch": false }
+      ]
+    },
+    {
+      "id": "terminal_zen_goal",
+      "phase": "terminal",
+      "prompt": "最后一题：用低压力的节奏稳住训练时，你最想先追哪一种变化？",
+      "semanticTags": ["terminal", "low_pressure"],
+      "probeTargets": {
+        "gymtiTypeIds": ["IMNB", "KCAL", "HIDE", "LIFE", "CURV", "BOOM", "WINN"],
+        "coachStyleIds": ["zen"]
+      },
+      "options": [
+        { "id": "terminal_zen_imnb", "label": "力量和肌肉增长", "semanticTags": ["goal_strength"], "gymtiScores": { "IMNB": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_strength", "preference_low_pressure"], "isNoMatch": false },
+        { "id": "terminal_zen_kcal", "label": "热量、体重和体脂变化", "semanticTags": ["goal_body_composition"], "gymtiScores": { "KCAL": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_body_composition", "preference_low_pressure"], "isNoMatch": false },
+        { "id": "terminal_zen_hide", "label": "更有把握地开始训练", "semanticTags": ["goal_confidence"], "gymtiScores": { "HIDE": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_confidence", "preference_low_pressure"], "isNoMatch": false },
+        { "id": "terminal_zen_life", "label": "更稳定的精力和日常状态", "semanticTags": ["goal_vitality"], "gymtiScores": { "LIFE": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_vitality", "preference_low_pressure"], "isNoMatch": false },
+        { "id": "terminal_zen_curv", "label": "更满意的线条和体态", "semanticTags": ["goal_body_shape"], "gymtiScores": { "CURV": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_body_shape", "preference_low_pressure"], "isNoMatch": false },
+        { "id": "terminal_zen_boom", "label": "一次痛快的暴汗和释放", "semanticTags": ["goal_emotional_release"], "gymtiScores": { "BOOM": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_emotional_release", "preference_low_pressure"], "isNoMatch": false },
+        { "id": "terminal_zen_winn", "label": "看得见的进步和训练记录", "semanticTags": ["goal_progress_tracking"], "gymtiScores": { "WINN": 100 }, "coachStyleScores": { "zen": 100 }, "hardBans": [], "reasonCodes": ["goal_progress_tracking", "preference_low_pressure"], "isNoMatch": false }
+      ]
+    }
+  ]
+}

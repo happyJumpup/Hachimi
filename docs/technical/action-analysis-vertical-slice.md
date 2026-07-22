@@ -1,5 +1,12 @@
 # 哈基米练臂力动：首个动作分析纵切片技术设计与开发准入说明
 
+> 历史技术记录：产品现已更名为 TrainPal。当前产品和页面合同以 [TrainPal 竞赛 Web MVP](../specs/competition-web-mvp.md)、根目录 `CONTEXT.md` 与 ADR-0015～0028 为准；本文中的哈基米、独立候选评审和旧 Pet 计划不再指导新界面。
+
+> 2026-07-21 更新：本文保留首个“时间点局部窗口”纵切片的历史实现记录。当前主管线已由 [ADR-0012](../adr/0012-explicit-full-source-analysis-with-latency-budget.md) 取代为“用户显式点击后分析整段、最多 60 秒受控视频”；`trigger_seconds` 只保留兼容，不再控制范围。
+>
+> 既有媒体安全与分析运行边界可参考[历史本地视频规格](../specs/local-video-training-prototype.md)和 [ADR-0013](../adr/0013-local-video-import-and-recoverable-analysis.md)；下文的受控来源唯一入口、离页即取消和 60 秒产品边界均为历史实现记录。
+
+
 > 状态：可进入受控的 MVP 功能开发，尚不可直接发布
 >
 > 基线：`8f8e177`（`foundation/initial-analysis-slice`）
@@ -164,7 +171,7 @@ pnpm dev
 | `VOLC_ASR_API_KEY` | 流式语音识别 2.0 |
 | `HAKIMI_DEMO_VIDEO_PATH` | 后端登记的本地受控演示视频绝对路径 |
 
-默认 Web 地址为 `http://localhost:5173`，API 地址为 `http://127.0.0.1:8000`。Python 依赖通过 `imageio-ffmpeg` 提供 FFmpeg 可执行文件，不依赖系统 `PATH`。如果只需要运行确定性测试，不需要配置真实云密钥；完整变量清单和非敏感默认值见 [`.env.example`](../../.env.example)。
+默认 Web 地址为 `http://localhost:5173`，API 地址为 `http://127.0.0.1:8000`。本地开发由 `imageio-ffmpeg` 提供 FFmpeg 可执行文件，不依赖系统 `PATH`；生产镜像从独立构建阶段只复制已删除 wheel 二进制的干净虚拟环境，并通过 `IMAGEIO_FFMPEG_EXE` 使用服务器只读挂载、由两个 SHA-256 锁定可执行文件和配置行的 FFmpeg。如果只需要运行确定性测试，不需要配置真实云密钥；完整变量清单和非敏感默认值见 [`.env.example`](../../.env.example)。
 
 ### ASR 与模型配置
 

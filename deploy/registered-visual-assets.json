@@ -1,0 +1,730 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "sourcePath": "apps/web/public/gymti/types/boom.webp",
+      "sha256": "11bbfb12cba8f36c6a85984dcbaf06d8a29d19fa6b0bad83d5586a3b87c8f2cb"
+    },
+    {
+      "sourcePath": "apps/web/public/gymti/types/curv.webp",
+      "sha256": "42fef00cab0776f64c66cab71fd16d9f76b29659693531c2e407363d2cdf6790"
+    },
+    {
+      "sourcePath": "apps/web/public/gymti/types/hide.webp",
+      "sha256": "745a44c4ae3bf5048e07447fb2832a10004d04d04248a4e7f571f89fcfcb4638"
+    },
+    {
+      "sourcePath": "apps/web/public/gymti/types/imnb.webp",
+      "sha256": "ca704f1719d5b9541cd7e0d03e4c2ef2fbe9a0934155cf9de17baee1ef76e402"
+    },
+    {
+      "sourcePath": "apps/web/public/gymti/types/kcal.webp",
+      "sha256": "ccd93c50bdc341c819df8600e80e18dfac95133835f36819336ee12e08fb3efa"
+    },
+    {
+      "sourcePath": "apps/web/public/gymti/types/life.webp",
+      "sha256": "10a1c786f131fb6b04485e2ef62ee47eee7e0f9d5eefbf4c1205ae9af4649fb2"
+    },
+    {
+      "sourcePath": "apps/web/public/gymti/types/winn.webp",
+      "sha256": "1a94acf01fd1e3d783867505a92570f8b64d72f6fee7d524d2840691a09c0085"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/analyze/01.webp",
+      "sha256": "20671026658f5945167e6c482bebe6c91df2292c1c6fd1ecc611ae89d905beb7"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/analyze/02.webp",
+      "sha256": "2ec45d707647785dcf5450c83bc82843f7ea89dccc130784ad27a2a514f3ddbf"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/analyze/03.webp",
+      "sha256": "4f998834609a8a15fcf8847218dbd3e6a7c1e372b609d3d3dc8e78ddfef8eea9"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/analyze/04.webp",
+      "sha256": "5ce58bedae61111f4d2293de3eb276486486ef060e896c1e0567f5ba469d0157"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/analyze/05.webp",
+      "sha256": "72d5ac67eebe8815ad03e2d9ce75e708c464ba4de97d0b1e8db7449c5aa3cc64"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/analyze/06.webp",
+      "sha256": "4ca1d76624a7d0a16e018d763d523a6aea91544985d85ba802025b2a1502fc78"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/idle/01.webp",
+      "sha256": "c9bd43fb6741c946585661f4597c7cee421f4cd2fbdc2e077996f45e997f66ad"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/idle/02.webp",
+      "sha256": "bda7e6b292a1134974dd0220638b7e5037b2d601eba7b5bf17bef3cfb47fd028"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/idle/03.webp",
+      "sha256": "59d0936aac5edde14c79089877296a28133621c12c8c54c6259290fc17096a0f"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/idle/04.webp",
+      "sha256": "a3267166ed1ea7b63c0e21f410910714e62b36e430040c71e7c8f244694c54af"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/idle/05.webp",
+      "sha256": "d1650b45f1e3435fa09900e28b5f0f337d4af7c6d9254d8703f792cd5b6e2d84"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/idle/06.webp",
+      "sha256": "2fcb718573876d26de31fd307091052e8ab0552810e3f47e7cbe5df877d316ae"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/report/01.webp",
+      "sha256": "f4e424ad084400b2ded981ea76471ac99e9385293a7d7fe0ce61dd2ef46d33fe"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/report/02.webp",
+      "sha256": "de69e864b493f26f55474fa44daceb28abd7aa9a0a2e70b23b5183d3b2448072"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/report/03.webp",
+      "sha256": "3296e4423b6cb15146016c3577ec566c517f86dd19850f6a0352ff8e037ec8d7"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/report/04.webp",
+      "sha256": "4a9ae8b04adaa7123d1b77d9367fec8dadf12a7a8de7116421002c4a9a9e30be"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/report/05.webp",
+      "sha256": "0cdd152ee44c19b11ac59bf3080e5c64a5e81e80984d09c7f0b77eec9c5c7093"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/report/06.webp",
+      "sha256": "40f4d22b0f6fc1b06addd100f5bfc6994e3fb02cbaada9f0db9bfe40208b568c"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/scan/01.webp",
+      "sha256": "3bd3cc229f27afe1e1a0d6fc0310c40d62156dc06d9eb60263f21dfb9fef2ba0"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/scan/02.webp",
+      "sha256": "4a9eb339e24a46f946ffacf5937f150f0f3b096d676c98e0d51ce1d87c62e21a"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/scan/03.webp",
+      "sha256": "0204d61a0a5517323ce992841113e0ff588013dc798fbb4985c41c626fa4cdab"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/scan/04.webp",
+      "sha256": "2bcc8119909e5e289c3cb5ebb36c7a83e68e5c8f6d3b2c871acbef3e7bd05b46"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/scan/05.webp",
+      "sha256": "b602bb521175bc6b39a36247a65db05b0b45aec99191c44fe3534f730afc09ea"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/analyst/scan/06.webp",
+      "sha256": "c9ce08c981b1560a60e0fa0e6fa3e7a621230803a1c26eaca655cd677fe43648"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/challenge/01.webp",
+      "sha256": "44b5899048d58dc50eb820d4196fa901a82b73a11a3cfdab3c8001f449902db0"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/challenge/02.webp",
+      "sha256": "004518afda8240724f759f3dd763041761033653edd0229cbb4c278bd7edba1d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/challenge/03.webp",
+      "sha256": "1cf6636d968081810c7eac577c4f793fde42d5e5f59ca31996db2687b4b18867"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/challenge/04.webp",
+      "sha256": "057c5ef12882d3f382dada363bd5bc619c5226ed2a0f345db5a675f9b577d983"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/challenge/05.webp",
+      "sha256": "b3822c281d00fad221a3e5e7d4d458d1fe43131da29ce00d9dbf1bf22b74c888"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/challenge/06.webp",
+      "sha256": "c3048db28b80bc84d077efb7912c9a2d78f345744e2898891fdaec7796500375"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/countdown/01.webp",
+      "sha256": "841cf38bae3639e23e7c2f140e453573bf5a000e9820440410d3ffb8beb71e25"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/countdown/02.webp",
+      "sha256": "39515e7024f95c0c8e4333ed4e37b0d15485259fcc354d212f2d58f27e26b624"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/countdown/03.webp",
+      "sha256": "b1b68c526f52855482c624ff6e94d4fe468638e385ca3642aa30137a810cfe97"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/countdown/04.webp",
+      "sha256": "bc1de05664b38bc2f342778149c3f4f4bacb303ab2320e9731b49d26b2901985"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/countdown/05.webp",
+      "sha256": "0b7658b455821e3b24c245e4840bc440f69c446ad38a44dd215043bca28d9689"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/countdown/06.webp",
+      "sha256": "da9c1466caa91694533c65acfe7f6836edd756fee776a464cc8ac9c7f9ae3584"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/idle/01.webp",
+      "sha256": "32ca454e0aee569acf5aec2ddf3d25b231eb3ada12ccd1366ec9cdb2310400b1"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/idle/02.webp",
+      "sha256": "a0c57f51fa974b13ebb785cb7dc5b72688e4d69b28c268ac1b160b96a8da0f55"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/idle/03.webp",
+      "sha256": "c34f5e9f77a2e6b1f5eb588c4b6e75aee4ed8cbae4b5ce944897e33170bc172a"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/idle/04.webp",
+      "sha256": "9ee378b9ec60e8c1dfc0210165cc2af1c7dd37b76d3b59d1752c4dccac6419ee"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/idle/05.webp",
+      "sha256": "7671f9b49d33ef0d539fd3213289104c5f1f2a866999b1f3582f4ff045422505"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/idle/06.webp",
+      "sha256": "e67949f1017833158047c773b8641b055b510077f73e08de4ba4a8a65a1c52b0"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/power-up/01.webp",
+      "sha256": "f64ae30eeb89ca0eb4c959bda5c1c4b072ddaf4222703eaebb0df2467b1e00e1"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/power-up/02.webp",
+      "sha256": "ed8c7e9894d5e524f6ce3e2673fc34625c881bbb82d3d72d8827eaa9a8522355"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/power-up/03.webp",
+      "sha256": "1d99818715adbef1d04179ee4e61fe57808ee26146037a75782d797a050f1aa4"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/power-up/04.webp",
+      "sha256": "e1a42037bfdbd91f38ed2b379b12ffe0eaac1e192e69962210a93c925b54b559"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/power-up/05.webp",
+      "sha256": "8f87e2e1a0f7d9795f6324740231d4b587ff2ac5b0f8b797ef008ce11dea9ea8"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/challenger/power-up/06.webp",
+      "sha256": "436f701c90491450d24ef6a9d15f20e445d73d5f3314cfaa1d9ba43598c568fe"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/celebrate/01.webp",
+      "sha256": "a84baf05078df3dc36ff5909d9a805c5107b621aa0bd8401eee32a4318fee588"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/celebrate/02.webp",
+      "sha256": "9e4576e5bd9d7cb7b3ca632a5478a00e6bc577ed136bd1a50632abcd6ee1f8b4"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/celebrate/03.webp",
+      "sha256": "849693b01bfd7e00cda5e07e1d2f064babb51f8b693799bb3a7b69f0b242bda3"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/celebrate/04.webp",
+      "sha256": "1d371bd58616a963291c353345d605d72684717f5529f39049a71d7c4535a9b8"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/celebrate/05.webp",
+      "sha256": "4a4ab7d385aa36231e9065e45c5712b5380ce3673b6fbf59ab8407259d72bf56"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/celebrate/06.webp",
+      "sha256": "8edf0ed4092cde3b3d9914720ef618745fdcfe639db830291a630a5620aa04c6"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/idle/01.webp",
+      "sha256": "afb5e9f92b1d887d89f5f0a71d4075a7dac36ff6f17e7975509019f0112daafb"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/idle/02.webp",
+      "sha256": "971c794d1b11939d16014436c618ba96940f27ca9b5b9e6586b1854567158344"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/idle/03.webp",
+      "sha256": "128bffba5331ce1740877a8161c55d8b0e458cfa14f3b8ed437da614ee14b9cf"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/idle/04.webp",
+      "sha256": "26919850fc64b2e5cbbb3425afa2a37f91356bb3ea089102c7100ea72f863f4e"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/idle/05.webp",
+      "sha256": "094e8509d8141b15eded93e0026f412580c9b2ff50ffd5eb9855287a3e360ad1"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/idle/06.webp",
+      "sha256": "b7470c64f91075c0fb1182f9a09af0984482d28af8eac7ac9feb8a3cab34a69b"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/laugh/01.webp",
+      "sha256": "601e036117a8bdd4622cc50879255d2e67e0637988266f87664d16651c00e2f9"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/laugh/02.webp",
+      "sha256": "66f0225527cf5f79d32e514654673f68c61780119f113a62c8830bbddb2ad117"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/laugh/03.webp",
+      "sha256": "d24881a8f22126b7acc7d4957f5c7683481dc0a13e2eb06f055b21bb1e20b107"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/laugh/04.webp",
+      "sha256": "535b9363e7c7258df21c4dfa714e5441ed04d504daf91f106f7a00516f128ce7"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/laugh/05.webp",
+      "sha256": "ae43662e788205a92d9bd2b5748de6a59e89a42e94565186f1c18b076f1a0a29"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/laugh/06.webp",
+      "sha256": "5615843f84edefd0cc27c5179e35a07647df0b38296c31bce29eaf085ae0ef67"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/talk/01.webp",
+      "sha256": "3d863185fdf43c48ec81facaa5ab7dcff2faddad1cec159e546c71723b1de591"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/talk/02.webp",
+      "sha256": "46fb1af6749e4b0e2e1c289c6b86f4fda35ef0712c745381150811e2d616cc40"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/talk/03.webp",
+      "sha256": "2bdbad30e6f05487b8b06c1d8e1001ba538e47032dcb4052ccfbcd332f4b08a5"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/talk/04.webp",
+      "sha256": "d247273728db2157a623c91635449cf366a8aea90c5161e86b4d26faa7a19561"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/talk/05.webp",
+      "sha256": "fa2e2f3ffde470502ad6c550cc081fc336e44e4d26ac91056a015366b7945613"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/comedian/talk/06.webp",
+      "sha256": "f3ccfd9b7177daa509bfdd50ecf81c6c53731adf3ab3043cbc4e7dfe6eda95e2"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/comfort/01.webp",
+      "sha256": "1a8387e91ad7475440942a70dca7b716824ca77c66209317feb96e82d580a214"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/comfort/02.webp",
+      "sha256": "7cc7088c7421756d8d9fbd7235c527b73e4521e589a2f3f491ab790f4377121b"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/comfort/03.webp",
+      "sha256": "511cc4c840b655287ec9ba9ab84bf185a54aab92b08b66f6c1f6842a27ed51bf"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/comfort/04.webp",
+      "sha256": "a6411624e74985d4b33811d90670fea0102ca6b1c874b9a963f5df6ade7e3006"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/comfort/05.webp",
+      "sha256": "668013bc83c9f779ad8c7e6045a378193e7475aeccee1f98b7a77cff0fc664fd"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/comfort/06.webp",
+      "sha256": "26ddaa6c0bfc91f61b76227276bf9a1a5b1a5e95f016ad56d07f03b70f968425"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/guide/01.webp",
+      "sha256": "2d619606e96bc7b8ec62eb8a732a08adaf6457de7c76889d27c641a84d49febb"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/guide/02.webp",
+      "sha256": "31c58bfb18837c0ca74a65b64138041b01ac2e5cc8e281682fa3ec9c17b9cb28"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/guide/03.webp",
+      "sha256": "7d1ff186b775c9b8fd4c838172121ea5f702bfb982e1ac759fc7ab39beee015e"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/guide/04.webp",
+      "sha256": "b831c6171803f2064d9d89fbf011c7bb1fb82a7a3af6a8d6aa04c0cc6d4c8785"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/guide/05.webp",
+      "sha256": "126213b2708bb1d920d46db08f8acb887b603336b6339fbbc209b3af8db01f34"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/guide/06.webp",
+      "sha256": "a564b6577ed718e5cd624a37507d9124e67123b041e677498d4c556006be027a"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/idle/01.webp",
+      "sha256": "7809b554e816187819dd782e139bdc28c1dabfdee96eb6f38e0b525f87c85ff8"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/idle/02.webp",
+      "sha256": "55dae99c51dcf8b4ea9be509b937283ae40d88724e8022100dc9772a6dbfc69d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/idle/03.webp",
+      "sha256": "1c7e6258c83385a9b13d979051540d0e200572e744d8c7047a3f28869dce99d6"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/idle/04.webp",
+      "sha256": "9b6477d3e565879c77b389348e617825f6c3cdbd46668af9c48e88101ca83eca"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/idle/05.webp",
+      "sha256": "80024fdf0187e6a3c22a547546b1c6f1c6be0e3997106a14ea7fec4cda8439eb"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/idle/06.webp",
+      "sha256": "c5613dfaa8d89e1ba797a96165dfcefa296e872db791b707da4f158ccf39e553"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/rest/01.webp",
+      "sha256": "c8cafe1516003903261e5ddc1ba5ed49d81ae6dfe291d4375fa4fa4b75c44d09"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/rest/02.webp",
+      "sha256": "605783ac1f9f7bbd13ebb7abf10f96ece413e7b6d36aac30995ab1719128b20f"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/rest/03.webp",
+      "sha256": "378affe6391cc42537201e6afcef4dd7cb4e3273b692393cd9b64d5b643b06ce"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/rest/04.webp",
+      "sha256": "9092e66d0e02b5161b1a00435de2d09ee1eecd27463b5bd099aca41cb1e76eaa"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/rest/05.webp",
+      "sha256": "e83546b446e784ca4095391d0c42109a945fa761aa2e7d7c14f4c5a78c7858cd"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/gentle/rest/06.webp",
+      "sha256": "f061cdc50b367b0561ee1f7854f50ef202a32f2902d48a060a6bfbf989488b4e"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/cheer/01.webp",
+      "sha256": "22ee216095f5dcc8bd957a7f81ccb4e15d1b82b7e77b86a94bb0407e286a6618"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/cheer/02.webp",
+      "sha256": "84c87d608397f2994e0edfebeb6d9f10768c298a9d45f83945009400b192db72"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/cheer/03.webp",
+      "sha256": "d767a67f3a17b827421f9e20fadb8939e49f2babd8d8f5581682c1b8be15e262"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/cheer/04.webp",
+      "sha256": "6313f81e47202303771aee585b1b916980e2d1968aeaa8b0984bd4695823d75d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/cheer/05.webp",
+      "sha256": "514b0d5656a11909a797e557f7db24344944f197eda8cd7ecd1c74d9e1549402"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/cheer/06.webp",
+      "sha256": "e93e6a7fd27edb99d5f805711bb4d9bc74e7e81980797bcb0dbd4b459c94a4c3"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/drag/01.webp",
+      "sha256": "0379dad2390e6c382979ba8be70bd98854b7d03bda38f6b325bf8a54385ae588"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/drag/02.webp",
+      "sha256": "c62a02b8a937a8318e72ccc04e2958a036a19f88ac3cc8660dc1571bc5c2b085"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/drag/03.webp",
+      "sha256": "a2cfbd1300ab0d41d1b7976323df88104ede2ed8c39a4fa538e0a20f60a0fa52"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/drag/04.webp",
+      "sha256": "96363f9ac4e7952d6d5f8024d8e13b314c46822a41ba6e8978e4384cf045b2a4"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/drag/05.webp",
+      "sha256": "e13a44f34161e3a304985acc2c3d653be340082fa59fac9e2feb8f3757f31f9e"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/drag/06.webp",
+      "sha256": "85b6c9ce4b106929e13c953de42995be5a2a73fff6750a3efc4cb2b309cc810d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/hop/01.webp",
+      "sha256": "b0061d96a2ca0fdc248f3fbfb84da6e1dd2010639a26a7c78c77516495470e8f"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/hop/02.webp",
+      "sha256": "113539687e571aab74de381bfd3776f9e18e89b4b9c21872cac6422c9817d96c"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/hop/03.webp",
+      "sha256": "9693c943e6251b7260608f03bc931414765b7fa9d980cc975b254c0a8670b730"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/hop/04.webp",
+      "sha256": "eb4dd3c8d094b28dae40bce1330f1bcaf8cdac3113905a1c12fde35b2f716c42"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/hop/05.webp",
+      "sha256": "11a5c1d29fdb7bfff6992efef6e2994575f38512c44c47f9e02a95ae8f57d394"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/hop/06.webp",
+      "sha256": "f2abf86d7da104a795d7f3bfc455fbe27d3d051c6e98331f5d3132a77d44fe1b"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/idle/01.webp",
+      "sha256": "1f7162ad7ec39a51fd57dea1857db09e11a55b164ab0524d7d102b03e161e597"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/idle/02.webp",
+      "sha256": "9f924aeeffc71780d3963fb99d404bf69427ca369642369d56efe85b0016df79"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/idle/03.webp",
+      "sha256": "ff935261510b932fbeb11497587c17ecdbf3c6348daf66fc5815165bfdff523c"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/idle/04.webp",
+      "sha256": "5393e72327205b738543ad5f51b4539fa404efe35e6320d393a03dfab2456a2e"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/idle/05.webp",
+      "sha256": "1f335fd63e0e327ad2ee5289bc27e73c8f8216b81dab90d7fc4327468f5c27a3"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/hotblood/idle/06.webp",
+      "sha256": "9e8fb71b13f37fe8967d7204a00bbb362fc1e43eaa9f37018bac2bde05360d85"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/annoyed/01.webp",
+      "sha256": "3d1ed530681ea5141189997abf239e268865f7ec91d15cf8027c00a78f15109c"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/annoyed/02.webp",
+      "sha256": "9ec986db773638dd14ad31d0906b27f73b726da6b18f88ef3355c24771cda95b"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/annoyed/03.webp",
+      "sha256": "b27deee1e7903c234863efcaa3f8645c3e11803d0395585c321f8b00cfdadbe9"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/annoyed/04.webp",
+      "sha256": "cffd537a8e7b5a071c06962564a8d300ddfa51d7cbed351f0d13fabf90f5b809"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/annoyed/05.webp",
+      "sha256": "766091f547a3c9b432425ecf57a69bb7bc415eed57bbde1839586dbfc1ccd2f8"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/annoyed/06.webp",
+      "sha256": "45b651d5897c069064f1dca1214510e87c1dfd408d0bcd3833094ad857bbdf5d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/idle/01.webp",
+      "sha256": "f3035365ce251154d1ac8b3bfec7993c19bad1a0f8b820bba5e19a824f7134b6"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/idle/02.webp",
+      "sha256": "5908738768cade3b30e36be28eb03bb58b1754e115db037390e20e84a2ffda59"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/idle/03.webp",
+      "sha256": "b87be506f7135e289ca3af0df84a6da2638ba774c9c95cadbff769423d3734f2"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/idle/04.webp",
+      "sha256": "3aba3d17321c9d79dd66d9d8fc45fb0c1da85db1b86bb25432c259188dbf66ba"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/idle/05.webp",
+      "sha256": "df849904e7acdd6c40d544fe1524d5d6ede7c97aa5020f3367d874507d947e44"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/idle/06.webp",
+      "sha256": "d40964cc7452ec7a08c82eeb6d5738c6302a06be60f402fa106b0e31aec89292"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/mock/01.webp",
+      "sha256": "d99f01a1547479419a5e7238311fc0add5ff2a667351c522b920e7461add4264"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/mock/02.webp",
+      "sha256": "9834b078d8f02443f4a200e45f790f1c3299603041c5beebc63c9e2d042016ec"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/mock/03.webp",
+      "sha256": "05eebf71caf143ad9bea56bef702a923e74e235c6fac0b59dece653ea471cd50"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/mock/04.webp",
+      "sha256": "4278de425467b1f6b57537b36a86a45c29c09cfd964e719ade9b91cac574f195"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/mock/05.webp",
+      "sha256": "396438681108e4201434480acfe0c4db32a130bedaff26aa979661edb6e6ae6a"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/mock/06.webp",
+      "sha256": "4b49abb168f940ad6f217c22ae8ee8982cae01b03ef0883d61bba29a5acb4e03"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/point/01.webp",
+      "sha256": "3b0218a72ba6765b29453fb11dd26e2131531d37f348b19197337a9497430cb1"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/point/02.webp",
+      "sha256": "933f10b2d15da0d138b796d7ffb82a56a8d6e6c0d2b8eecdb4d247222bc273c1"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/point/03.webp",
+      "sha256": "147da88f719153384dba8a5e830bac12ba48483aa9409e3c354b85ff66eb9bb1"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/point/04.webp",
+      "sha256": "0ec2e33c950b8ec14b19306920940623d47518971cf7ad889defebf77da0da3a"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/point/05.webp",
+      "sha256": "cfce96430a1edbdc3a4c4c77cd790309af6fa45382919b7a9a4d95d82dc3df1d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/snarky/point/06.webp",
+      "sha256": "f6d7454cd640cb56cdbba6296005256bb909afbc52047851aaae9d883ee6e614"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/breathe/01.webp",
+      "sha256": "d8d002cefb6588e8dbfebf31d8054026d9fe3ba1c5569b60185748ff88158241"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/breathe/02.webp",
+      "sha256": "8d4ce12db56b08d1b66159c9b002e58243606efb56953504c50929e8079852e4"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/breathe/03.webp",
+      "sha256": "b40fb3ebe35bfa16cd8d182df0a2229e96919f49f8c8342df939452b099fb150"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/breathe/04.webp",
+      "sha256": "484b3b5bef0347d0da76fce93f25941b435c020618dc2bb8b5a91e81694d3d53"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/breathe/05.webp",
+      "sha256": "cb0f6d6cadde319ae00cd41ad1ab5a4c65d8b7174bead366fb54f5020a0a3a32"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/breathe/06.webp",
+      "sha256": "ce49e010c8c616cb8ad47e99016dbeaddbe1b0385356eb75ec2ee65de4863bff"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/idle/01.webp",
+      "sha256": "6d06ae57e44f35af7183af19850ed8e24e430807684a4efc8d5bdc92739cd613"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/idle/02.webp",
+      "sha256": "94e7efd3f0dc3fe27a448bc58d5d9977b0e143fbda49c7249b1c946f4bd4121b"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/idle/03.webp",
+      "sha256": "4abe85de5d6da1d1952b8f4bce5a39a68b955a56b37a55455779813c98a4e283"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/idle/04.webp",
+      "sha256": "31f16590f6e988b82cbbe97842648a2ee8990cd0208e2fd5f2f425390f513fd2"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/idle/05.webp",
+      "sha256": "9f68671414187a44f6930bb2a64db5ee9f0c0ebb49bc6bc5ecdbeec2ff2c14d5"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/idle/06.webp",
+      "sha256": "af92b37a076aa9206c6703b7ad5c3ac4fbf13937fdee4fb5327e53b08c156d22"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/nod/01.webp",
+      "sha256": "905854a2694db83e4f90075097c6565c231ed89fbe6f6451555e85b6e98154ff"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/nod/02.webp",
+      "sha256": "75230fcfbaed53a539357bae310924d84394cb1ddc1dba46c3ab538917abd271"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/nod/03.webp",
+      "sha256": "0dd768237efa6a61dae3434ccc980c67ef18ac9241f91457527f583c69245546"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/nod/04.webp",
+      "sha256": "307e9c5f4d6ae84af2017291cdec4b8f76ed45bbbe09b2901dd23cc40e4473c0"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/nod/05.webp",
+      "sha256": "a1ae55751c1e64a207bc44b673f535ef8a3e08bed6f634d2fd88141041c124e5"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/nod/06.webp",
+      "sha256": "f617efd30b0db32ecfa11d5b8355e994998e0b8733a55ecffa6fd6a83269133d"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/relax/01.webp",
+      "sha256": "1977f4adc7c51baafa322ec6713f438bad27105567024ede9dcd0955074aa809"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/relax/02.webp",
+      "sha256": "b7bdd59aa22abf7e139371049cfc2f935895e905dc61c1f03e062505b754b35b"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/relax/03.webp",
+      "sha256": "851915855d6ffc0f09b91fc74c673a8440d73ea18e6aaf4c263f3133b4a010a0"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/relax/04.webp",
+      "sha256": "f7e91f246628755ab0ad0b12642b09ad48cd0b086724813b4031109044d4c4cc"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/relax/05.webp",
+      "sha256": "653b69556d2c73079ea14c5b19342ba0611b19a32d1fa710143931de70eaad1c"
+    },
+    {
+      "sourcePath": "apps/web/public/trainpal/pets/zen/relax/06.webp",
+      "sha256": "72e88a988f7c927e2b35c7fe5dd6c36c5fd16ffea055abdbf192aef65dd65ba7"
+    },
+    {
+      "sourcePath": "apps/web/src/assets/pet/completed.webp",
+      "sha256": "74ffadcabdb1124680efcb0dbf2d4b2c2f5c5a88b79a6d811cf108a8552a92a9",
+      "legacy": true
+    },
+    {
+      "sourcePath": "apps/web/src/assets/pet/idle.webp",
+      "sha256": "5518f49229cc0331bfdf9c5351e6a7806bf97cac6c882b2d5dc40e620f85561c",
+      "legacy": true
+    },
+    {
+      "sourcePath": "apps/web/src/assets/pet/paused.webp",
+      "sha256": "d775c21bc2df5bd2156638247066f7f836b9b800c9d8f3044f595a81f906f91c",
+      "legacy": true
+    },
+    {
+      "sourcePath": "apps/web/src/assets/pet/resting.webp",
+      "sha256": "730f5c6b4b2b91d11ea23085eac3739a4d22841014d7c21752b207b63ff4db30",
+      "legacy": true
+    },
+    {
+      "sourcePath": "apps/web/src/assets/pet/training.webp",
+      "sha256": "bdab0d00707684a80f44f31fc09f0325ac0b608060ca746b63e15e6d940b44ab",
+      "legacy": true
+    }
+  ]
+}

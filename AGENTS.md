@@ -22,23 +22,67 @@
 
 ## Product and architecture boundaries
 
-- The product is Web-first. A future Douyin adapter may supply controlled video
-  sources, but arbitrary URL fetching and feed scraping are out of scope.
+- The product is an independent Web-first training product. Local video import
+  is the primary prototype entry; controlled videos are a clearly labelled
+  fallback. Arbitrary URL fetching, platform cookies, login-state reuse, and
+  feed scraping are out of scope.
 - The core object is a **训练动作**, not a complete video. A video action keeps
   its source and demonstration time range; a self-created action may have none.
-- The runtime has one task-oriented 动作分析 Agent. Its speech, visual, and
-  fusion Skills propose candidates; the user chooses and edits the plan.
-- Analysis Runs are transient, cancellable, and never continue as background
-  jobs. Do not introduce runtime mock fallbacks.
+- The user sees one TrainPal Agent. A replaceable 内容理解 Provider produces
+  structured source evidence; TrainPal deterministically orchestrates the
+  训练编译、个性化调整 and 动作要点补充 Skills. Skills do not call each
+  other, write the draft, or own the training state machine.
+- Analysis Runs are explicit, cancellable, and recoverable for a short time on
+  the same device. Page navigation, refresh, or an SSE disconnect must not
+  cancel a run. Do not turn them into permanent or cross-device background
+  jobs, and do not introduce runtime mock fallbacks.
 - Do not copy source code or components from the GPL-3.0 historical demo.
+- Analysis starts only after an explicit user action and covers the complete
+  selected source or an explicit coverage-gap retry range. The product target
+  is at most 10 minutes, but each deployment must expose and enforce its
+  measured capability. The current competition deployment is verified for a
+  complete source of at most 300 seconds; longer originals must be cropped
+  outside the app before upload. Page load, playback, and seeking must not
+  auto-create a run.
+- Progress uses real processed source time and read-only intermediate discovery.
+  Reliable partial results must expose coverage gaps and a per-gap retry; a
+  provider or system failure must never be presented as “no action evidence.”
+- Source loops use an 展开式执行时间线 such as `A1 → B1 → A2 → B2`.
+  Do not introduce nested loop state or use sets as a substitute for rounds.
+- Keep the current production Provider. The completed native audio/video
+  benchmark did not select a Seed/Qwen quality winner or validate the long-video
+  production route; a switch requires new reviewed evidence and an ADR.
+- TrainPal is the frozen product, Agent, and cat-coach identity. GYMTI v1
+  wording and the seven shared cat-coach assets are versioned product inputs;
+  change them through the questionnaire contract or asset pipeline rather than
+  ad hoc page copy. The current product contract,
+  four-value field provenance (`video | rule | personalized | user`),
+  non-blocking coach role, and five training presentation states are not
+  deferred. Keep the current calorie contract until a separate decision changes
+  it.
+
+## Experience boundaries
+
+- The current design source of truth is
+  `docs/design/trainpal-mobile-experience-brief.md`. Use journey-specific pages,
+  a mobile-first responsive layout, a warm journal theme outside training, and
+  a dark high-contrast training stage. Do not recreate a Douyin feed, right-side
+  action rail, fixed phone shell, or mandatory 9:16 video stage.
+- Top-level navigation is `首页 / 训练 / 我的`. Analysis, plan editing,
+  personalization, an active training session, and results are immersive
+  subflows. Each page has one primary task and one visually dominant action.
+- Source clips are reference playback unless reliable source rhythm exists.
+  Do not expose or persist the legacy public segment-role enum. Uncertainty
+  appears as a 待确认动作 or an explicit coverage gap.
 
 ## Security and data handling
 
 - Never print, log, commit, expose to the frontend, or include secrets in test
   artifacts. Local credentials belong only in ignored `.env.local` files.
-- Raw audio, video windows, frames, transcripts, prompts, and model responses
-  are transient. Delete local and provider-side files on success, cancellation,
-  and failure.
+- The user-selected source video may persist only in browser storage on the
+  current device. Server-side upload copies, audio, video windows, frames,
+  transcripts, prompts, and model responses are transient; delete them on
+  success, partial completion, cancellation, and failure.
 - Logs may contain run/source IDs, stages, timing, version identifiers, provider
   request IDs, and redacted error codes only.
 

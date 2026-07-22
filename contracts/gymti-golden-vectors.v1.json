@@ -1,0 +1,124 @@
+{
+  "version": "gymti-golden-vectors.v1",
+  "questionnaireVersion": "gymti-questionnaire.v1",
+  "vectors": [
+    {
+      "id": "boom-hotblood-early-q5",
+      "answers": [
+        { "questionId": "q01_energy_after_work", "optionId": "q01_c_music" },
+        { "questionId": "q02_gym_attraction", "optionId": "q02_b_cardio" },
+        { "questionId": "q03_data_report", "optionId": "q03_b_skip_math" },
+        { "questionId": "q04_desktop_cat", "optionId": "q04_a_flag" },
+        { "questionId": "q05_reminder_aversion", "optionId": "q05_a_vague" }
+      ],
+      "expected": {
+        "gymtiScores": { "IMNB": 1, "KCAL": 1, "HIDE": 0, "LIFE": 1, "CURV": 1, "BOOM": 4, "WINN": 1 },
+        "coachStyleScores": { "hotblood": 4, "gentle": 1, "snarky": 0, "analyst": 0, "comedian": 1, "challenger": 0, "zen": 0 },
+        "excludedCoachStyleIds": [],
+        "earlyCompletion": true,
+        "result": { "gymtiType": "BOOM", "secondaryGymtiType": null, "recommendedCoachStyleId": "hotblood" }
+      }
+    },
+    {
+      "id": "boom-snarky-early-q6",
+      "answers": [
+        { "questionId": "q01_energy_after_work", "optionId": "q01_c_music" },
+        { "questionId": "q02_gym_attraction", "optionId": "q02_c_shape" },
+        { "questionId": "q03_data_report", "optionId": "q03_no_match" },
+        { "questionId": "q04_desktop_cat", "optionId": "q04_d_tease" },
+        { "questionId": "q05_reminder_aversion", "optionId": "q05_c_soft" },
+        { "questionId": "q08_return_after_skip", "optionId": "q08_b_dumbbell" }
+      ],
+      "expected": {
+        "gymtiScores": { "IMNB": 2, "KCAL": 1, "HIDE": 0, "LIFE": 0, "CURV": 2, "BOOM": 5, "WINN": 0 },
+        "coachStyleScores": { "hotblood": 2, "gentle": -2, "snarky": 5, "analyst": 1, "comedian": 2, "challenger": 0, "zen": -1 },
+        "excludedCoachStyleIds": [],
+        "earlyCompletion": true,
+        "result": { "gymtiType": "BOOM", "secondaryGymtiType": null, "recommendedCoachStyleId": "snarky" }
+      }
+    },
+    {
+      "id": "boom-secondary-and-hard-ban",
+      "answers": [
+        { "questionId": "q01_energy_after_work", "optionId": "q01_c_music" },
+        { "questionId": "q02_gym_attraction", "optionId": "q02_b_cardio" },
+        { "questionId": "q03_data_report", "optionId": "q03_b_skip_math" },
+        { "questionId": "q04_desktop_cat", "optionId": "q04_d_tease" },
+        { "questionId": "q05_reminder_aversion", "optionId": "q05_b_self_judgment" }
+      ],
+      "expected": {
+        "gymtiScores": { "IMNB": 0, "KCAL": 3, "HIDE": 1, "LIFE": 1, "CURV": 1, "BOOM": 4, "WINN": -1 },
+        "coachStyleScores": { "hotblood": 2, "gentle": 2, "snarky": -3, "analyst": -2, "comedian": 3, "challenger": 0, "zen": 1 },
+        "excludedCoachStyleIds": ["snarky"],
+        "earlyCompletion": false,
+        "result": { "gymtiType": "BOOM", "secondaryGymtiType": "KCAL", "recommendedCoachStyleId": "comedian" }
+      }
+    },
+    {
+      "id": "hard-ban-terminal-filter",
+      "answers": [
+        { "questionId": "q01_energy_after_work", "optionId": "q01_c_music" },
+        { "questionId": "q02_gym_attraction", "optionId": "q02_b_cardio" },
+        { "questionId": "q03_data_report", "optionId": "q03_b_skip_math" },
+        { "questionId": "q04_desktop_cat", "optionId": "q04_d_tease" },
+        { "questionId": "q05_reminder_aversion", "optionId": "q05_b_self_judgment" },
+        { "questionId": "q07_intensity_view", "optionId": "q07_no_match" },
+        { "questionId": "q08_return_after_skip", "optionId": "q08_b_dumbbell" }
+      ],
+      "expected": {
+        "gymtiScores": { "IMNB": 1, "KCAL": 3, "HIDE": 1, "LIFE": 1, "CURV": 1, "BOOM": 5, "WINN": -1 },
+        "coachStyleScores": { "hotblood": 2, "gentle": 1, "snarky": -1, "analyst": -2, "comedian": 3, "challenger": 0, "zen": 1 },
+        "excludedCoachStyleIds": ["snarky"],
+        "earlyCompletion": false,
+        "terminalCandidateIds": [
+          "terminal_hotblood_goal",
+          "terminal_gentle_goal",
+          "terminal_analyst_goal",
+          "terminal_comedian_goal",
+          "terminal_challenger_goal",
+          "terminal_zen_goal"
+        ],
+        "result": { "gymtiType": "BOOM", "secondaryGymtiType": null, "recommendedCoachStyleId": "comedian" }
+      }
+    },
+    {
+      "id": "hard-ban-terminal-answer",
+      "answers": [
+        { "questionId": "q01_energy_after_work", "optionId": "q01_c_music" },
+        { "questionId": "q02_gym_attraction", "optionId": "q02_b_cardio" },
+        { "questionId": "q03_data_report", "optionId": "q03_b_skip_math" },
+        { "questionId": "q04_desktop_cat", "optionId": "q04_d_tease" },
+        { "questionId": "q05_reminder_aversion", "optionId": "q05_b_self_judgment" },
+        { "questionId": "q07_intensity_view", "optionId": "q07_no_match" },
+        { "questionId": "q08_return_after_skip", "optionId": "q08_b_dumbbell" },
+        { "questionId": "terminal_analyst_goal", "optionId": "terminal_analyst_winn" }
+      ],
+      "expected": {
+        "gymtiScores": { "IMNB": 1, "KCAL": 3, "HIDE": 1, "LIFE": 1, "CURV": 1, "BOOM": 5, "WINN": 99 },
+        "coachStyleScores": { "hotblood": 2, "gentle": 1, "snarky": -1, "analyst": 98, "comedian": 3, "challenger": 0, "zen": 1 },
+        "excludedCoachStyleIds": ["snarky"],
+        "earlyCompletion": false,
+        "result": { "gymtiType": "WINN", "secondaryGymtiType": null, "recommendedCoachStyleId": "analyst" }
+      }
+    },
+    {
+      "id": "late-early-completion-q7",
+      "answers": [
+        { "questionId": "q01_energy_after_work", "optionId": "q01_no_match" },
+        { "questionId": "q02_gym_attraction", "optionId": "q02_no_match" },
+        { "questionId": "q03_data_report", "optionId": "q03_a_open" },
+        { "questionId": "q04_desktop_cat", "optionId": "q04_b_report" },
+        { "questionId": "q05_reminder_aversion", "optionId": "q05_no_match" },
+        { "questionId": "q07_intensity_view", "optionId": "q07_b_quality" },
+        { "questionId": "q08_return_after_skip", "optionId": "q08_c_pattern" }
+      ],
+      "expected": {
+        "gymtiScores": { "IMNB": 2, "KCAL": 1, "HIDE": 0, "LIFE": 1, "CURV": 0, "BOOM": 0, "WINN": 5 },
+        "coachStyleScores": { "hotblood": 0, "gentle": 1, "snarky": 0, "analyst": 7, "comedian": 0, "challenger": 0, "zen": 0 },
+        "excludedCoachStyleIds": [],
+        "earlyCompletion": true,
+        "result": { "gymtiType": "WINN", "secondaryGymtiType": null, "recommendedCoachStyleId": "analyst" }
+      }
+    }
+  ]
+}

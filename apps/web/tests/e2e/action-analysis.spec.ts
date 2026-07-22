@@ -1,40 +1,105 @@
 import { expect, test } from '@playwright/test'
 
-test('video candidate can be reviewed, added, and restored from the draft', async ({ page }) => {
+test('video result becomes a base plan, resolves uncertainty, and restores from the current plan', async ({ page }) => {
   await page.goto('/')
-  const sourceSelect = page.getByLabel('来源视频')
-  await expect(sourceSelect).toHaveValue('legacy-arm-workout')
-  await expect(sourceSelect.locator('option:checked')).toContainText('哈基米手臂训练')
+  await expect(page.getByRole('heading', { name: /刷到的动作/ })).toBeVisible()
 
-  await page.locator('video').evaluate((video: HTMLVideoElement) => {
-    video.currentTime = 2
-  })
-  await page.getByRole('button', { name: /添加动作/ }).click()
+  const primaryNavigation = page.getByRole('navigation', { name: '主要导航' })
+  for (const target of ['首页', '训练', '我的'].map((name) => (
+    primaryNavigation.getByRole('link', { name, exact: true })
+  ))) {
+    const box = await target.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.width).toBeGreaterThanOrEqual(44)
+    expect(box!.height).toBeGreaterThanOrEqual(44)
+  }
 
-  await expect(page.getByRole('heading', { name: '找到 1 个动作' })).toBeVisible()
-  await expect(
-    page.locator('.candidate-panel').getByRole('textbox', { name: '动作名称' }),
-  ).toHaveValue('拖拽弯举')
-  await page.locator('.candidate-panel').getByRole('button', { name: '按次数' }).click()
-  await page.getByRole('button', { name: '加入草稿 · 1' }).click()
+  await page.getByText('暂时没有合适视频？使用受控示例', { exact: true }).click()
+  await page.getByRole('button', { name: /哈基米手臂训练｜本地来源视频/ }).click()
+  await expect(page).toHaveURL(/\/analysis$/)
+
+  await expect(page.getByRole('heading', { name: '训练方案已准备好' })).toBeVisible()
+  const preparedPlanAction = page.getByRole('button', { name: '查看训练方案' })
+  const preparedPlanActionBox = await preparedPlanAction.boundingBox()
+  expect(preparedPlanActionBox).not.toBeNull()
+  expect(preparedPlanActionBox!.height).toBeGreaterThanOrEqual(44)
+  await preparedPlanAction.click()
 
   await expect(page).toHaveURL(/\/plan$/)
-  await expect(page.getByRole('heading', { name: '训练方案草稿' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '当前训练方案' })).toBeVisible()
+  await expect(page.getByText('待确认', { exact: true })).toBeVisible()
+  await page.locator('.plan-card').first().locator('.action-summary').click()
   await expect(
-    page.locator('.plan-list').getByRole('textbox', { name: '动作名称' }).first(),
+    page.locator('.action-sheet').getByRole('textbox', { name: '动作名称' }),
   ).toHaveValue('拖拽弯举')
-  await expect(page.getByText('规则', { exact: true }).first()).toBeVisible()
+  await expect(page.locator('.action-sheet').getByText('规则补全', { exact: true }).first()).toBeVisible()
+  const firstConfirmationSheet = page.locator('.action-sheet')
+  await firstConfirmationSheet.getByRole('button', { name: '确认并加入' }).click()
+  await expect(firstConfirmationSheet).toBeHidden()
+
+  await page.getByRole('link', { name: '返回首页' }).click()
+  await page.getByText('暂时没有合适视频？使用受控示例', { exact: true }).click()
+  await page.getByRole('button', { name: /合成测试来源/ }).click()
+  await expect(page).toHaveURL(/\/analysis$/)
+  await expect(page.getByRole('heading', { name: '训练方案已准备好' })).toBeVisible()
+  await page.getByRole('button', { name: '查看训练方案' }).click()
+  await expect(page.getByRole('dialog', { name: '当前已经有训练方案' })).toBeVisible()
+  await page.getByRole('button', { name: /追加/ }).click()
+  await expect(page.locator('.plan-card')).toHaveCount(2)
+  await expect(page.getByText(/合成测试来源/)).toBeVisible()
+
+  await page.locator('.plan-card').nth(1).locator('.action-summary').click()
+  const secondConfirmationSheet = page.locator('.action-sheet')
+  await secondConfirmationSheet.getByRole('button', { name: '确认并加入' }).click()
+  await expect(secondConfirmationSheet).toBeHidden()
 
   await page.reload()
-  await expect(
-    page.locator('.plan-list').getByRole('textbox', { name: '动作名称' }).first(),
-  ).toHaveValue('拖拽弯举')
+  await expect(page.locator('.plan-card')).toHaveCount(2)
 
   await page.getByRole('button', { name: /创建动作/ }).click()
-  await page.getByLabel('动作名称').last().fill('平板支撑')
-  await page.getByRole('button', { name: '按时长' }).last().click()
-  await page.getByRole('button', { name: '加入草稿' }).click()
-  await expect(
-    page.locator('.plan-list').getByRole('textbox', { name: '动作名称' }).last(),
-  ).toHaveValue('平板支撑')
+  const manualForm = page.locator('.manual-form')
+  await manualForm.getByLabel('动作名称').fill('平板支撑')
+  await manualForm.getByRole('button', { name: '按时长' }).click()
+  await manualForm.getByRole('button', { name: '加入方案' }).click()
+  await expect(page.locator('.plan-card')).toHaveCount(3)
+  await expect(page.locator('.plan-card').last()).toContainText('平板支撑')
+
+  for (const [index, target] of [
+    [0, '10'],
+    [1, '10'],
+    [2, '1'],
+  ] as const) {
+    await page.locator('.plan-card').nth(index).locator('.action-summary').click()
+    const sheet = page.locator('.action-sheet')
+    await sheet.getByRole('spinbutton').nth(0).fill('1')
+    await sheet.getByRole('spinbutton').nth(1).fill(target)
+    await sheet.getByRole('spinbutton').nth(2).fill('0')
+    await sheet.getByRole('button', { name: '完成', exact: true }).click()
+    await expect(sheet).toBeHidden()
+  }
+
+  await page.getByRole('button', { name: '开始训练' }).click()
+  await expect(page).toHaveURL(/\/training$/)
+  await expect(page.getByRole('heading', { name: '拖拽弯举' })).toBeVisible()
+  await expect(page.locator('.media-stage video')).toBeVisible()
+
+  await page.getByRole('button', { name: '开始本组' }).click()
+  await expect(page.getByText('本组进行中', { exact: true }).first()).toBeVisible()
+  await page.reload()
+  await expect(page.getByText(/已恢复并暂停|训练已暂停/, { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '继续训练' }).click()
+  await page.getByRole('button', { name: '完成本组' }).click()
+
+  await expect(page.getByText('准备继续', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '准备好了' }).click()
+  await expect(page.getByRole('heading', { name: '拖拽弯举' })).toBeVisible()
+  await expect(page.locator('.media-stage video')).toBeVisible()
+  await page.getByRole('button', { name: '完成本组' }).click()
+
+  await expect(page.getByText('准备继续', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '准备好了' }).click()
+  await expect(page.getByRole('heading', { name: '平板支撑' })).toBeVisible()
+  await expect(page.getByText('这个动作没有参考视频')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '训练完成' })).toBeVisible({ timeout: 5_000 })
+  await expect(page.getByText(/实际完成量已保存到本机/)).toBeVisible()
 })

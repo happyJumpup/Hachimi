@@ -1,5 +1,10 @@
 # Initial action-analysis slice
 
+> Historical specification: the local-window and expansion rules below describe the first foundation slice. [ADR-0012](../adr/0012-explicit-full-source-analysis-with-latency-budget.md) supersedes them with explicit full-source analysis for controlled videos up to 60 seconds, plus a measured latency budget.
+>
+> Current TrainPal product and UX decisions are governed by the [competition Web MVP specification](competition-web-mvp.md), root `CONTEXT.md`, and ADR-0015 through ADR-0028. The [local-video prototype specification](local-video-training-prototype.md) is retained only for historical implementation context; this file is not an active product contract.
+
+
 Status: approved for implementation
 Branch: `foundation/initial-analysis-slice`
 

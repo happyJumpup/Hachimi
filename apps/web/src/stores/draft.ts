@@ -7,14 +7,21 @@ import type {
   DraftItem,
   DraftPlan,
   DraftRepository,
+  LocalMediaFingerprint,
   Segment,
+  SourceSummary,
   SourcedValue,
 } from '@/domain/types'
+import { toSafeOriginUrl } from '@/domain/source'
 
 type NumericField = 'sets' | 'reps' | 'durationSeconds' | 'restSeconds' | 'weightKg'
+type PersistState = 'idle' | 'pending' | 'saving' | 'saved' | 'failed'
+type ProposalStrategy = 'append' | 'replace'
 
 const emptyPlan = (): DraftPlan => ({
   id: 'current',
+  name: '未命名方案',
+  linkedPlanId: null,
   items: [],
   updatedAt: new Date(0).toISOString(),
 })
@@ -23,29 +30,48 @@ const id = (): string => globalThis.crypto?.randomUUID?.() ?? `item-${Date.now()
 
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
+const normalizePlan = (nextPlan: DraftPlan): DraftPlan => ({
+  ...cloneJson(nextPlan),
+  items: nextPlan.items.map((rawItem) => {
+    const { segmentRole: _legacySegmentRole, ...item } = rawItem as DraftItem & {
+      segmentRole?: unknown
+    }
+    return cloneJson(item)
+  }),
+})
+
 const sourced = <T>(value: T | null, source: SourcedValue<T>['source']): SourcedValue<T> => ({
   value,
   source,
 })
 
+type SourceSnapshot = Pick<SourceSummary, 'title' | 'origin_url'> & {
+  kind?: 'controlled' | 'local'
+  localMedia?: LocalMediaFingerprint
+}
+
 const fromCandidate = (
   candidate: AnalysisCandidate,
-  segmentEdited = false,
-  sourceTitle?: string,
+  source?: SourceSnapshot,
 ): DraftItem => {
-  const mode = candidate.parameters.mode
-  if (mode === null) {
-    throw new Error('candidate mode must be selected before adding it to the draft')
-  }
+  const modeMissing = candidate.parameters.mode === null
+  const mode: ActionMode = candidate.parameters.mode ?? 'reps'
   const isReps = mode === 'reps'
   return {
     id: id(),
     name: candidate.name,
-    sourceRef: { sourceId: candidate.source_id, title: sourceTitle },
+    sourceRef: {
+      sourceId: candidate.source_id,
+      title: source?.title,
+      originUrl: toSafeOriginUrl(source?.origin_url),
+      ...(source?.kind ? { kind: source.kind } : {}),
+      ...(source?.localMedia ? { localMedia: cloneJson(source.localMedia) } : {}),
+    },
     segment: sourced(
       candidate.segment ? cloneJson(candidate.segment) : null,
-      candidate.segment ? (segmentEdited ? 'user' : 'video') : null,
+      candidate.segment ? 'video' : null,
     ),
+    confirmationStatus: candidate.needs_confirmation || modeMissing ? 'pending' : 'confirmed',
     mode,
     sets: candidate.parameters.sets === null
       ? sourced(3, 'rule')
@@ -70,50 +96,152 @@ const fromCandidate = (
 export const useDraftStore = defineStore('draft', () => {
   const plan = ref<DraftPlan>(emptyPlan())
   const loaded = ref(false)
+  const persistState = ref<PersistState>('idle')
   let repository: DraftRepository | undefined
   let persistTimer: ReturnType<typeof setTimeout> | undefined
+  let persistInFlight: Promise<void> | null = null
+  let persistenceSuspended = false
 
   const items = computed(() => plan.value.items)
+  const persistMessage = computed(() => {
+    if (persistState.value === 'failed') return '未保存，点击重试'
+    if (persistState.value === 'pending' || persistState.value === 'saving') {
+      return '正在保存到本机…'
+    }
+    if (persistState.value === 'saved') return '已自动保存到本机'
+    return '还没有需要保存的修改'
+  })
 
   async function load(nextRepository: DraftRepository): Promise<void> {
     repository = nextRepository
-    plan.value = (await repository.load()) ?? emptyPlan()
+    const stored = await repository.load()
+    plan.value = stored ? normalizePlan(stored) : emptyPlan()
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
     loaded.value = true
   }
 
+  async function reload(): Promise<void> {
+    if (!repository) return
+    const stored = await repository.load()
+    plan.value = stored ? normalizePlan(stored) : emptyPlan()
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
+  }
+
   function schedulePersist(): void {
-    if (!repository) {
+    if (!repository || persistenceSuspended) {
       return
     }
     if (persistTimer) {
       clearTimeout(persistTimer)
     }
+    persistState.value = 'pending'
     persistTimer = setTimeout(() => {
-      void flushPersist()
+      void flushPersist().catch(() => undefined)
     }, 300)
   }
 
   async function flushPersist(): Promise<void> {
-    if (!repository) {
+    if (!repository || persistenceSuspended) {
       return
     }
     if (persistTimer) {
       clearTimeout(persistTimer)
       persistTimer = undefined
     }
+    if (persistInFlight) {
+      await persistInFlight.catch(() => undefined)
+      if (persistenceSuspended) return
+    }
+    persistState.value = 'saving'
     plan.value.updatedAt = new Date().toISOString()
-    await repository.save(cloneJson(plan.value))
+    const operation = repository.save(cloneJson(plan.value))
+    persistInFlight = operation
+    try {
+      await operation
+      persistState.value = 'saved'
+    } catch (error) {
+      persistState.value = 'failed'
+      throw error
+    } finally {
+      if (persistInFlight === operation) persistInFlight = null
+    }
   }
 
-  function addCandidates(
+  async function retryPersist(): Promise<void> {
+    try {
+      await flushPersist()
+    } catch {
+      // The visible failed state remains available for another user retry.
+    }
+  }
+
+  async function quiescePersistence(): Promise<void> {
+    persistenceSuspended = true
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    await persistInFlight?.catch(() => undefined)
+  }
+
+  function resumePersistence(): void {
+    persistenceSuspended = false
+    if (persistState.value === 'pending') schedulePersist()
+  }
+
+  function adoptPersistedPlan(nextPlan: DraftPlan): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    plan.value = normalizePlan(nextPlan)
+    persistState.value = plan.value.items.length ? 'saved' : 'idle'
+  }
+
+  function resetLocalState(keepSuspended = false): void {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = undefined
+    }
+    plan.value = emptyPlan()
+    persistState.value = 'idle'
+    persistenceSuspended = keepSuspended
+  }
+
+  function updatePlanName(name: string): void {
+    const normalized = name.trim()
+    if (!normalized) return
+    plan.value.name = normalized
+    schedulePersist()
+  }
+
+  function applyCandidateProposal(
     candidates: AnalysisCandidate[],
-    editedSegmentIds: string[] = [],
-    sourceTitles: Record<string, string> = {},
+    sources: Record<string, SourceSnapshot> = {},
+    strategy: ProposalStrategy = 'append',
   ): void {
-    const edited = new Set(editedSegmentIds)
-    plan.value.items.push(...candidates.map((candidate) =>
-      fromCandidate(candidate, edited.has(candidate.id), sourceTitles[candidate.source_id]),
+    const ordered = [...candidates].sort((left, right) => (
+      left.segment.start_seconds - right.segment.start_seconds
+      || left.segment.end_seconds - right.segment.end_seconds
     ))
+    const proposalItems = ordered.map((candidate) =>
+      fromCandidate(candidate, sources[candidate.source_id]),
+    )
+    if (strategy === 'replace') {
+      plan.value.name = '未命名方案'
+      plan.value.linkedPlanId = null
+      plan.value.items = proposalItems
+    } else {
+      plan.value.items.push(...proposalItems)
+    }
+    schedulePersist()
+  }
+
+  function confirmItem(itemId: string): void {
+    const item = plan.value.items.find((entry) => entry.id === itemId)
+    if (!item || item.confirmationStatus !== 'pending') return
+    item.confirmationStatus = 'confirmed'
     schedulePersist()
   }
 
@@ -145,7 +273,7 @@ export const useDraftStore = defineStore('draft', () => {
 
   function updateName(itemId: string, name: string): void {
     const item = plan.value.items.find((entry) => entry.id === itemId)
-    if (!item || !name.trim()) {
+    if (!item) {
       return
     }
     item.name = name.trim()
@@ -195,9 +323,19 @@ export const useDraftStore = defineStore('draft', () => {
     plan,
     items,
     loaded,
+    persistState,
+    persistMessage,
     load,
+    reload,
     flushPersist,
-    addCandidates,
+    retryPersist,
+    quiescePersistence,
+    resumePersistence,
+    adoptPersistedPlan,
+    resetLocalState,
+    updatePlanName,
+    applyCandidateProposal,
+    confirmItem,
     addManualAction,
     updateValue,
     updateName,

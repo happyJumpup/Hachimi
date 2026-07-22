@@ -11,6 +11,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:e2e": "playwright test",
+    "pets:build": "node scripts/build-trainpal-pets.mjs",
     "api:generate": "openapi-typescript ../../contracts/openapi.json -o src/api/schema.d.ts"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "vue-router": "^4.6.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.57.0",
     "@types/node": "^24.10.1",
@@ -29,8 +31,10 @@
     "@vue/test-utils": "^2.4.6",
     "eslint": "^9.39.1",
     "eslint-plugin-vue": "^10.6.2",
+    "fake-indexeddb": "^6.2.5",
     "jsdom": "^27.2.0",
     "openapi-typescript": "^7.10.1",
+    "sharp": "^0.35.3",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.48.0",
     "vite": "^7.2.4",

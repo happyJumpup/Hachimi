@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "arm-workout-01",
+      "title": "团队授权手臂训练 01",
+      "media_path": "competition/arm-workout-01.mp4",
+      "duration_seconds": 54.4,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "origin_url": null
+    }
+  ]
+}

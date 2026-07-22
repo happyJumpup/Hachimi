@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import gzip
 import json
 import struct
@@ -12,6 +13,7 @@ import respx
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.exceptions import ConnectionClosed
 
+import hakimi_analysis.providers.ark as ark_module
 from hakimi_analysis.models import Segment
 from hakimi_analysis.providers.ark import ArkResponsesClient
 from hakimi_analysis.providers.asr import VolcAsrClient
@@ -61,7 +63,7 @@ async def test_asr_maps_word_timestamps_to_the_source_video_clock(tmp_path: Path
                                         "text": "拖拽弯举",
                                         "start_time": 700,
                                         "end_time": 1600,
-                                    }
+                                    },
                                 ],
                             }
                         ],
@@ -214,11 +216,7 @@ async def test_asr_retries_a_retryable_provider_failure_once(tmp_path: Path) -> 
 
 def _server_error_frame(code: int) -> bytes:
     payload = json.dumps({"message": "redacted by client"}).encode("utf-8")
-    return (
-        bytes([0x11, 0xF0, 0x10, 0x00])
-        + struct.pack(">II", code, len(payload))
-        + payload
-    )
+    return bytes([0x11, 0xF0, 0x10, 0x00]) + struct.pack(">II", code, len(payload)) + payload
 
 
 @pytest.mark.asyncio
@@ -299,12 +297,11 @@ async def test_cancelling_asr_closes_the_stream(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_ark_video_file_is_deleted_after_structured_visual_result(tmp_path: Path) -> None:
+async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
+    tmp_path: Path,
+) -> None:
     video = tmp_path / "window.mp4"
     video.write_bytes(b"video-bytes")
-    upload = respx.post("https://ark.example/api/v3/files").mock(
-        return_value=httpx.Response(200, json={"id": "file-123", "status": "processed"})
-    )
     response = respx.post("https://ark.example/api/v3/responses").mock(
         return_value=httpx.Response(
             200,
@@ -321,8 +318,8 @@ async def test_ark_video_file_is_deleted_after_structured_visual_result(tmp_path
                                         "segments": [
                                             {
                                                 "action_name": "Drag Curl",
-                                                "start_seconds": 41,
-                                                "end_seconds": 51,
+                                                "start_seconds": 26,
+                                                "end_seconds": 36,
                                                 "visual_cue": "哑铃沿躯干后拉",
                                             }
                                         ]
@@ -336,50 +333,66 @@ async def test_ark_video_file_is_deleted_after_structured_visual_result(tmp_path
             },
         )
     )
-    delete = respx.delete("https://ark.example/api/v3/files/file-123").mock(
-        return_value=httpx.Response(200, json={"id": "file-123", "deleted": True})
-    )
-
     async with httpx.AsyncClient() as http_client:
         client = ArkResponsesClient(
             api_key="test-ark-key",
-            model_id="doubao-test",
+            model_id="doubao-lite-test",
+            visual_model_id="doubao-mini-test",
             base_url="https://ark.example/api/v3",
             http_client=http_client,
         )
         result = await client.locate_visual(
             video_path=video,
-            window=Segment(start_seconds=15, end_seconds=54),
-            trigger_seconds=45,
+            window=Segment(start_seconds=0, end_seconds=39),
             instructions="visual skill contract",
         )
 
     assert result.segments[0].action_name == "Drag Curl"
-    assert upload.called
+    assert result.segments[0].start_seconds == 26
+    assert result.segments[0].end_seconds == 36
     assert response.called
-    assert delete.called
     response_payload = json.loads(response.calls[0].request.content)
+    assert response_payload["model"] == "doubao-mini-test"
     assert response_payload["store"] is False
-    assert response_payload["input"][0]["content"][0]["type"] == "input_video"
-    assert response_payload["input"][0]["content"][0]["file_id"] == "file-123"
+    assert response_payload["thinking"] == {"type": "disabled"}
+    content = response_payload["input"][0]["content"]
+    assert content[0]["type"] == "input_video"
+    assert content[0]["fps"] == 1
+    assert content[0]["video_url"].startswith("data:video/mp4;base64,")
+    encoded_video = content[0]["video_url"].partition(",")[2]
+    assert base64.b64decode(encoded_video) == b"video-bytes"
+    metadata = json.loads(content[1]["text"])
+    assert metadata["clip_timeline"] == {"start_seconds": 0.0, "end_seconds": 39.0}
+    assert "clip-local" in metadata["time_rule"]
+    assert len(respx.calls) == 1
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_ark_video_file_is_deleted_when_structured_result_is_invalid(tmp_path: Path) -> None:
+async def test_ark_inline_video_rejects_source_absolute_times_from_the_model(
+    tmp_path: Path,
+) -> None:
     video = tmp_path / "window.mp4"
     video.write_bytes(b"video-bytes")
-    respx.post("https://ark.example/api/v3/files").mock(
-        return_value=httpx.Response(200, json={"id": "file-invalid", "status": "processed"})
-    )
     respx.post("https://ark.example/api/v3/responses").mock(
         return_value=httpx.Response(
             200,
-            json={"id": "resp-invalid", "output_text": '{"segments": [{"action_name": 7}]}'},
+            json={
+                "id": "resp-source-clock",
+                "output_text": json.dumps(
+                    {
+                        "segments": [
+                            {
+                                "action_name": "Drag Curl",
+                                "start_seconds": 41,
+                                "end_seconds": 51,
+                                "visual_cue": "dumbbell movement",
+                            }
+                        ]
+                    }
+                ),
+            },
         )
-    )
-    delete = respx.delete("https://ark.example/api/v3/files/file-invalid").mock(
-        return_value=httpx.Response(200, json={"id": "file-invalid", "deleted": True})
     )
 
     async with httpx.AsyncClient() as http_client:
@@ -392,28 +405,114 @@ async def test_ark_video_file_is_deleted_when_structured_result_is_invalid(tmp_p
         with pytest.raises(ProviderSchemaError):
             await client.locate_visual(
                 video_path=video,
-                window=Segment(start_seconds=15, end_seconds=54),
-                trigger_seconds=45,
+                window=Segment(start_seconds=0, end_seconds=39),
                 instructions="visual skill contract",
             )
-
-    assert delete.called
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_ark_video_file_is_deleted_when_preprocessing_fails(tmp_path: Path) -> None:
+async def test_ark_contact_sheet_uses_visual_model_without_file_upload(
+    tmp_path: Path,
+) -> None:
+    image = tmp_path / "contact-sheet.jpg"
+    image.write_bytes(b"jpeg-test-bytes")
+    response = respx.post("https://ark.example/api/v3/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp-contact-sheet",
+                "output_text": json.dumps(
+                    {
+                        "segments": [
+                            {
+                                "action_name": "Drag Curl",
+                                "start_seconds": 41,
+                                "end_seconds": 51,
+                                "visual_cue": "dumbbell movement",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as http_client:
+        client = ArkResponsesClient(
+            api_key="test-ark-key",
+            model_id="doubao-lite-test",
+            visual_model_id="doubao-mini-test",
+            base_url="https://ark.example/api/v3",
+            http_client=http_client,
+        )
+        result = await client.locate_visual_contact_sheet(
+            image_path=image,
+            frame_times_seconds=(0, 5, 10),
+            window=Segment(start_seconds=0, end_seconds=55),
+            instructions="visual skill contract",
+        )
+
+    assert result.segments[0].action_name == "Drag Curl"
+    response_payload = json.loads(response.calls[0].request.content)
+    assert response_payload["model"] == "doubao-mini-test"
+    assert response_payload["store"] is False
+    assert response_payload["thinking"] == {"type": "disabled"}
+    content = response_payload["input"][0]["content"]
+    assert content[0]["type"] == "input_image"
+    assert content[0]["image_url"].startswith("data:image/jpeg;base64,")
+    metadata = json.loads(content[1]["text"])
+    assert metadata["analysis_scope"] == "full_source"
+    assert "legacy_trigger_seconds" not in metadata
+    assert "trigger_seconds" not in metadata
+    assert metadata["contact_sheet"] == {
+        "columns": 4,
+        "frame_times_seconds": [0, 5, 10],
+        "order": "row_major",
+    }
+    assert len(respx.calls) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ark_inline_video_creates_no_remote_file_when_result_is_invalid(
+    tmp_path: Path,
+) -> None:
     video = tmp_path / "window.mp4"
     video.write_bytes(b"video-bytes")
-    respx.post("https://ark.example/api/v3/files").mock(
-        return_value=httpx.Response(200, json={"id": "file-failed", "status": "processing"})
+    respx.post("https://ark.example/api/v3/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "resp-invalid", "output_text": '{"segments": [{"action_name": 7}]}'},
+        )
     )
-    respx.get("https://ark.example/api/v3/files/file-failed").mock(
-        return_value=httpx.Response(200, json={"id": "file-failed", "status": "failed"})
-    )
-    delete = respx.delete("https://ark.example/api/v3/files/file-failed").mock(
-        return_value=httpx.Response(200, json={"id": "file-failed", "deleted": True})
-    )
+    async with httpx.AsyncClient() as http_client:
+        client = ArkResponsesClient(
+            api_key="test-ark-key",
+            model_id="doubao-test",
+            base_url="https://ark.example/api/v3",
+            http_client=http_client,
+        )
+        with pytest.raises(ProviderSchemaError):
+            await client.locate_visual(
+                video_path=video,
+                window=Segment(start_seconds=15, end_seconds=54),
+                instructions="visual skill contract",
+            )
+
+    assert len(respx.calls) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ark_inline_video_rejects_oversize_chunk_before_provider_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    video = tmp_path / "window.mp4"
+    video.write_bytes(b"video-bytes")
+    monkeypatch.setattr(ark_module, "MAX_INLINE_VIDEO_BYTES", len(b"video-bytes") - 1)
 
     async with httpx.AsyncClient() as http_client:
         client = ArkResponsesClient(
@@ -421,17 +520,17 @@ async def test_ark_video_file_is_deleted_when_preprocessing_fails(tmp_path: Path
             model_id="doubao-test",
             base_url="https://ark.example/api/v3",
             http_client=http_client,
-            file_poll_interval_seconds=0,
         )
-        with pytest.raises(ProviderError):
+        with pytest.raises(ProviderError) as failure:
             await client.locate_visual(
                 video_path=video,
                 window=Segment(start_seconds=15, end_seconds=54),
-                trigger_seconds=45,
                 instructions="visual skill contract",
             )
 
-    assert delete.called
+    assert failure.value.code == "media_error"
+    assert failure.value.retryable is False
+    assert len(respx.calls) == 0
 
 
 @pytest.mark.asyncio
@@ -472,11 +571,8 @@ async def test_ark_speech_result_is_validated_as_json() -> None:
         result = await client.understand_speech(
             transcript={
                 "text": "做三组交叉弯举",
-                "utterances": [
-                    {"text": "做三组交叉弯举", "start_seconds": 20, "end_seconds": 28}
-                ],
+                "utterances": [{"text": "做三组交叉弯举", "start_seconds": 20, "end_seconds": 28}],
             },
-            trigger_seconds=24,
             window=Segment(start_seconds=15, end_seconds=35),
             instructions="speech skill contract",
         )

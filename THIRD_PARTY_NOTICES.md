@@ -3,10 +3,13 @@
 This repository is MIT licensed. Runtime and development dependencies retain
 their own licenses.
 
-- `imageio-ffmpeg` is used only to locate a project-managed FFmpeg executable
-  for local media-window extraction. FFmpeg is not copied into this repository
-  or shipped as a browser asset by this release. Any future binary distribution
-  must audit the exact FFmpeg build and comply with its LGPL/GPL configuration.
+- `imageio-ffmpeg` locates the development FFmpeg executable used for local
+  media-window extraction. Its wheel-provided executable is not copied into the
+  repository or the production GHCR image. Production mounts a separately
+  managed, checksummed FFmpeg executable read-only from the server. The release
+  owner must audit and pin that exact binary plus its complete configuration line,
+  and preserve its applicable license/source
+  obligations; see `licenses/FFMPEG_RUNTIME.md`.
 - `Barlow Condensed` is bundled as a browser font through
   `@fontsource/barlow-condensed`. Copyright 2017 The Barlow Project Authors;
   licensed under the SIL Open Font License 1.1. See
