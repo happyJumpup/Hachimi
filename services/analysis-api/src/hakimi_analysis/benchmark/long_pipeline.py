@@ -14,6 +14,7 @@ from hakimi_analysis.benchmark.long_execution import (
     consolidate_unique_action_candidates,
     deduplicate_chunk_candidates,
     normalize_chunk_candidate,
+    normalize_chunk_relative_candidate,
     retry_long_operation,
 )
 from hakimi_analysis.benchmark.long_models import ArmId, LongVideoChunk
@@ -33,12 +34,13 @@ from hakimi_analysis.benchmark.models import (
 )
 from hakimi_analysis.models import Transcript
 
-LongPromptVersion = Literal["long-video-ab-v1", "long-video-ab-v2"]
+LongPromptVersion = Literal["long-video-ab-v1", "long-video-ab-v2", "long-video-ab-v3"]
 LongCandidateGranularity = Literal["event", "unique_action"]
 
 _CANDIDATE_GRANULARITY_BY_PROMPT: Mapping[LongPromptVersion, LongCandidateGranularity] = {
     "long-video-ab-v1": "event",
     "long-video-ab-v2": "unique_action",
+    "long-video-ab-v3": "unique_action",
 }
 
 
@@ -304,11 +306,15 @@ class LongArmExecutor:
             transcript: Transcript,
         ) -> list[BenchmarkCandidate]:
             nonlocal first_candidate_seconds
-            chunk_transcript = _transcript_for_chunk(transcript, item.chunk)
+            chunk_transcript = _transcript_relative_to_chunk(transcript, item.chunk)
+            relative_visual_candidates = [
+                _candidate_relative_to_chunk(item.chunk, candidate)
+                for candidate in visual_candidates
+            ]
             prompt = long_fusion_prompt(
                 chunk_transcript.model_dump(mode="json"),
-                CandidateEnvelope(actions=visual_candidates),
-                source_window=(item.chunk.start_seconds, item.chunk.end_seconds),
+                CandidateEnvelope(actions=relative_visual_candidates),
+                chunk_duration_seconds=item.chunk.duration_seconds,
                 instructions=self._task_instructions,
             )
             fusion_started = perf_counter()
@@ -320,7 +326,7 @@ class LongArmExecutor:
                     on_retry=metrics.mark_billable_retry,
                 )
             metrics.fusion_seconds += perf_counter() - fusion_started
-            normalized = _normalize_inference_candidates(
+            normalized = _normalize_fusion_relative_candidates(
                 item.chunk,
                 inference.envelope.actions,
                 metrics,
@@ -476,6 +482,12 @@ class LongArmExecutor:
         if key.arm_id == ArmId.SEED_CONTACT_SHEET:
             metrics.record_inference("seed", inference)
         metrics.visual_seconds += perf_counter() - visual_started
+        if key.arm_id == ArmId.QWEN_VIDEO:
+            return _normalize_qwen_relative_candidates(
+                item.chunk,
+                inference.envelope.actions,
+                metrics,
+            )
         return _normalize_inference_candidates(
             item.chunk,
             inference.envelope.actions,
@@ -527,10 +539,17 @@ class LongArmExecutor:
                 lifecycle.bind_handle(handle.expires_at)
                 metadata = {
                     "analysis_scope": "long_video_chunk",
-                    "window": item.chunk.model_dump(
-                        include={"start_seconds", "end_seconds"}, mode="json"
-                    ),
-                    "time_rule": "Return absolute source-video seconds within this window.",
+                    "time_contract": {
+                        "coordinate_system": "chunk_relative_seconds",
+                        "allowed_window": {
+                            "start_seconds": 0,
+                            "end_seconds": item.chunk.duration_seconds,
+                        },
+                        "rule": (
+                            "Return only seconds from the start of this uploaded clip; "
+                            "never include the source-video offset."
+                        ),
+                    },
                 }
                 inference = await retry_long_operation(
                     lambda: self._providers.qwen.analyze(
@@ -725,7 +744,48 @@ def _normalize_inference_candidates(
     metrics.weight_violation_count += sum(
         candidate.weight_kg is not None for candidate in candidates
     )
-    return [normalize_chunk_candidate(chunk, candidate) for candidate in candidates]
+    try:
+        return [normalize_chunk_candidate(chunk, candidate) for candidate in candidates]
+    except LongExecutionError as error:
+        if error.code == "chunk_candidate_time_invalid":
+            raise LongExecutionError("seed_visual_candidate_time_invalid") from error
+        raise
+
+
+def _normalize_fusion_relative_candidates(
+    chunk: LongVideoChunk,
+    candidates: Sequence[BenchmarkCandidate],
+    metrics: _MutableMetrics,
+) -> list[BenchmarkCandidate]:
+    """Map the v3 fusion clock to source time after validating its contract."""
+
+    metrics.weight_violation_count += sum(
+        candidate.weight_kg is not None for candidate in candidates
+    )
+    try:
+        return [normalize_chunk_relative_candidate(chunk, candidate) for candidate in candidates]
+    except LongExecutionError as error:
+        if error.code == "chunk_relative_candidate_time_invalid":
+            raise LongExecutionError("fusion_relative_candidate_time_invalid") from error
+        raise
+
+
+def _normalize_qwen_relative_candidates(
+    chunk: LongVideoChunk,
+    candidates: Sequence[BenchmarkCandidate],
+    metrics: _MutableMetrics,
+) -> list[BenchmarkCandidate]:
+    """Apply the frozen Qwen clip-relative clock before source-clock fusion."""
+
+    metrics.weight_violation_count += sum(
+        candidate.weight_kg is not None for candidate in candidates
+    )
+    try:
+        return [normalize_chunk_relative_candidate(chunk, candidate) for candidate in candidates]
+    except LongExecutionError as error:
+        if error.code == "chunk_relative_candidate_time_invalid":
+            raise LongExecutionError("qwen_visual_relative_time_invalid") from error
+        raise
 
 
 def _safe_expiry_from_error(error: BaseException) -> str | None:
@@ -764,6 +824,57 @@ def _transcript_for_chunk(transcript: Transcript, chunk: LongVideoChunk) -> Tran
         text=" ".join(utterance.text for utterance in utterances),
         utterances=utterances,
         provider_request_id=transcript.provider_request_id,
+    )
+
+
+def _candidate_relative_to_chunk(
+    chunk: LongVideoChunk,
+    candidate: BenchmarkCandidate,
+) -> BenchmarkCandidate:
+    """Convert a validated source-clock visual candidate for v3 fusion input."""
+
+    return candidate.model_copy(
+        update={
+            "start_seconds": candidate.start_seconds - chunk.start_seconds,
+            "end_seconds": candidate.end_seconds - chunk.start_seconds,
+        }
+    )
+
+
+def _transcript_relative_to_chunk(transcript: Transcript, chunk: LongVideoChunk) -> Transcript:
+    """Clip ASR evidence to one chunk and express all timestamps locally."""
+
+    absolute = _transcript_for_chunk(transcript, chunk)
+    local_utterances = []
+    for utterance in absolute.utterances:
+        local_words = [
+            word.model_copy(
+                update={
+                    "start_seconds": max(word.start_seconds, chunk.start_seconds)
+                    - chunk.start_seconds,
+                    "end_seconds": min(word.end_seconds, chunk.end_seconds)
+                    - chunk.start_seconds,
+                }
+            )
+            for word in utterance.words
+            if word.end_seconds >= chunk.start_seconds
+            and word.start_seconds <= chunk.end_seconds
+        ]
+        local_utterances.append(
+            utterance.model_copy(
+                update={
+                    "start_seconds": max(utterance.start_seconds, chunk.start_seconds)
+                    - chunk.start_seconds,
+                    "end_seconds": min(utterance.end_seconds, chunk.end_seconds)
+                    - chunk.start_seconds,
+                    "words": local_words,
+                }
+            )
+        )
+    return Transcript(
+        text=absolute.text,
+        utterances=local_utterances,
+        provider_request_id=absolute.provider_request_id,
     )
 
 

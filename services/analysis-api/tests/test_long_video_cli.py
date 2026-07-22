@@ -58,7 +58,7 @@ def _manifest(tmp_path: Path) -> LongExperimentManifest:
         {
             "version": 1,
             "models": EXPECTED_LONG_EXPERIMENT_MODELS,
-            "prompt_version": "long-video-ab-v2",
+            "prompt_version": "long-video-ab-v3",
             "qwen_video_projection_version": QWEN_VIDEO_PROJECTION_VERSION,
             "chunk": {
                 "version": "long-video-chunks-v1",
@@ -111,6 +111,55 @@ def _manifest(tmp_path: Path) -> LongExperimentManifest:
             },
         }
     )
+
+
+def test_runtime_config_keeps_bounded_asr_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class RecordingAsrClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(long_cli, "_verify_explicit_proxy", lambda _proxy: None)
+    monkeypatch.setattr(long_cli, "resolve_long_addresses", lambda _host: [])
+    monkeypatch.setattr(
+        long_cli,
+        "require_long_proxy_for_fake_ip",
+        lambda _addresses, _proxy: None,
+    )
+    monkeypatch.setattr(long_cli, "_required_env", lambda _name: "test-key")
+    monkeypatch.setattr(long_cli, "LongSeedMediaProvider", lambda **_kwargs: object())
+    monkeypatch.setattr(long_cli, "LongQwenVlProvider", lambda **_kwargs: object())
+    monkeypatch.setattr(long_cli, "LongProxyVolcAsrClient", RecordingAsrClient)
+    monkeypatch.setattr(long_cli, "LongAsrMediaProvider", lambda client: client)
+
+    long_cli._build_runtime()
+
+    assert captured["pace_audio"] is False
+    assert captured["retry_delays"] == (1.0, 2.0)
+
+
+def test_representative_source_maps_local_contact_sheet_times_to_source_clock(
+    tmp_path: Path,
+) -> None:
+    source = _manifest(tmp_path).sources[0].model_copy(
+        update={"representative_start_seconds": 300.0}
+    )
+    prepared = long_cli._prepared_representative_source(
+        source,
+        ProbeMedia(tmp_path / "av.mp4", tmp_path / "silent.mp4", tmp_path / "audio.wav"),
+        SimpleNamespace(
+            audio_path=tmp_path / "audio.wav",
+            contact_sheet_path=tmp_path / "sheet.jpg",
+            contact_sheet_timestamps=(0.0, 15.0, 30.0, 45.0),
+        ),
+    )
+
+    chunk = prepared.chunks[0]
+    assert (chunk.chunk.start_seconds, chunk.chunk.end_seconds) == (300.0, 360.0)
+    assert chunk.frame_times_seconds == (300.0, 315.0, 330.0, 345.0)
 
 
 @pytest.mark.asyncio
@@ -453,6 +502,112 @@ def test_calibration_receipt_requires_a_contiguous_safe_limit_and_freshness(
 
     with pytest.raises(RuntimeError, match="calibration receipt has expired"):
         long_cli._load_calibrated_limit(manifest)
+
+
+def test_failed_calibration_receipt_preserves_only_safe_trial_diagnostics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    receipt = long_cli.LongCalibrationReceipt(
+        status="FAIL",
+        created_at=datetime.now(UTC),
+        manifest_sha256=long_cli._file_sha256_from_manifest(manifest),
+        prompt_sha256=manifest.prompt_sha256,
+        provider_concurrency_limit=None,
+        attempted_limits=[1],
+        failure={"stage": "capacity_1", "error_code": "provider_error"},
+        trial_summaries=[
+            long_cli.LongCalibrationTrialSummary(
+                provider_concurrency_limit=1,
+                passed=False,
+                runs=[
+                    long_cli.LongCalibrationRunSummary(
+                        source_id="seven-minute-rdl",
+                        arm=ArmId.SEED_CONTACT_SHEET,
+                        run_index=1,
+                        status=LongRunStatus.PROVIDER_ERROR,
+                        error_code="provider_error",
+                        full_coverage=False,
+                        cleanup_ok=False,
+                    )
+                ],
+            )
+        ],
+    )
+
+    payload = receipt.model_dump_json()
+    assert '"provider_concurrency_limit":null' in payload
+    assert '"error_code":"provider_error"' in payload
+    assert "private provider detail" not in payload
+    with pytest.raises(ValueError, match="cannot select a provider limit"):
+        long_cli.LongCalibrationReceipt(
+            status="FAIL",
+            created_at=datetime.now(UTC),
+            manifest_sha256=long_cli._file_sha256_from_manifest(manifest),
+            prompt_sha256=manifest.prompt_sha256,
+            provider_concurrency_limit=1,
+            attempted_limits=[1],
+            failure={"stage": "capacity_1", "error_code": "provider_error"},
+            trial_summaries=[],
+        )
+
+
+def test_calibrate_command_writes_a_safe_failed_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    failed_receipt = long_cli.LongCalibrationReceipt(
+        status="FAIL",
+        created_at=datetime.now(UTC),
+        manifest_sha256=long_cli._file_sha256_from_manifest(manifest),
+        prompt_sha256=manifest.prompt_sha256,
+        provider_concurrency_limit=None,
+        attempted_limits=[1],
+        failure={"stage": "capacity_1", "error_code": "provider_error"},
+        trial_summaries=[
+            long_cli.LongCalibrationTrialSummary(
+                provider_concurrency_limit=1,
+                passed=False,
+                runs=[
+                    long_cli.LongCalibrationRunSummary(
+                        source_id="seven-minute-rdl",
+                        arm=ArmId.SEED_CONTACT_SHEET,
+                        run_index=1,
+                        status=LongRunStatus.PROVIDER_ERROR,
+                        error_code="provider_error",
+                        full_coverage=False,
+                        cleanup_ok=False,
+                    )
+                ],
+            )
+        ],
+    )
+
+    async def failed_calibration(*_args: object, **_kwargs: object) -> object:
+        return failed_receipt
+
+    monkeypatch.setattr(long_cli, "_load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(long_cli, "_load_env_file", lambda _path: None)
+    monkeypatch.setattr(long_cli, "verify_long_source_media", lambda _manifest: None)
+    monkeypatch.setattr(long_cli, "_validate_preflight_receipt", lambda _manifest: None)
+    monkeypatch.setattr(long_cli, "_build_runtime", lambda: object())
+    monkeypatch.setattr(long_cli, "_run_calibration", failed_calibration)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["long-video", "calibrate", "--manifest", "manifest.json", "--real"],
+    )
+
+    assert long_cli.main() == 1
+    receipt = long_cli.LongCalibrationReceipt.model_validate_json(
+        long_cli._calibration_receipt_path(manifest).read_text(encoding="utf-8")
+    )
+    assert receipt.status == "FAIL"
+    assert receipt.failure == {"stage": "capacity_1", "error_code": "provider_error"}
 
 
 @pytest.mark.asyncio

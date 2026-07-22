@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from hakimi_analysis.benchmark.long_contract import QWEN_VIDEO_PROJECTION_FPS
 from hakimi_analysis.benchmark.long_execution import retry_long_operation
 from hakimi_analysis.benchmark.long_models import EXPECTED_LONG_EXPERIMENT_MODELS
 from hakimi_analysis.benchmark.long_transport import (
@@ -386,7 +387,7 @@ class LongQwenVlProvider:
                         {
                             "role": "user",
                             "content": [
-                                {"video": handle.handle_id, "fps": 1},
+                                {"video": handle.handle_id, "fps": QWEN_VIDEO_PROJECTION_FPS},
                                 {"text": prompt + _RAW_JSON_SUFFIX},
                             ],
                         }

@@ -24,9 +24,19 @@ UNIQUE_ACTION_TASK_INSTRUCTIONS = (
     + json.dumps(CandidateEnvelope.model_json_schema(), ensure_ascii=False)
 )
 
+# Fusion receives chunk-local copies of both ASR and visual evidence in v3.
+# Keeping the clock contract in the versioned task text makes its digest change
+# together with the behavior, rather than silently changing v2 after results
+# have been recorded.
+CHUNK_RELATIVE_FUSION_TASK_NOTE = (
+    "\nFor long-video chunk fusion, all evidence and returned timestamps use the "
+    "chunk-relative clock defined by the accompanying time contract."
+)
+
 LONG_VIDEO_PROMPTS = {
     "long-video-ab-v1": TASK_INSTRUCTIONS,
     "long-video-ab-v2": UNIQUE_ACTION_TASK_INSTRUCTIONS,
+    "long-video-ab-v3": UNIQUE_ACTION_TASK_INSTRUCTIONS + CHUNK_RELATIVE_FUSION_TASK_NOTE,
 }
 
 
@@ -45,34 +55,33 @@ def long_fusion_prompt(
     transcript: dict[str, object],
     visual: CandidateEnvelope | None,
     *,
-    source_window: tuple[float, float] | None = None,
+    chunk_duration_seconds: float | None = None,
     instructions: str,
 ) -> str:
-    """Build a source-clock fusion request without changing native-AV prompts."""
+    """Build a chunk-clock fusion request without changing native-AV prompts."""
 
     evidence: dict[str, object] = {
         "transcript": transcript,
         "visual_candidates": (visual.model_dump(mode="json") if visual is not None else None),
     }
     time_instruction = ""
-    if source_window is not None:
-        window_start, window_end = source_window
-        if window_start < 0 or window_end <= window_start:
-            raise ValueError("fusion source window is invalid")
+    if chunk_duration_seconds is not None:
+        if chunk_duration_seconds <= 0:
+            raise ValueError("fusion chunk duration is invalid")
         evidence["time_contract"] = {
-            "coordinate_system": "absolute_source_video_seconds",
+            "coordinate_system": "chunk_relative_seconds",
             "allowed_window": {
-                "start_seconds": window_start,
-                "end_seconds": window_end,
+                "start_seconds": 0,
+                "end_seconds": chunk_duration_seconds,
             },
             "rule": (
-                "Return only absolute source-video seconds inside this window; "
-                "never reset time to zero for a chunk."
+                "Evidence timestamps and returned timestamps are chunk-relative "
+                "seconds inside this window."
             ),
         }
         time_instruction = (
-            "\nAll start_seconds/end_seconds must be absolute source-video seconds; "
-            "never use a chunk-relative clock."
+            "\nAll start_seconds/end_seconds must be chunk-relative seconds inside "
+            "the allowed window."
         )
     return (
         instructions

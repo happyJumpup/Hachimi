@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from hakimi_analysis.benchmark.long_contract import QWEN_VIDEO_PROJECTION_FPS
 from hakimi_analysis.benchmark.long_models import EXPECTED_LONG_EXPERIMENT_MODELS
 from hakimi_analysis.benchmark.long_real_providers import (
     LongAsrMediaProvider,
@@ -161,7 +162,9 @@ async def test_long_qwen_uses_unique_object_keys_and_local_json_schema_only(
     assert isinstance(input_value, dict)
     messages = input_value["messages"]
     assert isinstance(messages, list)
-    text = messages[0]["content"][1]["text"]
+    content = messages[0]["content"]
+    assert content[0]["fps"] == QWEN_VIDEO_PROJECTION_FPS
+    text = content[1]["text"]
     assert "Do not use Markdown code fences" in text
 
 

@@ -182,12 +182,14 @@ class LongPreflightReceipt(StrictModel):
 
 class LongCalibrationReceipt(StrictModel):
     version: int = 1
-    status: str
+    status: Literal["PASS", "FAIL"]
     created_at: datetime
     manifest_sha256: str
     prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    provider_concurrency_limit: int = Field(ge=1, le=3)
+    provider_concurrency_limit: int | None = Field(default=None, ge=1, le=3)
     attempted_limits: list[int]
+    failure: dict[str, str] | None = None
+    trial_summaries: list["LongCalibrationTrialSummary"] = Field(default_factory=list)
     qwen_lifecycle_audit: list[LongMediaLifecycleRecord] = Field(default_factory=list)
     terminal_unsafe_qwen_lifecycle_audit: list[LongMediaLifecycleRecord] = Field(
         default_factory=list
@@ -195,6 +197,29 @@ class LongCalibrationReceipt(StrictModel):
 
     @model_validator(mode="after")
     def validate_attempted_limits(self) -> "LongCalibrationReceipt":
+        if self.status == "FAIL":
+            if self.provider_concurrency_limit is not None:
+                raise ValueError("failed calibration cannot select a provider limit")
+            if self.failure is None or set(self.failure) != {"stage", "error_code"}:
+                raise ValueError("failed calibration requires a safe failure summary")
+            if not _ERROR_CODE.fullmatch(self.failure["stage"]) or not _ERROR_CODE.fullmatch(
+                self.failure["error_code"]
+            ):
+                raise ValueError("failed calibration failure summary is invalid")
+            if self.attempted_limits != list(range(1, len(self.attempted_limits) + 1)):
+                raise ValueError("failed calibration attempted limits are not contiguous")
+            if [summary.provider_concurrency_limit for summary in self.trial_summaries] != (
+                self.attempted_limits
+            ):
+                raise ValueError("failed calibration trial summaries do not match attempted limits")
+            if any(summary.passed for summary in self.trial_summaries):
+                raise ValueError("failed calibration cannot contain a safe trial")
+            return self
+
+        if self.provider_concurrency_limit is None:
+            raise ValueError("passing calibration requires a provider concurrency limit")
+        if self.failure is not None:
+            raise ValueError("passing calibration cannot contain a failure summary")
         terminal_attempt = min(self.provider_concurrency_limit + 1, 3)
         expected = list(range(1, terminal_attempt + 1))
         if self.attempted_limits != expected:
@@ -233,6 +258,32 @@ class LongCalibrationReceipt(StrictModel):
         ):
             raise ValueError("long-video terminal unsafe Qwen lifecycle audit is invalid")
         return self
+
+
+class LongCalibrationRunSummary(StrictModel):
+    """Sanitized terminal status for one capability trial arm."""
+
+    source_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
+    arm: ArmId
+    run_index: int = Field(ge=1, le=3)
+    status: LongRunStatus
+    error_code: str | None = Field(default=None, pattern=r"^[a-z0-9_]{1,64}$")
+    full_coverage: bool
+    cleanup_ok: bool
+
+
+class LongCalibrationTrialSummary(StrictModel):
+    """A safe calibration verdict without candidate or provider-response content."""
+
+    provider_concurrency_limit: int = Field(ge=1, le=3)
+    passed: bool
+    runs: list[LongCalibrationRunSummary] = Field(min_length=1)
+
+
+class LongCalibrationNoSafeLimit(RuntimeError):
+    def __init__(self, attempted_limits: Sequence[int]) -> None:
+        self.attempted_limits = list(attempted_limits)
+        super().__init__("long-video concurrency calibration has no safe provider limit")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -335,10 +386,17 @@ def main() -> int:
     if args.command == "calibrate":
         verify_long_source_media(manifest)
         _validate_preflight_receipt(manifest)
-        runtime = _build_runtime()
-        calibration_receipt = asyncio.run(
-            _run_calibration(manifest, runtime, journal=_lifecycle_journal(manifest))
-        )
+        try:
+            runtime = _build_runtime()
+            calibration_receipt = asyncio.run(
+                _run_calibration(manifest, runtime, journal=_lifecycle_journal(manifest))
+            )
+        except Exception as error:
+            calibration_receipt = _failed_calibration_receipt(
+                manifest,
+                stage="runtime",
+                error_code=_safe_error_code(error),
+            )
         _write_json(
             _calibration_receipt_path(manifest),
             calibration_receipt.model_dump(mode="json"),
@@ -349,10 +407,12 @@ def main() -> int:
                     "status": calibration_receipt.status,
                     "scope": "long_video_concurrency_calibration",
                     "provider_concurrency_limit": calibration_receipt.provider_concurrency_limit,
+                    "failure": calibration_receipt.failure,
                 }
-            )
+            ),
+            file=sys.stderr if calibration_receipt.status != "PASS" else sys.stdout,
         )
-        return 0
+        return 0 if calibration_receipt.status == "PASS" else 1
     if args.command == "run":
         if args.timeout_seconds <= 0:
             raise RuntimeError("long-video run timeout must be positive")
@@ -532,7 +592,7 @@ def _build_runtime() -> LongBenchmarkRuntime:
                 resource_id="volc.seedasr.sauc.duration",
                 url=asr_url,
                 pace_audio=False,
-                retry_delays=(),
+                retry_delays=(1.0, 2.0),
                 proxy_url=proxy_url,
             )
         ),
@@ -1212,6 +1272,26 @@ def _failed_preflight_receipt(
     )
 
 
+def _failed_calibration_receipt(
+    manifest: LongExperimentManifest,
+    *,
+    stage: str,
+    error_code: str,
+    attempted_limits: Sequence[int] = (),
+    trial_summaries: Sequence[LongCalibrationTrialSummary] = (),
+) -> LongCalibrationReceipt:
+    return LongCalibrationReceipt(
+        status="FAIL",
+        created_at=datetime.now(UTC),
+        manifest_sha256=_file_sha256_from_manifest(manifest),
+        prompt_sha256=manifest.prompt_sha256,
+        provider_concurrency_limit=None,
+        attempted_limits=list(attempted_limits),
+        failure={"stage": stage, "error_code": error_code},
+        trial_summaries=list(trial_summaries),
+    )
+
+
 async def calibrate_provider_concurrency(
     maximum: int,
     trial: Callable[[int], Awaitable[bool]],
@@ -1226,7 +1306,7 @@ async def calibrate_provider_concurrency(
             break
         passed = candidate
     if passed == 0:
-        raise RuntimeError("long-video concurrency calibration has no safe provider limit")
+        raise LongCalibrationNoSafeLimit(attempted)
     return passed, attempted
 
 
@@ -1239,6 +1319,7 @@ async def _run_calibration(
     if journal is None:
         raise LongExecutionError("qwen_lifecycle_sink_missing")
     qwen_lifecycle_by_limit: dict[int, list[LongMediaLifecycleRecord]] = {}
+    trial_summaries: list[LongCalibrationTrialSummary] = []
     active_capacity: int | None = None
 
     def lifecycle_sink(key: LongRunKey, record: LongMediaLifecycleRecord) -> None:
@@ -1293,14 +1374,25 @@ async def _run_calibration(
                         for key in keys
                     )
                 )
-                return all(
+                passed = all(
                     run.status == LongRunStatus.COMPLETED and run.full_coverage and run.cleanup_ok
                     for run in runs
                 )
+                trial_summaries.append(_calibration_trial_summary(capacity, runs, passed=passed))
+                return passed
             finally:
                 active_capacity = None
 
-        limit, attempted = await calibrate_provider_concurrency(3, trial)
+        try:
+            limit, attempted = await calibrate_provider_concurrency(3, trial)
+        except LongCalibrationNoSafeLimit as error:
+            return _failed_calibration_receipt(
+                manifest,
+                stage=f"capacity_{error.attempted_limits[-1]}",
+                error_code=_calibration_failure_code(trial_summaries[-1]),
+                attempted_limits=error.attempted_limits,
+                trial_summaries=trial_summaries,
+            )
     safe_lifecycle, terminal_unsafe_lifecycle = _partition_calibration_lifecycle(
         qwen_lifecycle_by_limit,
         selected_limit=limit,
@@ -1313,9 +1405,45 @@ async def _run_calibration(
         prompt_sha256=manifest.prompt_sha256,
         provider_concurrency_limit=limit,
         attempted_limits=attempted,
+        trial_summaries=trial_summaries,
         qwen_lifecycle_audit=safe_lifecycle,
         terminal_unsafe_qwen_lifecycle_audit=terminal_unsafe_lifecycle,
     )
+
+
+def _calibration_trial_summary(
+    capacity: int,
+    runs: Sequence[LongVideoRun],
+    *,
+    passed: bool,
+) -> LongCalibrationTrialSummary:
+    return LongCalibrationTrialSummary(
+        provider_concurrency_limit=capacity,
+        passed=passed,
+        runs=[
+            LongCalibrationRunSummary(
+                source_id=run.source_id,
+                arm=run.arm,
+                run_index=run.run_index,
+                status=run.status,
+                error_code=run.error_code,
+                full_coverage=run.full_coverage,
+                cleanup_ok=run.cleanup_ok,
+            )
+            for run in runs
+        ],
+    )
+
+
+def _calibration_failure_code(summary: LongCalibrationTrialSummary) -> str:
+    for run in summary.runs:
+        if run.status != LongRunStatus.COMPLETED:
+            return run.error_code or run.status.value
+        if not run.full_coverage:
+            return "incomplete_coverage"
+        if not run.cleanup_ok:
+            return "cleanup_error"
+    return "calibration_failed"
 
 
 def _partition_calibration_lifecycle(
@@ -1395,8 +1523,8 @@ def _prepared_representative_source(
     chunk = LongVideoChunk(
         source_id=source.source_id,
         index=0,
-        start_seconds=0,
-        end_seconds=60,
+        start_seconds=source.representative_start_seconds,
+        end_seconds=source.representative_start_seconds + 60,
         duration_seconds=60,
     )
     return LongPreparedSource(
@@ -1408,7 +1536,10 @@ def _prepared_representative_source(
                 chunk=chunk,
                 silent_video_path=probe.silent_video_path,
                 contact_sheet_path=media.contact_sheet_path,
-                frame_times_seconds=media.contact_sheet_timestamps,
+                frame_times_seconds=tuple(
+                    round(source.representative_start_seconds + timestamp, 3)
+                    for timestamp in media.contact_sheet_timestamps
+                ),
             ),
         ),
     )
@@ -1943,7 +2074,7 @@ def _load_calibrated_limit(manifest: LongExperimentManifest) -> int:
         )
     except Exception as error:
         raise RuntimeError("long-video calibration receipt is missing or invalid") from error
-    if receipt.status != "PASS":
+    if receipt.status != "PASS" or receipt.provider_concurrency_limit is None:
         raise RuntimeError("long-video concurrency calibration did not pass")
     if receipt.manifest_sha256 != _file_sha256_from_manifest(manifest):
         raise RuntimeError("long-video calibration receipt does not match the manifest")

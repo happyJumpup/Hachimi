@@ -28,7 +28,7 @@ def valid_manifest_payload(tmp_path: Path) -> dict[str, object]:
     return {
         "version": 1,
         "models": dict(EXPECTED_LONG_EXPERIMENT_MODELS),
-        "prompt_version": "long-video-ab-v2",
+        "prompt_version": "long-video-ab-v3",
         "qwen_video_projection_version": QWEN_VIDEO_PROJECTION_VERSION,
         "chunk": {
             "version": "long-video-chunks-v1",
@@ -124,7 +124,7 @@ def test_manifest_rejects_non_frozen_protocol_or_duplicate_sources(tmp_path: Pat
     payload = valid_manifest_payload(tmp_path)
     payload["prompt_version"] = "unfrozen-prompt-v1"
 
-    with pytest.raises(ValidationError, match="long-video-ab-v2"):
+    with pytest.raises(ValidationError, match="long-video-ab-v3"):
         LongExperimentManifest.model_validate(payload)
 
     payload = valid_manifest_payload(tmp_path)
@@ -137,7 +137,7 @@ def test_manifest_rejects_non_frozen_protocol_or_duplicate_sources(tmp_path: Pat
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("prompt_version", "long-video-ab-v1", "long-video-ab-v2"),
+        ("prompt_version", "long-video-ab-v2", "long-video-ab-v3"),
         ("gold_version", "seven-v1", "long-video-gold-v2"),
     ],
 )

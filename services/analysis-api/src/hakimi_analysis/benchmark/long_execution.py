@@ -33,6 +33,27 @@ def normalize_chunk_candidate(
     raise LongExecutionError("chunk_candidate_time_invalid")
 
 
+def normalize_chunk_relative_candidate(
+    chunk: LongVideoChunk,
+    candidate: BenchmarkCandidate,
+) -> BenchmarkCandidate:
+    """Map an uploaded clip's explicit local clock to source-video seconds."""
+
+    relative = (
+        candidate.start_seconds >= -1e-6
+        and candidate.end_seconds <= chunk.duration_seconds + 1e-6
+    )
+    if not relative:
+        raise LongExecutionError("chunk_relative_candidate_time_invalid")
+    return candidate.model_copy(
+        update={
+            "start_seconds": candidate.start_seconds + chunk.start_seconds,
+            "end_seconds": candidate.end_seconds + chunk.start_seconds,
+            "weight_kg": None,
+        }
+    )
+
+
 def deduplicate_chunk_candidates(
     candidates: Sequence[BenchmarkCandidate],
 ) -> list[BenchmarkCandidate]:

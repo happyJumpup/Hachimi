@@ -171,8 +171,8 @@ class LongExperimentManifest(StrictModel):
             raise ValueError("long experiment model IDs must exactly match the frozen protocol")
         if self.repetitions != 3:
             raise ValueError("long experiment requires exactly three repetitions")
-        if self.prompt_version != "long-video-ab-v2":
-            raise ValueError("long experiment requires long-video-ab-v2")
+        if self.prompt_version != "long-video-ab-v3":
+            raise ValueError("long experiment requires long-video-ab-v3")
         if self.qwen_video_projection_version != QWEN_VIDEO_PROJECTION_VERSION:
             raise ValueError("long experiment requires the frozen Qwen video projection")
         long_video_prompt(self.prompt_version)

@@ -108,6 +108,7 @@ class FakeSeed:
 
     async def complete_text(self, prompt: str) -> ProviderInference:
         assert "transcript" in prompt
+        assert '"coordinate_system": "chunk_relative_seconds"' in prompt
         self.fusion_prompts.append(prompt)
         return ProviderInference(
             envelope=CandidateEnvelope(actions=[_candidate_for_prompt(prompt)])
@@ -139,9 +140,9 @@ class FakeQwen:
         )
 
     async def analyze(self, _handle: MediaHandle, prompt: str) -> ProviderInference:
-        assert "window" in prompt
+        assert '"coordinate_system": "chunk_relative_seconds"' in prompt
         return ProviderInference(
-            envelope=CandidateEnvelope(actions=[_candidate_for_prompt(prompt)])
+            envelope=CandidateEnvelope(actions=[_candidate(5, 15)])
         )
 
     async def cleanup(self, handle: MediaHandle) -> None:
@@ -196,6 +197,30 @@ class WeightedSeed(FakeSeed):
         return ProviderInference(
             envelope=CandidateEnvelope(actions=[_candidate(5, 15, weight_kg=20)])
         )
+
+
+class RelativeVisualSeed(FakeSeed):
+    async def analyze_contact_sheet(
+        self,
+        _image_path: Path,
+        *,
+        frame_times_seconds: tuple[float, ...],
+        window_start_seconds: float,
+        window_end_seconds: float,
+        prompt: str,
+    ) -> ProviderInference:
+        del frame_times_seconds, window_start_seconds, window_end_seconds, prompt
+        return ProviderInference(envelope=CandidateEnvelope(actions=[_candidate(5, 15)]))
+
+
+class RelativeFusionSeed(FakeSeed):
+    async def complete_text(self, _prompt: str) -> ProviderInference:
+        return ProviderInference(envelope=CandidateEnvelope(actions=[_candidate(5, 15)]))
+
+
+class OutOfRangeFusionSeed(FakeSeed):
+    async def complete_text(self, _prompt: str) -> ProviderInference:
+        return ProviderInference(envelope=CandidateEnvelope(actions=[_candidate(65, 75)]))
 
 
 class SlowVisualSeed(FakeSeed):
@@ -436,7 +461,7 @@ async def test_seed_arm_runs_full_asr_contact_sheet_fusion_and_maps_absolute_tim
 
 
 @pytest.mark.asyncio
-async def test_v2_seed_arm_returns_one_candidate_for_repeated_same_action_chunks(
+async def test_v3_seed_arm_returns_one_candidate_for_repeated_same_action_chunks(
     tmp_path: Path,
 ) -> None:
     executor = LongArmExecutor(
@@ -444,7 +469,7 @@ async def test_v2_seed_arm_returns_one_candidate_for_repeated_same_action_chunks
         providers=LongProviderBundle(asr=FakeAsr(), seed=FakeSeed(), qwen=FakeQwen()),
         asr_model_id="asr",
         qwen_model_id="qwen",
-        prompt_version="long-video-ab-v2",
+        prompt_version="long-video-ab-v3",
     )
 
     result = await executor.execute(
@@ -530,6 +555,81 @@ async def test_qwen_arm_cleans_each_temporary_handle_and_keeps_absolute_times(
 
 
 @pytest.mark.asyncio
+async def test_qwen_arm_maps_relative_clip_times_for_later_source_chunks(tmp_path: Path) -> None:
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_overlapped_source(tmp_path)},
+        providers=LongProviderBundle(asr=FakeAsr(), seed=FakeSeed(), qwen=FakeQwen()),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+        lifecycle_sink=lambda _key, _record: None,
+    )
+
+    result = await executor.execute(
+        LongRunKey("seven", ArmId.QWEN_VIDEO, 1),
+        ProviderPermits({"asr": 1, "seed": 2, "qwen": 1}),
+    )
+
+    assert [(item.start_seconds, item.end_seconds) for item in result.candidates] == [
+        (5, 15),
+        (55, 65),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_seed_visual_time_contract_failure_identifies_the_visual_stage(
+    tmp_path: Path,
+) -> None:
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_overlapped_source(tmp_path)},
+        providers=LongProviderBundle(asr=FakeAsr(), seed=RelativeVisualSeed(), qwen=FakeQwen()),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+    )
+
+    with pytest.raises(LongExecutionFailure, match="seed_visual_candidate_time_invalid"):
+        await executor.execute(
+            LongRunKey("seven", ArmId.SEED_CONTACT_SHEET, 1),
+            ProviderPermits({"asr": 1, "seed": 2, "qwen": 1}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_seed_fusion_time_contract_failure_identifies_the_fusion_stage(
+    tmp_path: Path,
+) -> None:
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_overlapped_source(tmp_path)},
+        providers=LongProviderBundle(asr=FakeAsr(), seed=OutOfRangeFusionSeed(), qwen=FakeQwen()),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+    )
+
+    with pytest.raises(LongExecutionFailure, match="fusion_relative_candidate_time_invalid"):
+        await executor.execute(
+            LongRunKey("seven", ArmId.SEED_CONTACT_SHEET, 1),
+            ProviderPermits({"asr": 1, "seed": 2, "qwen": 1}),
+        )
+
+
+@pytest.mark.asyncio
+async def test_seed_fusion_maps_relative_times_for_later_source_chunks(tmp_path: Path) -> None:
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_overlapped_source(tmp_path)},
+        providers=LongProviderBundle(asr=FakeAsr(), seed=RelativeFusionSeed(), qwen=FakeQwen()),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+    )
+
+    result = await executor.execute(
+        LongRunKey("seven", ArmId.SEED_CONTACT_SHEET, 1),
+        ProviderPermits({"asr": 1, "seed": 2, "qwen": 1}),
+    )
+
+    assert [(item.start_seconds, item.end_seconds) for item in result.candidates] == [
+        (5, 15),
+        (55, 65),
+    ]
+
 async def test_qwen_upload_is_not_replayed_after_an_ambiguous_transport_failure(
     tmp_path: Path,
 ) -> None:
@@ -746,10 +846,10 @@ async def test_completed_coverage_counts_the_source_union_not_chunk_overlap(
 
     assert result.completed_coverage_seconds == 100
     assert any(
-        '"coordinate_system": "absolute_source_video_seconds"' in prompt
+        '"coordinate_system": "chunk_relative_seconds"' in prompt
         for prompt in seed.fusion_prompts
     )
-    assert any('"start_seconds": 50.0' in prompt for prompt in seed.fusion_prompts)
+    assert all('"start_seconds": 50.0' not in prompt for prompt in seed.fusion_prompts)
 
 
 @pytest.mark.asyncio

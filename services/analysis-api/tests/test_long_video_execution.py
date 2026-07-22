@@ -7,6 +7,7 @@ from hakimi_analysis.benchmark.long_execution import (
     LongExecutionError,
     deduplicate_chunk_candidates,
     normalize_chunk_candidate,
+    normalize_chunk_relative_candidate,
     retry_long_operation,
 )
 from hakimi_analysis.benchmark.long_models import LongVideoChunk
@@ -66,6 +67,22 @@ def test_normalize_chunk_candidate_accepts_absolute_events_inside_a_low_source_r
     normalized = normalize_chunk_candidate(chunk, candidate(55, 58))
 
     assert (normalized.start_seconds, normalized.end_seconds) == (55, 58)
+
+
+def test_normalize_chunk_relative_candidate_maps_the_uploaded_clip_to_source_clock() -> None:
+    chunk = LongVideoChunk(
+        source_id="seven",
+        index=2,
+        start_seconds=100,
+        end_seconds=160,
+        duration_seconds=60,
+    )
+
+    normalized = normalize_chunk_relative_candidate(chunk, candidate(5, 20))
+
+    assert (normalized.start_seconds, normalized.end_seconds) == (105, 120)
+    with pytest.raises(LongExecutionError, match="chunk_relative_candidate_time_invalid"):
+        normalize_chunk_relative_candidate(chunk, candidate(50, 70))
 
 
 def test_deduplicate_chunk_candidates_merges_overlap_without_inventing_parameters() -> None:
