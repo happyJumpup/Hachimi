@@ -153,6 +153,7 @@ def validate(plan: dict[str, Any]) -> None:
             "local_upload_enabled",
             "local_analysis_max_seconds",
             "local_upload_max_bytes",
+            "analysis_evidence_timeout_seconds",
             "analysis_chunk_timeout_seconds",
             "analysis_visual_chunk_seconds",
             "analysis_visual_overlap_seconds",
@@ -293,6 +294,8 @@ def validate(plan: dict[str, Any]) -> None:
         fail("local analysis must remain capped at 300 seconds")
     if runtime.get("local_upload_max_bytes") != 268435456:
         fail("local upload must remain capped at 256 MiB")
+    if runtime.get("analysis_evidence_timeout_seconds") != 170:
+        fail("shared evidence deadline must remain 170 seconds")
     if runtime.get("analysis_chunk_timeout_seconds") != 20:
         fail("visual chunk timeout must remain 20 seconds")
     if runtime.get("analysis_visual_chunk_seconds") != 60:

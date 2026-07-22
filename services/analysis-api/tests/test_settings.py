@@ -34,7 +34,7 @@ def test_default_development_cors_origins_match_vite_loopback_hosts() -> None:
 def test_analysis_evidence_budget_has_a_bounded_positive_default() -> None:
     settings = Settings(_env_file=None)
 
-    assert settings.analysis_evidence_timeout_seconds == 11.5
+    assert settings.analysis_evidence_timeout_seconds == 170.0
     assert settings.analysis_chunk_timeout_seconds == 20.0
     assert settings.analysis_visual_chunk_seconds == 60.0
     assert settings.analysis_visual_overlap_seconds == 10.0

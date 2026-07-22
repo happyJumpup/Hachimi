@@ -1,8 +1,8 @@
 # TrainPal 竞赛版发布、验收与回滚手册
 
-> 状态：CloudBase Run 基础合同已审计；服务创建、素材接入、公网 canary 与发布验收尚未留有通过记录
+> 状态：CloudBase Run 版本 A 已完成 OA 私有构建并通过签名 `/health`、`/ready`；真实视频、版本 B、公网 canary 与回滚演练仍待验收
 >
-> 更新日期：2026-07-22
+> 更新日期：2026-07-23
 >
 > 适用范围：独立 Web、本地视频上传、受控快速体验、真实 Provider 与腾讯云 CloudBase Run 临时竞赛入口
 
@@ -10,17 +10,17 @@
 
 ## 1. 当前发布结论
 
-截至 2026-07-22，仓库已经完成：
+截至 2026-07-23，仓库已经完成：
 
 - CloudBase Run 非秘密基础计划、预算上限、单实例安全边界和校验脚本；
 - 同源 SPA + FastAPI 镜像、健康／就绪、访问分级和测试 Provider 隔离的工程基线；
-- 现有真实云内容理解 Provider 的本地受控样本 smoke 基线。
+- 现有真实云内容理解 Provider 的本地受控样本 smoke 基线；
+- 版本 A 的 OA 私有源码构建、生产环境变量名集合、签名 FFmpeg 收据和签名 HTTP API `/health`、`/ready` 探针。
 
 尚未完成或没有可审计通过记录：
 
-- `trainpal-demo` 服务的私有部署与不可变镜像 digest 登记；
 - 最终本地上传／受控媒体、来源清单、smoke 标注和 FFmpeg 审计材料接入；
-- CloudBase 内部路径上的 `/ready`、真实分析和清理门禁；
+- CloudBase 私有路径上的真实分析、SSE 和清理门禁；
 - 未公布公网 canary、三路真实并发、超额 429、第二浏览器、回滚与恢复；
 - 最终公网链接公告与真机验收。
 
@@ -56,7 +56,7 @@ flowchart LR
 
 | 项目 | 值 |
 | --- | --- |
-| CloudBase 环境 | `bizhao-d8grp8yqd81759fbb`，`ap-shanghai` |
+| CloudBase 环境 | 由发布人从本地受控配置传入且不得提交；地域 `ap-shanghai` |
 | 服务名 | `trainpal-demo` |
 | 容器端口 | `8000` |
 | CPU / 内存 | 2 vCPU / 4 GiB |
@@ -106,20 +106,21 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `ARK_MODEL_ID` / `ARK_VISUAL_MODEL_ID` / `ARK_BASE_URL` | 使用候选版本实际验证值，发布记录只记模型 ID 与地址，不记 Key |
 | `VOLC_ASR_RESOURCE_ID` / `VOLC_ASR_URL` | 与现有豆包流式语音识别 2.0 权益一致 |
 | `LOCAL_UPLOAD_ENABLED` | `true`，但就绪和能力接口仍可失败关闭 |
-| `LOCAL_ANALYSIS_MAX_SECONDS` | 当前 CloudBase 基础计划值 `60`；后端冻结合同上限为 `300`，只能在对应切片合并并通过真实 Provider、恢复与清理门禁后提高 |
-| `LOCAL_UPLOAD_MAX_BYTES` | 与 CloudBase 和应用请求体上限协调，不能无界 |
+| `LOCAL_ANALYSIS_MAX_SECONDS` | `300`；首次分析必须覆盖完整源文件，超过 300 秒在 Provider 调用前拒绝 |
+| `LOCAL_UPLOAD_MAX_BYTES` | `268435456`（256 MiB） |
 | `RUN_TIMEOUT_SECONDS` | `180` |
 | `RUN_TTL_SECONDS` | `600` |
-| `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | 当前基线 `11.5`，变更需真实 smoke |
+| `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | `170`，为 180 秒外层上限预留 10 秒终态与清理时间 |
+| `ANALYSIS_CHUNK_TIMEOUT_SECONDS` | `20` |
+| `ANALYSIS_VISUAL_CHUNK_SECONDS` / `ANALYSIS_VISUAL_OVERLAP_SECONDS` | `60` / `10`，顺序单并发 |
 | `ANALYSIS_LATENCY_TARGET_MAX_SECONDS_PER_VIDEO_MINUTE` | 当前 smoke 门禁 `15`，不是公网 SLA |
 | `JUDGE_ANALYSIS_CONCURRENCY` | 计划 `3`，必须通过三路真实并发后才开放 |
 | `PUBLIC_ANALYSIS_CONCURRENCY` | `0` |
-| `TRUSTED_PROXY_CIDRS` | CloudBase 实际、最小可信入口网段；禁止全网段 |
+| `TRUSTED_PROXY_CIDRS` | 空；未验证代理网段前只使用直连对端地址 |
 | `CORS_ORIGINS` | 只允许精确同源 HTTPS 域名，不允许 `*` |
 | `WEB_STATIC_ROOT` | 构建后的 SPA 路径 |
 | `IMAGEIO_FFMPEG_EXE` | 审计后只读挂载的 FFmpeg 路径 |
-| `FFMPEG_EXPECTED_SHA256` | FFmpeg 文件 SHA-256 |
-| `FFMPEG_EXPECTED_CONFIGURATION_SHA256` | 完整 `configuration:` 行 SHA-256 |
+| `FFMPEG_BUILD_RECEIPT_PATH` | `/opt/trainpal/ffmpeg/receipt.json`；`/ready` 必须核对签名来源、配置和二进制哈希 |
 | `SOURCE_MANIFEST_PATH` / `SOURCE_MEDIA_ROOT` | 如启用受控来源，指向只读清单与缓存 |
 | `PUBLIC_MEDIA_BASE_URL` | 如启用受控来源，指向只读 HTTPS 媒体基址 |
 | `SMOKE_ANNOTATIONS_PATH` | 只读人工标注清单，不含转录或响应 |

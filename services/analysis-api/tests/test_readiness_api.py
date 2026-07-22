@@ -328,6 +328,7 @@ async def test_production_ready_rejects_legacy_hashes_without_signed_build_recei
         ("local_upload_enabled", False),
         ("local_analysis_max_seconds", 299),
         ("local_upload_max_bytes", 128 * 1024 * 1024),
+        ("analysis_evidence_timeout_seconds", 169),
         ("analysis_chunk_timeout_seconds", 19),
         ("analysis_visual_chunk_seconds", 50),
         ("analysis_visual_overlap_seconds", 5),

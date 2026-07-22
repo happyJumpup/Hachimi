@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     local_upload_enabled: bool = True
     local_analysis_max_seconds: float = Field(default=300, gt=0, le=300)
     local_upload_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
-    analysis_evidence_timeout_seconds: float = Field(default=11.5, gt=0)
+    analysis_evidence_timeout_seconds: float = Field(default=170.0, gt=0)
     analysis_chunk_timeout_seconds: float = Field(default=20.0, gt=0)
     analysis_visual_chunk_seconds: float = Field(default=60.0, gt=0, le=300)
     analysis_visual_overlap_seconds: float = Field(default=10.0, ge=0)

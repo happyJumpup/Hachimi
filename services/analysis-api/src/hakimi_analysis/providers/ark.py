@@ -91,8 +91,11 @@ class ArkResponsesClient:
         video_bytes = await self._read_inline_video(video_path)
         video_url = "data:video/mp4;base64," + base64.b64encode(video_bytes).decode("ascii")
         metadata = {
-            "window": window.model_dump(mode="json"),
-            "time_rule": "Return absolute source-video seconds within this window.",
+            "clip_timeline": window.model_dump(mode="json"),
+            "time_rule": (
+                "Return clip-local seconds within this timeline. The caller converts them "
+                "to source-video time."
+            ),
         }
         result = await self._structured_response(
             instructions=instructions,

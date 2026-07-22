@@ -318,8 +318,8 @@ async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
                                         "segments": [
                                             {
                                                 "action_name": "Drag Curl",
-                                                "start_seconds": 41,
-                                                "end_seconds": 51,
+                                                "start_seconds": 26,
+                                                "end_seconds": 36,
                                                 "visual_cue": "哑铃沿躯干后拉",
                                             }
                                         ]
@@ -343,11 +343,13 @@ async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
         )
         result = await client.locate_visual(
             video_path=video,
-            window=Segment(start_seconds=15, end_seconds=54),
+            window=Segment(start_seconds=0, end_seconds=39),
             instructions="visual skill contract",
         )
 
     assert result.segments[0].action_name == "Drag Curl"
+    assert result.segments[0].start_seconds == 26
+    assert result.segments[0].end_seconds == 36
     assert response.called
     response_payload = json.loads(response.calls[0].request.content)
     assert response_payload["model"] == "doubao-mini-test"
@@ -360,8 +362,52 @@ async def test_ark_inline_video_uses_visual_model_without_remote_file_upload(
     encoded_video = content[0]["video_url"].partition(",")[2]
     assert base64.b64decode(encoded_video) == b"video-bytes"
     metadata = json.loads(content[1]["text"])
-    assert metadata["window"] == {"start_seconds": 15.0, "end_seconds": 54.0}
+    assert metadata["clip_timeline"] == {"start_seconds": 0.0, "end_seconds": 39.0}
+    assert "clip-local" in metadata["time_rule"]
     assert len(respx.calls) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ark_inline_video_rejects_source_absolute_times_from_the_model(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "window.mp4"
+    video.write_bytes(b"video-bytes")
+    respx.post("https://ark.example/api/v3/responses").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "resp-source-clock",
+                "output_text": json.dumps(
+                    {
+                        "segments": [
+                            {
+                                "action_name": "Drag Curl",
+                                "start_seconds": 41,
+                                "end_seconds": 51,
+                                "visual_cue": "dumbbell movement",
+                            }
+                        ]
+                    }
+                ),
+            },
+        )
+    )
+
+    async with httpx.AsyncClient() as http_client:
+        client = ArkResponsesClient(
+            api_key="test-ark-key",
+            model_id="doubao-test",
+            base_url="https://ark.example/api/v3",
+            http_client=http_client,
+        )
+        with pytest.raises(ProviderSchemaError):
+            await client.locate_visual(
+                video_path=video,
+                window=Segment(start_seconds=0, end_seconds=39),
+                instructions="visual skill contract",
+            )
 
 
 @pytest.mark.asyncio

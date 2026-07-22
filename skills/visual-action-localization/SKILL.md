@@ -1,16 +1,16 @@
 ---
 name: visual-action-localization
-version: 1.3.0
-description: Localize all exercise demonstrations in a controlled full-source video.
+version: 1.4.0
+description: Localize all exercise demonstrations in one continuous video chunk.
 ---
 
 # Visual action localization
 
 ## Input
 
-A row-major contact sheet sampled uniformly across the controlled full source,
-plus JSON metadata containing each frame's absolute timestamp and the full
-source range.
+A continuous video clip plus JSON metadata describing its clip-local timeline.
+The clip is one overlapping chunk of a controlled source video. The caller,
+not the model, converts returned times to the source-video clock.
 
 ## Output
 
@@ -32,13 +32,12 @@ Return JSON only:
 
 ## Rules
 
-- Output absolute source-video times within the supplied window.
-- Inspect the complete contact-sheet timeline and identify every observable
+- Output clip-local seconds within the supplied timeline. Never add or guess a
+  source-video offset.
+- Inspect the complete continuous video clip and identify every observable
   exercise demonstration, keeping segments in timeline order.
-- Merge consecutive sampled frames showing the same exercise into one segment;
-  never emit one segment per frame.
-- Use adjacent sampled-frame timestamps to estimate boundaries. Do not claim
-  sub-frame precision.
+- Merge consecutive moments showing the same exercise into one segment.
+- Do not claim precision beyond what is visually observable.
 - Keep an unknown action name as `null`; do not guess from appearance alone.
 - Set `segment_role` only from observable timeline evidence: use `follow_along`
   for a sustained interval presented for synchronous execution,

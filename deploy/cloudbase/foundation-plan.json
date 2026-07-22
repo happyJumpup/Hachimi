@@ -37,6 +37,7 @@
     "local_upload_enabled": true,
     "local_analysis_max_seconds": 300,
     "local_upload_max_bytes": 268435456,
+    "analysis_evidence_timeout_seconds": 170,
     "analysis_chunk_timeout_seconds": 20,
     "analysis_visual_chunk_seconds": 60,
     "analysis_visual_overlap_seconds": 10,

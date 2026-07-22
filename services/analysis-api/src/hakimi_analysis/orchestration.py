@@ -160,8 +160,8 @@ class OrchestratedAnalysisPipeline:
         asr: SpeechRecognizer,
         ark: ArkAnalyzer,
         skills: SkillRepository,
-        evidence_timeout_seconds: float = 11.5,
-        visual_chunk_timeout_seconds: float | None = None,
+        evidence_timeout_seconds: float = 170,
+        visual_chunk_timeout_seconds: float = 20,
         visual_chunk_seconds: float = 60,
         visual_overlap_seconds: float = 10,
         run_timeout_seconds: float = 180,
@@ -173,14 +173,15 @@ class OrchestratedAnalysisPipeline:
         self._ark = ark
         self._skills = skills
         self._evidence_timeout_seconds = evidence_timeout_seconds
-        self._visual_chunk_timeout_seconds = (
-            evidence_timeout_seconds
-            if visual_chunk_timeout_seconds is None
-            else visual_chunk_timeout_seconds
-        )
+        self._visual_chunk_timeout_seconds = visual_chunk_timeout_seconds
         self._visual_chunk_seconds = visual_chunk_seconds
         self._visual_overlap_seconds = visual_overlap_seconds
-        if run_timeout_seconds <= 0 or completion_margin_seconds < 0:
+        if (
+            evidence_timeout_seconds <= 0
+            or visual_chunk_timeout_seconds <= 0
+            or run_timeout_seconds <= 0
+            or completion_margin_seconds < 0
+        ):
             raise ValueError("run budget and completion margin must be valid")
         if completion_margin_seconds >= run_timeout_seconds:
             raise ValueError("completion margin must be shorter than the run budget")
@@ -220,7 +221,12 @@ class OrchestratedAnalysisPipeline:
                 include_contact_sheet=False,
             ) as prepared:
                 speech_task = asyncio.create_task(
-                    self._timed_speech_branch(prepared, emit, deadline=evidence_deadline)
+                    self._timed_speech_branch(
+                        prepared,
+                        emit,
+                        deadline=evidence_deadline,
+                        source_offset_seconds=source.analysis_start_seconds,
+                    )
                 )
                 try:
                     visual_results = await self._analyze_visual_chunks(
@@ -247,12 +253,15 @@ class OrchestratedAnalysisPipeline:
             source.analysis_duration_seconds,
             visual_results.successful_windows,
             visual_results.failures,
+            source_offset_seconds=source.analysis_start_seconds,
         )
         if isinstance(speech_result, ProviderError) and not visual_segments and not coverage_gaps:
             coverage_gaps = [
                 CoverageGap(
-                    start_seconds=0,
-                    end_seconds=source.analysis_duration_seconds,
+                    start_seconds=source.analysis_start_seconds,
+                    end_seconds=(
+                        source.analysis_start_seconds + source.analysis_duration_seconds
+                    ),
                     reason=_coverage_gap_reason(speech_result),
                     retryable=True,
                 )
@@ -312,13 +321,15 @@ class OrchestratedAnalysisPipeline:
         emit: EmitCallback,
         *,
         deadline: float,
+        source_offset_seconds: float,
     ) -> list[SpeechSignal] | ProviderError:
         remaining_seconds = deadline - self._clock()
         if remaining_seconds <= 0:
             return ProviderError("timeout", "run budget exhausted before speech", retryable=True)
         try:
             async with asyncio.timeout(min(self._evidence_timeout_seconds, remaining_seconds)):
-                return await self._speech_branch(prepared, emit)
+                signals = await self._speech_branch(prepared, emit)
+                return _offset_speech_signals(signals, source_offset_seconds)
         except TimeoutError:
             return ProviderError("timeout", "speech evidence budget exceeded", retryable=True)
         except ProviderError as error:
@@ -343,6 +354,8 @@ class OrchestratedAnalysisPipeline:
         successful_windows: list[AnalysisWindow] = []
         failures: list[tuple[AnalysisWindow, ProviderError]] = []
         for index, window in enumerate(windows, start=1):
+            source_window_start = source.analysis_start_seconds + window.start_seconds
+            source_window_end = source.analysis_start_seconds + window.end_seconds
             remaining_seconds = deadline - self._clock()
             if remaining_seconds < self._visual_chunk_timeout_seconds:
                 budget_error = ProviderError(
@@ -356,8 +369,8 @@ class OrchestratedAnalysisPipeline:
                 {
                     "chunk_index": index,
                     "chunk_count": len(windows),
-                    "start_seconds": window.start_seconds,
-                    "end_seconds": window.end_seconds,
+                    "start_seconds": source_window_start,
+                    "end_seconds": source_window_end,
                 },
             )
             try:
@@ -373,8 +386,8 @@ class OrchestratedAnalysisPipeline:
                     result = await self._ark.locate_visual(
                         video_path=chunk.video_path,
                         window=Segment(
-                            start_seconds=window.start_seconds,
-                            end_seconds=window.end_seconds,
+                            start_seconds=0,
+                            end_seconds=window.duration_seconds,
                         ),
                         instructions=self._skills.visual_instructions,
                     )
@@ -394,7 +407,9 @@ class OrchestratedAnalysisPipeline:
                 )
                 failures.append((window, unexpected_error))
             else:
-                segments.extend(result.segments)
+                segments.extend(
+                    _offset_visual_segments(result.segments, source_window_start)
+                )
                 successful_windows.append(window)
                 processed_seconds = _covered_seconds(successful_windows)
                 await emit(
@@ -483,6 +498,8 @@ def _coverage_gaps(
     duration_seconds: float,
     successful_windows: list[AnalysisWindow],
     failures: list[tuple[AnalysisWindow, ProviderError]],
+    *,
+    source_offset_seconds: float = 0,
 ) -> list[CoverageGap]:
     if not failures:
         return []
@@ -511,18 +528,52 @@ def _coverage_gaps(
             ProviderError("provider_error", "visual coverage unavailable", retryable=True),
         )
         reason = _coverage_gap_reason(error)
-        if gaps and gaps[-1].end_seconds == start_seconds and gaps[-1].reason == reason:
-            gaps[-1] = gaps[-1].model_copy(update={"end_seconds": end_seconds})
+        absolute_start = source_offset_seconds + start_seconds
+        absolute_end = source_offset_seconds + end_seconds
+        if gaps and gaps[-1].end_seconds == absolute_start and gaps[-1].reason == reason:
+            gaps[-1] = gaps[-1].model_copy(update={"end_seconds": absolute_end})
         else:
             gaps.append(
                 CoverageGap(
-                    start_seconds=start_seconds,
-                    end_seconds=end_seconds,
+                    start_seconds=absolute_start,
+                    end_seconds=absolute_end,
                     reason=reason,
                     retryable=True,
                 )
             )
     return gaps
+
+
+def _offset_speech_signals(
+    signals: list[SpeechSignal], source_offset_seconds: float
+) -> list[SpeechSignal]:
+    if source_offset_seconds == 0:
+        return signals
+    return [
+        signal.model_copy(
+            update={
+                "start_seconds": signal.start_seconds + source_offset_seconds,
+                "end_seconds": signal.end_seconds + source_offset_seconds,
+            }
+        )
+        for signal in signals
+    ]
+
+
+def _offset_visual_segments(
+    segments: list[VisualSegment], source_offset_seconds: float
+) -> list[VisualSegment]:
+    if source_offset_seconds == 0:
+        return segments
+    return [
+        segment.model_copy(
+            update={
+                "start_seconds": segment.start_seconds + source_offset_seconds,
+                "end_seconds": segment.end_seconds + source_offset_seconds,
+            }
+        )
+        for segment in segments
+    ]
 
 
 def _coverage_gap_reason(error: ProviderError) -> CoverageGapReason:

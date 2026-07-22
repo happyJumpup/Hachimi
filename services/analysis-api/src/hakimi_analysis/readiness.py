@@ -243,6 +243,7 @@ class ProductionReadiness:
             self._settings.local_upload_enabled
             and self._settings.local_analysis_max_seconds == 300
             and self._settings.local_upload_max_bytes == 256 * 1024 * 1024
+            and self._settings.analysis_evidence_timeout_seconds == 170
             and self._settings.analysis_chunk_timeout_seconds == 20
             and self._settings.analysis_visual_chunk_seconds == 60
             and self._settings.analysis_visual_overlap_seconds == 10
