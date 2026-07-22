@@ -1,8 +1,11 @@
 import asyncio
 import math
+import os
+import signal
+import subprocess
 import tempfile
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,6 +16,7 @@ from hakimi_analysis.sources import MAX_ANALYZABLE_SOURCE_DURATION_SECONDS
 
 VISUAL_SAMPLE_INTERVAL_SECONDS = 3.5
 MAX_VISUAL_FRAME_COUNT = 18
+PROCESS_STOP_TIMEOUT_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,24 +283,35 @@ class LocalMediaProcessor:
 
     async def _run_ffmpeg(self, operation: str, *arguments: str) -> None:
         executable = imageio_ffmpeg.get_ffmpeg_exe()
-        process = await asyncio.create_subprocess_exec(
-            executable,
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-y",
-            *arguments,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        # Uvicorn reload uses a Windows selector loop without async subprocess support.
+        try:
+            process = subprocess.Popen(
+                (
+                    executable,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    *arguments,
+                ),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as error:
+            raise MediaProcessingError(f"{operation} extraction could not start") from error
+        communication = asyncio.create_task(asyncio.to_thread(process.communicate))
         try:
             async with asyncio.timeout(self._command_timeout_seconds):
-                _, _stderr = await process.communicate()
+                _, _stderr = await asyncio.shield(communication)
         except TimeoutError as error:
-            await _stop_process(process)
+            cleanup_error = await _stop_process(process, communication)
+            if cleanup_error is not None:
+                raise MediaProcessingError(
+                    f"{operation} extraction cleanup failed"
+                ) from cleanup_error
             raise MediaProcessingError(f"{operation} extraction timed out") from error
         except asyncio.CancelledError:
-            await _stop_process(process)
+            await _stop_process(process, communication)
             raise
         if process.returncode != 0:
             raise MediaProcessingError(f"{operation} extraction failed")
@@ -305,11 +320,37 @@ class LocalMediaProcessor:
             raise MediaProcessingError(f"{operation} extraction produced no output")
 
 
-async def _stop_process(process: asyncio.subprocess.Process) -> None:
-    if process.returncode is None:
-        with suppress(ProcessLookupError):
-            process.kill()
-    await process.wait()
+async def _stop_process(
+    process: subprocess.Popen[bytes],
+    communication: asyncio.Future[Any],
+) -> BaseException | None:
+    def stop() -> None:
+        if process.poll() is None:
+            try:
+                process.kill()
+            except OSError as kill_error:
+                if process.poll() is None:
+                    try:
+                        fallback_signal = (
+                            signal.SIGTERM if os.name == "nt" else signal.Signals(9)
+                        )
+                        os.kill(process.pid, fallback_signal)
+                    except OSError as fallback_error:
+                        if process.poll() is None:
+                            raise fallback_error from kill_error
+
+    cleanup_error: BaseException | None = None
+    try:
+        await asyncio.to_thread(stop)
+    except OSError as error:
+        cleanup_error = error
+    try:
+        async with asyncio.timeout(PROCESS_STOP_TIMEOUT_SECONDS):
+            await asyncio.shield(communication)
+    except TimeoutError as error:
+        communication.cancel()
+        cleanup_error = cleanup_error or error
+    return cleanup_error
 
 
 def probe_duration_sync(source_path: Path) -> float:

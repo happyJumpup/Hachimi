@@ -1,18 +1,21 @@
 import asyncio
 import json
 import logging
+import subprocess
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import cast
 
 import httpx
+import imageio_ffmpeg
 import pytest
 from fastapi.routing import APIRoute
 
 from hakimi_analysis.access import AccessManager
 from hakimi_analysis.app import create_app
 from hakimi_analysis.bootstrap import DeterministicTestPipeline
+from hakimi_analysis.media import LocalMediaProcessor
 from hakimi_analysis.models import (
     AnalysisCandidate,
     CandidateParameters,
@@ -127,6 +130,32 @@ class SecretFailureCapturePipeline:
         )
 
 
+class RealMediaEmptyPipeline:
+    def __init__(self, media: LocalMediaProcessor) -> None:
+        self._media = media
+        self.source_path: Path | None = None
+
+    async def analyze(
+        self,
+        source: VideoSource,
+        trigger_seconds: float | None,
+        emit: EmitCallback,
+    ) -> PipelineOutput:
+        del trigger_seconds, emit
+        self.source_path = source.path
+        async with self._media.prepare_source(
+            source.path,
+            source.analysis_duration_seconds,
+            start_seconds=source.analysis_start_seconds,
+        ) as prepared:
+            assert prepared.audio_path.is_file()
+            assert prepared.contact_sheet_ready is not None
+            await prepared.contact_sheet_ready
+            assert prepared.contact_sheet_path is not None
+            assert prepared.contact_sheet_path.is_file()
+        return PipelineOutput(candidates=[], empty_reason="no_evidence")
+
+
 class CandidateBoundaryPipeline:
     def __init__(
         self,
@@ -198,6 +227,78 @@ class PausingStream(httpx.AsyncByteStream):
         self.paused.set()
         await asyncio.Event().wait()
         yield self._payload[4096:]  # pragma: no cover
+
+
+def test_local_upload_completes_without_async_subprocess_support(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    generated = subprocess.run(
+        (
+            imageio_ffmpeg.get_ffmpeg_exe(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=0x101820:s=320x568:r=15",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=16000",
+            "-t",
+            "2",
+            "-c:v",
+            "mpeg4",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-y",
+            str(source),
+        ),
+        capture_output=True,
+        check=False,
+    )
+    assert generated.returncode == 0, generated.stderr.decode("utf-8", errors="replace")
+
+    upload_root = tmp_path / "uploads"
+    media_root = tmp_path / "media"
+    pipeline = RealMediaEmptyPipeline(LocalMediaProcessor(temp_root=media_root))
+    app = create_app(
+        pipeline=pipeline,
+        access=make_test_access(),
+        local_upload_temp_root=upload_root,
+    )
+    loop = asyncio.new_event_loop()
+
+    async def unsupported_subprocess_exec(*_args: object, **_kwargs: object) -> None:
+        raise NotImplementedError
+
+    loop.subprocess_exec = unsupported_subprocess_exec  # type: ignore[assignment]
+
+    async def exercise() -> dict[str, object]:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="https://test"
+        ) as client:
+            created = await client.post(
+                "/api/v1/analysis-runs/local",
+                files={"media": ("source.mp4", source.read_bytes(), "video/mp4")},
+                data={"local_source_id": LOCAL_SOURCE_ID},
+            )
+            assert created.status_code == 202
+            return await wait_for_status(client, created.json()["id"], "completed")
+
+    try:
+        completed = loop.run_until_complete(exercise())
+    finally:
+        loop.close()
+
+    assert completed["candidates"] == []
+    assert completed["empty_reason"] == "no_evidence"
+    assert pipeline.source_path is not None
+    assert not pipeline.source_path.exists()
+    assert list(upload_root.iterdir()) == []
+    assert list(media_root.iterdir()) == []
 
 
 @pytest.mark.asyncio

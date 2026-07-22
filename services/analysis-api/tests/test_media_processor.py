@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import sys
 from itertools import pairwise
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any
 import imageio_ffmpeg
 import pytest
 
+import hakimi_analysis.media as media_module
 from hakimi_analysis.media import AnalysisWindow, LocalMediaProcessor, MediaProcessingError
 
 
@@ -70,6 +72,33 @@ async def create_colour_transition_video(path: Path) -> None:
     )
     _, stderr = await process.communicate()
     assert process.returncode == 0, stderr.decode("utf-8", errors="replace")
+
+
+def test_full_source_prepares_when_event_loop_has_no_async_subprocess_support(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.mp4"
+    asyncio.run(create_synthetic_video(source))
+    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    loop = asyncio.new_event_loop()
+
+    async def unsupported_subprocess_exec(*_args: Any, **_kwargs: Any) -> None:
+        raise NotImplementedError
+
+    loop.subprocess_exec = unsupported_subprocess_exec  # type: ignore[assignment]
+
+    async def prepare() -> None:
+        async with processor.prepare_source(source, duration_seconds=2) as prepared:
+            assert prepared.audio_path.is_file()
+            assert prepared.contact_sheet_ready is not None
+            await prepared.contact_sheet_ready
+            assert prepared.contact_sheet_path is not None
+            assert prepared.contact_sheet_path.is_file()
+
+    try:
+        loop.run_until_complete(prepare())
+    finally:
+        loop.close()
 
 
 @pytest.mark.asyncio
@@ -279,23 +308,21 @@ async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
     both_started = asyncio.Event()
-    processes: list[asyncio.subprocess.Process] = []
-    real_create_subprocess_exec = asyncio.create_subprocess_exec
+    processes: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
 
-    async def create_blocking_process(*_args: Any, **_kwargs: Any) -> asyncio.subprocess.Process:
-        process = await real_create_subprocess_exec(
-            sys.executable,
-            "-c",
-            "import time; time.sleep(30)",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+    def create_blocking_process(*_args: Any, **_kwargs: Any) -> subprocess.Popen[bytes]:
+        process = real_popen(
+            (sys.executable, "-c", "import time; time.sleep(30)"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
         processes.append(process)
         if len(processes) == 2:
             both_started.set()
         return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_blocking_process)
+    monkeypatch.setattr(subprocess, "Popen", create_blocking_process)
     processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
     prepared_directories: list[Path] = []
 
@@ -321,17 +348,118 @@ async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
 
 
 @pytest.mark.asyncio
+async def test_command_timeout_stops_ffmpeg_and_removes_prepared_media(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    processes: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def create_blocking_process(*_args: Any, **_kwargs: Any) -> subprocess.Popen[bytes]:
+        process = real_popen(
+            (sys.executable, "-c", "import time; time.sleep(30)"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", create_blocking_process)
+    processor = LocalMediaProcessor(
+        temp_root=tmp_path / "runs",
+        command_timeout_seconds=0.05,
+    )
+
+    with pytest.raises(MediaProcessingError, match="extraction timed out"):
+        async with processor.prepare(
+            source,
+            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
+        ):
+            raise AssertionError("timed-out extraction must not yield prepared media")
+
+    assert len(processes) == 2
+    assert all(process.returncode is not None for process in processes)
+    assert not any((tmp_path / "runs").iterdir())
+
+
+@pytest.mark.asyncio
+async def test_kill_failure_uses_native_fallback_and_removes_prepared_media(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    children: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    class KillFailsProcess:
+        def __init__(self) -> None:
+            self._child = real_popen(
+                (sys.executable, "-c", "import time; time.sleep(30)"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            children.append(self._child)
+
+        @property
+        def returncode(self) -> int | None:
+            return self._child.returncode
+
+        @property
+        def pid(self) -> int:
+            return self._child.pid
+
+        def poll(self) -> int | None:
+            return self._child.poll()
+
+        def communicate(self) -> tuple[bytes, bytes]:
+            return self._child.communicate()
+
+        def kill(self) -> None:
+            raise OSError("simulated termination failure")
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self._child.wait(timeout=timeout)
+
+    def create_unstoppable_process(*_args: Any, **_kwargs: Any) -> KillFailsProcess:
+        return KillFailsProcess()
+
+    monkeypatch.setattr(media_module, "PROCESS_STOP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(subprocess, "Popen", create_unstoppable_process)
+    processor = LocalMediaProcessor(
+        temp_root=tmp_path / "runs",
+        command_timeout_seconds=0.05,
+    )
+
+    async def prepare() -> None:
+        async with processor.prepare(
+            source,
+            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
+        ):
+            raise AssertionError("timed-out extraction must not yield prepared media")
+
+    with pytest.raises(MediaProcessingError, match="extraction timed out"):
+        await asyncio.wait_for(prepare(), timeout=1)
+
+    assert len(children) == 2
+    assert all(child.returncode is not None for child in children)
+    assert not any((tmp_path / "runs").iterdir())
+
+
+@pytest.mark.asyncio
 async def test_failed_extraction_stops_the_other_ffmpeg_process(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
-    processes: list[asyncio.subprocess.Process] = []
-    real_create_subprocess_exec = asyncio.create_subprocess_exec
+    processes: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
     call_count = 0
 
-    async def create_test_process(*_args: Any, **_kwargs: Any) -> asyncio.subprocess.Process:
+    def create_test_process(*_args: Any, **_kwargs: Any) -> subprocess.Popen[bytes]:
         nonlocal call_count
         call_count += 1
         code = (
@@ -339,17 +467,15 @@ async def test_failed_extraction_stops_the_other_ffmpeg_process(
             if call_count == 1
             else "import time; time.sleep(30)"
         )
-        process = await real_create_subprocess_exec(
-            sys.executable,
-            "-c",
-            code,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        process = real_popen(
+            (sys.executable, "-c", code),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
         processes.append(process)
         return process
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_test_process)
+    monkeypatch.setattr(subprocess, "Popen", create_test_process)
     processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
 
     with pytest.raises(MediaProcessingError):
