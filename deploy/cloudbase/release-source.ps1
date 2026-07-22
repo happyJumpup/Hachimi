@@ -293,6 +293,10 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $archivePath)) {
         throw 'Could not create the immutable Git source archive.'
     }
+    & python (Join-Path $PSScriptRoot 'verify-source-archive.py') $archivePath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'CloudBase source archive boundary validation failed.'
+    }
     $sourceSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
     $build = Invoke-TencentApi `

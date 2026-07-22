@@ -1,5 +1,7 @@
 # TrainPal
 
+> `questionaire/` 保留队友提交的 GYMTI 独立参考原型，仅用于设计与实现追溯；正式产品入口是 `apps/web` 与 `services/analysis-api`，参考原型不进入 CloudBase 源码包、容器或线上服务。
+
 TrainPal 是你的专属训练伙伴：把用户主动找到的健身视频转成可以确认、调整并立即执行的训练，并由同一个小猫教练在规划、训练和结果阶段持续陪伴。
 
 TrainPal 同时是产品名、用户可见的唯一 Agent 和小猫教练身份。内部由可替换的内容理解 Provider、训练编译 Skill、个性化调整 Skill、动作要点补充 Skill 与确定性训练引擎协作；用户始终保留最终决定权。

@@ -26,6 +26,7 @@ tmp
 *.ogg
 *.webm
 docs
+questionaire
 apps/web/tests
 services/analysis-api/tests
 services/analysis-api/scripts

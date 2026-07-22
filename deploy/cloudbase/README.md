@@ -69,7 +69,7 @@ TRUSTED_PROXY_CIDRS=
 
 ## 源码包与镜像门槛
 
-CloudBase 官方源码部署要求代码目录根部包含 Dockerfile；CLI 使用 `--source` 上传该目录。仓库 `.dockerignore` 排除 Git、环境文件、媒体、测试产物、依赖目录和文档，任何真实视频都不能进入源码包。
+CloudBase 官方源码部署要求代码目录根部包含 Dockerfile；CLI 使用 `--source` 上传该目录。仓库 `.dockerignore` 排除 Git、环境文件、媒体、测试产物、依赖目录、文档和 `questionaire/` 参考原型，任何真实视频都不能进入构建上下文。`git archive` 还通过 `.gitattributes` 排除参考原型，`release-source.ps1` 在上传前再次检查 ZIP 内容并失败关闭。
 
 Docker 多阶段构建从 FFmpeg 8.1.2 官方签名源码生成共享、LGPL-only 运行时。镜像内只允许 `/opt/trainpal/ffmpeg/bin/ffmpeg` 一份二进制，`/ready` 和镜像审计都校验同目录构建收据，并拒绝 GPL、nonfree、版本、配置或哈希不符。
 
