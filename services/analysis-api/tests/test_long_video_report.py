@@ -1,10 +1,13 @@
 import json
 from typing import cast
 
+import pytest
+
 from hakimi_analysis.benchmark.long_report import (
     render_long_video_report,
     sanitized_long_video_report,
 )
+from hakimi_analysis.benchmark.long_results import LongExpiryAuditStatus
 from hakimi_analysis.benchmark.long_scoring import (
     LongArmAggregate,
     LongVideoArm,
@@ -57,6 +60,8 @@ def test_sanitized_long_video_report_whitelists_only_aggregate_and_safe_protocol
         protocol={
             "chunk_seconds": 60,
             "overlap_seconds": 10,
+            "manifest_sha256": "a" * 64,
+            "gold_sha256": "b" * 64,
             "asr_model_id": "volc.seedasr.sauc.duration",
             "qwen_visual_model_id": "qwen3-vl-flash",
             "media_path": "C:\\Users\\private\\video.mp4",
@@ -73,10 +78,12 @@ def test_sanitized_long_video_report_whitelists_only_aggregate_and_safe_protocol
     serialized = json.dumps(report, ensure_ascii=False)
 
     assert report["scope"] == "local_long_video_quality_only"
-    assert report["promotion_status"] == "blocked_pending_qwen_48h_expiry_audit"
+    assert report["promotion_status"] == "pending"
     assert report["protocol"] == {
         "chunk_seconds": 60,
         "overlap_seconds": 10,
+        "manifest_sha256": "a" * 64,
+        "gold_sha256": "b" * 64,
         "asr_model_id": "volc.seedasr.sauc.duration",
         "qwen_visual_model_id": "qwen3-vl-flash",
     }
@@ -104,5 +111,32 @@ def test_render_long_video_report_serializes_the_same_sanitized_shape() -> None:
 
     assert report["arms"][0]["arm"] == "qwen_video"
     assert report["arms"][0]["comparison_arm"] == "B"
-    assert report["promotion_status"] == "blocked_pending_qwen_48h_expiry_audit"
+    assert report["promotion_status"] == "pending"
     assert report["protocol"] == {"chunk_seconds": 60}
+
+
+@pytest.mark.parametrize(
+    ("audit_status", "promotion_status"),
+    [
+        ("pending", "pending"),
+        ("lifecycle_failed", "lifecycle_failed"),
+        ("provider_ttl_elapsed", "provider_ttl_elapsed_research_only"),
+    ],
+)
+def test_report_promotion_status_tracks_the_expiry_audit_without_claiming_deletion(
+    audit_status: LongExpiryAuditStatus,
+    promotion_status: str,
+) -> None:
+    report = sanitized_long_video_report(
+        [_aggregate()],
+        LongVideoDecision(
+            winner=LongVideoArm.QWEN_VIDEO,
+            conclusion="qwen_candidate_wins",
+            reason="quality_gap",
+        ),
+        protocol={"chunk_seconds": 60},
+        expiry_audit_status=audit_status,
+    )
+
+    assert report["promotion_status"] == promotion_status
+    assert "deleted" not in json.dumps(report).lower()

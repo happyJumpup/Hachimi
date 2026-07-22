@@ -13,7 +13,8 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
-from hakimi_analysis.benchmark.long_models import ArmId
+from hakimi_analysis.benchmark.long_contract import MAX_LONG_PRIMARY_DEMO_SECONDS
+from hakimi_analysis.benchmark.long_models import ArmId, LongExperimentSource
 from hakimi_analysis.benchmark.models import (
     BenchmarkCandidate,
     CleanupOutcome,
@@ -64,7 +65,47 @@ class LongVideoSourceGold(StrictModel):
             raise ValueError("long-video scoring requires reviewed gold")
         if any(event.end_seconds > self.duration_seconds for event in self.events):
             raise ValueError("gold event falls outside the full source")
+        if self.gold_version == "long-video-gold-v2":
+            if not self.events:
+                raise ValueError("long-video gold v2 requires at least one trainable action")
+            if any(
+                event.end_seconds - event.start_seconds > MAX_LONG_PRIMARY_DEMO_SECONDS
+                for event in self.events
+            ):
+                raise ValueError("long-video gold v2 primary demos cannot exceed 120 seconds")
+            identities = [
+                re.sub(r"[^\w]", "", event.canonical_name.casefold(), flags=re.UNICODE)
+                for event in self.events
+            ]
+            if any(event.kind.value != "action" for event in self.events) or len(identities) != len(
+                set(identities)
+            ):
+                raise ValueError(
+                    "long-video gold v2 requires one event per unique trainable action"
+                )
         return self
+
+
+def validate_gold_against_source_contract(
+    source: LongExperimentSource,
+    gold: LongVideoSourceGold,
+) -> LongVideoSourceGold:
+    """Bind reviewed gold to the source's offline-only action contract."""
+
+    if (
+        gold.source_id != source.source_id
+        or abs(gold.duration_seconds - source.duration_seconds) > 1e-6
+        or gold.gold_version != source.gold_version
+    ):
+        raise ValueError("long-video gold does not match its manifest source")
+    expected = {action.canonical_name: action for action in source.gold_contract.actions}
+    actual = {event.canonical_name: event for event in gold.events}
+    if set(actual) != set(expected):
+        raise ValueError("long-video gold actions do not match the manifest source contract")
+    for canonical_name, event in actual.items():
+        if set(event.accepted_aliases) != set(expected[canonical_name].accepted_aliases):
+            raise ValueError("long-video gold aliases do not match the manifest source contract")
+    return gold
 
 
 class LongVideoRun(StrictModel):
@@ -182,9 +223,7 @@ class LongArmAggregate(StrictModel):
     eligible: bool
 
 
-DecisionConclusion = Literal[
-    "qwen_candidate_wins", "seed_remains_baseline", "no_valid_conclusion"
-]
+DecisionConclusion = Literal["qwen_candidate_wins", "seed_remains_baseline", "no_valid_conclusion"]
 DecisionReason = Literal[
     "only_eligible",
     "quality_gap",
@@ -239,9 +278,7 @@ def _action_type_recall(
 ) -> float | None:
     """Recall of canonical trainable action names with a valid time match."""
     action_events = [event for event in gold_events if event.kind.value == "action"]
-    canonical_names = {
-        _normalized_action_name(event.canonical_name) for event in action_events
-    }
+    canonical_names = {_normalized_action_name(event.canonical_name) for event in action_events}
     if not canonical_names:
         return None
     recognized: set[str] = set()
@@ -343,8 +380,7 @@ def _aggregate_source(
         and precision >= 0.9
         and recall >= 0.8
         and _f1(tp_05, predicted_05, expected_05) >= 0.75
-        and (unsupported_parameters / reported_parameters if reported_parameters else 0.0)
-        <= 0.02
+        and (unsupported_parameters / reported_parameters if reported_parameters else 0.0) <= 0.02
         and weight_violations == 0
         and schema_violations == 0
         and cleanup_violations == 0
@@ -363,9 +399,7 @@ def _aggregate_source(
         f1_tiou_03=_f1(tp_03, predicted_03, expected_03),
         f1_tiou_05=_f1(tp_05, predicted_05, expected_05),
         action_type_recall=(
-            sum(action_type_recalls) / len(action_type_recalls)
-            if action_type_recalls
-            else None
+            sum(action_type_recalls) / len(action_type_recalls) if action_type_recalls else None
         ),
         tail_recall=sum(tail_recalls) / len(tail_recalls) if tail_recalls else None,
         unsupported_parameter_rate=(
@@ -452,9 +486,7 @@ def _aggregate_arm(
         if score.mean_start_error_seconds is not None
     ]
     end_errors = [
-        score.mean_end_error_seconds
-        for score in scores
-        if score.mean_end_error_seconds is not None
+        score.mean_end_error_seconds for score in scores if score.mean_end_error_seconds is not None
     ]
     tail_recalls = [score.tail_recall for score in scores if score.tail_recall is not None]
     action_type_recalls = [
@@ -469,9 +501,7 @@ def _aggregate_arm(
         is not None
     ]
     first_candidate_seconds = [
-        run.first_candidate_seconds
-        for run in completed
-        if run.first_candidate_seconds is not None
+        run.first_candidate_seconds for run in completed if run.first_candidate_seconds is not None
     ]
     completed_seconds = [
         run.completed_seconds for run in completed if run.completed_seconds is not None
@@ -485,13 +515,10 @@ def _aggregate_arm(
     input_tokens = [run.input_tokens for run in completed if run.input_tokens is not None]
     output_tokens = [run.output_tokens for run in completed if run.output_tokens is not None]
     expected_runs = len(sources) * 3
-    schema_violations = sum(
-        run.status == LongRunStatus.SCHEMA_ERROR for run in arm_runs
-    )
+    schema_violations = sum(run.status == LongRunStatus.SCHEMA_ERROR for run in arm_runs)
     cleanup_violations = sum(not run.cleanup_ok for run in arm_runs)
     coverage_violations = sum(
-        run.status == LongRunStatus.COMPLETED and not run.full_coverage
-        for run in arm_runs
+        run.status == LongRunStatus.COMPLETED and not run.full_coverage for run in arm_runs
     )
     resumed_runs = sum(run.resumed_from_checkpoint for run in arm_runs)
     cancelled_runs = sum(run.status == LongRunStatus.CANCELLED for run in arm_runs)
@@ -504,8 +531,7 @@ def _aggregate_arm(
         and precision >= 0.9
         and recall >= 0.8
         and _f1(tp_05, predicted_05, expected_05) >= 0.75
-        and (unsupported_parameters / reported_parameters if reported_parameters else 0.0)
-        <= 0.02
+        and (unsupported_parameters / reported_parameters if reported_parameters else 0.0) <= 0.02
         and weight_violations == 0
         and schema_violations == 0
         and cleanup_violations == 0
@@ -528,9 +554,7 @@ def _aggregate_arm(
         f1_tiou_03=_f1(tp_03, predicted_03, expected_03),
         f1_tiou_05=_f1(tp_05, predicted_05, expected_05),
         action_type_recall=(
-            sum(action_type_recalls) / len(action_type_recalls)
-            if action_type_recalls
-            else None
+            sum(action_type_recalls) / len(action_type_recalls) if action_type_recalls else None
         ),
         mean_start_error_seconds=(sum(start_errors) / len(start_errors) if start_errors else None),
         mean_end_error_seconds=(sum(end_errors) / len(end_errors) if end_errors else None),
@@ -563,21 +587,15 @@ def _aggregate_arm(
         ),
         median_queue_seconds=_safe_median([run.queue_seconds for run in completed]),
         median_upload_seconds=_safe_median([run.upload_seconds for run in completed]),
-        median_preprocessing_seconds=_safe_median(
-            [run.preprocessing_seconds for run in completed]
-        ),
+        median_preprocessing_seconds=_safe_median([run.preprocessing_seconds for run in completed]),
         median_asr_seconds=_safe_median([run.asr_seconds for run in completed]),
         median_visual_seconds=_safe_median([run.visual_seconds for run in completed]),
         median_fusion_seconds=_safe_median([run.fusion_seconds for run in completed]),
         median_cleanup_seconds=_safe_median([run.cleanup_seconds for run in completed]),
         median_cost_cny=_safe_median(costs),
         total_cost_cny=sum(costs) if len(costs) == len(completed) else None,
-        total_input_tokens=(
-            sum(input_tokens) if len(input_tokens) == len(completed) else None
-        ),
-        total_output_tokens=(
-            sum(output_tokens) if len(output_tokens) == len(completed) else None
-        ),
+        total_input_tokens=(sum(input_tokens) if len(input_tokens) == len(completed) else None),
+        total_output_tokens=(sum(output_tokens) if len(output_tokens) == len(completed) else None),
         stability_f1=_stability_f1(sources, completed),
         source_results=source_results,
         eligible=eligible,
@@ -607,9 +625,7 @@ def score_long_video_runs(
             raise ValueError("long-video run repetition must be unique")
         seen.add(key)
         by_arm[run.arm].append(run)
-    return [
-        _aggregate_arm(arm, source_by_id, by_arm[arm]) for arm in LongVideoArm
-    ]
+    return [_aggregate_arm(arm, source_by_id, by_arm[arm]) for arm in LongVideoArm]
 
 
 def choose_long_video_arm(aggregates: list[LongArmAggregate]) -> LongVideoDecision:
@@ -617,9 +633,7 @@ def choose_long_video_arm(aggregates: list[LongArmAggregate]) -> LongVideoDecisi
 
     eligible = [aggregate for aggregate in aggregates if aggregate.eligible]
     if not eligible:
-        return LongVideoDecision(
-            conclusion="no_valid_conclusion", reason="no_eligible_arm"
-        )
+        return LongVideoDecision(conclusion="no_valid_conclusion", reason="no_eligible_arm")
     if len(eligible) == 1:
         return _winner(eligible[0].arm, "only_eligible")
 
@@ -632,9 +646,7 @@ def choose_long_video_arm(aggregates: list[LongArmAggregate]) -> LongVideoDecisi
         None,
     )
     if baseline is None or candidate is None:
-        return LongVideoDecision(
-            conclusion="no_valid_conclusion", reason="no_eligible_arm"
-        )
+        return LongVideoDecision(conclusion="no_valid_conclusion", reason="no_eligible_arm")
 
     quality_delta = candidate.f1_tiou_05 - baseline.f1_tiou_05
     if abs(quality_delta) > 0.03:
@@ -664,17 +676,13 @@ def choose_long_video_arm(aggregates: list[LongArmAggregate]) -> LongVideoDecisi
         or candidate.total_cost_cny is None
         or baseline.total_cost_cny is None
     ):
-        return LongVideoDecision(
-            conclusion="no_valid_conclusion", reason="tie_or_missing_cost"
-        )
+        return LongVideoDecision(conclusion="no_valid_conclusion", reason="tie_or_missing_cost")
     if candidate.median_cost_cny != baseline.median_cost_cny:
         return _winner(
             candidate.arm if candidate.median_cost_cny < baseline.median_cost_cny else baseline.arm,
             "cost",
         )
-    return LongVideoDecision(
-        conclusion="no_valid_conclusion", reason="tie_or_missing_cost"
-    )
+    return LongVideoDecision(conclusion="no_valid_conclusion", reason="tie_or_missing_cost")
 
 
 def _winner(arm: LongVideoArm, reason: DecisionReason) -> LongVideoDecision:

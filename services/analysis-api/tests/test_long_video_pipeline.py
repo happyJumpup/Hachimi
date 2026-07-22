@@ -1,11 +1,12 @@
 import asyncio
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from hakimi_analysis.benchmark.long_execution import LongCheckpointStore
-from hakimi_analysis.benchmark.long_models import ArmId, LongExperimentSource, LongVideoChunk
+from hakimi_analysis.benchmark.long_models import ArmId, LongVideoChunk
 from hakimi_analysis.benchmark.long_pipeline import (
     LongArmExecutor,
     LongExecutionFailure,
@@ -117,14 +118,24 @@ class FakeQwen:
     def __init__(self) -> None:
         self.cleaned: list[str] = []
 
-    async def upload(self, _model_id: str, path: Path, _media_kind: str) -> MediaHandle:
+    async def upload(
+        self,
+        _model_id: str,
+        path: Path,
+        _media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
+        expires_at = "2099-01-01T00:00:00+00:00"
+        if on_expiry is not None:
+            on_expiry(expires_at)
         return MediaHandle(
             provider="qwen",
             model_id="qwen",
             media_kind="video",
             handle_id=f"oss://{path.name}",
             cleanup_policy=CleanupPolicy.EXPIRE_AUTOMATICALLY,
-            expires_at="2099-01-01T00:00:00+00:00",
+            expires_at=expires_at,
         )
 
     async def analyze(self, _handle: MediaHandle, prompt: str) -> ProviderInference:
@@ -138,6 +149,23 @@ class FakeQwen:
 
     async def verify_cleanup(self, _handle: MediaHandle) -> CleanupOutcome:
         return CleanupOutcome.EXPIRY_RECORDED
+
+
+class UploadTrackingQwen(FakeQwen):
+    def __init__(self) -> None:
+        super().__init__()
+        self.upload_started = False
+
+    async def upload(
+        self,
+        model_id: str,
+        path: Path,
+        media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
+        self.upload_started = True
+        return await super().upload(model_id, path, media_kind, on_expiry=on_expiry)
 
 
 class WeightedSeed(FakeSeed):
@@ -211,9 +239,33 @@ class CleanupFailingQwen(FakeQwen):
 
 
 class InvalidExpiryQwen(FakeQwen):
-    async def upload(self, model_id: str, path: Path, media_kind: str) -> MediaHandle:
-        handle = await super().upload(model_id, path, media_kind)
+    async def upload(
+        self,
+        model_id: str,
+        path: Path,
+        media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
+        del on_expiry
+        handle = await super().upload(model_id, path, media_kind, on_expiry=None)
         return handle.model_copy(update={"expires_at": None})
+
+
+class MismatchedExpiryQwen(FakeQwen):
+    async def upload(
+        self,
+        model_id: str,
+        path: Path,
+        media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
+        recorded_expiry = "2099-01-01T00:00:00+00:00"
+        if on_expiry is not None:
+            on_expiry(recorded_expiry)
+        handle = await super().upload(model_id, path, media_kind, on_expiry=None)
+        return handle.model_copy(update={"expires_at": "2099-01-02T00:00:00+00:00"})
 
 
 class RetryableUploadError(RuntimeError):
@@ -226,11 +278,20 @@ class RetryableUploadQwen(FakeQwen):
         super().__init__()
         self.upload_attempts = 0
 
-    async def upload(self, model_id: str, path: Path, media_kind: str) -> MediaHandle:
+    async def upload(
+        self,
+        model_id: str,
+        path: Path,
+        media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
         self.upload_attempts += 1
+        if on_expiry is not None:
+            on_expiry(RetryableUploadError.expires_at)
         if self.upload_attempts == 1:
             raise RetryableUploadError("temporary upload transport failure")
-        return await super().upload(model_id, path, media_kind)
+        return await super().upload(model_id, path, media_kind, on_expiry=on_expiry)
 
 
 class ExpiringCancelledError(asyncio.CancelledError):
@@ -238,7 +299,16 @@ class ExpiringCancelledError(asyncio.CancelledError):
 
 
 class CancelledUploadQwen(FakeQwen):
-    async def upload(self, _model_id: str, _path: Path, _media_kind: str) -> MediaHandle:
+    async def upload(
+        self,
+        _model_id: str,
+        _path: Path,
+        _media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
+        if on_expiry is not None:
+            on_expiry(ExpiringCancelledError.expires_at)
         raise ExpiringCancelledError
 
 
@@ -295,14 +365,6 @@ def _prepared_source(tmp_path: Path) -> LongPreparedSource:
     video = tmp_path / "chunk.mp4"
     for path in (audio, image, video):
         path.write_bytes(b"content")
-    source = LongExperimentSource(
-        source_id="seven",
-        source_path=tmp_path / "source.mp4",
-        sha256="a" * 64,
-        duration_seconds=60,
-        gold_path=tmp_path / "gold.json",
-        gold_version="v1",
-    )
     chunk = LongVideoChunk(
         source_id="seven",
         index=0,
@@ -311,7 +373,8 @@ def _prepared_source(tmp_path: Path) -> LongPreparedSource:
         duration_seconds=60,
     )
     return LongPreparedSource(
-        source=source,
+        source_id="seven",
+        duration_seconds=60,
         audio_path=audio,
         chunks=(
             LongPreparedChunk(
@@ -326,7 +389,6 @@ def _prepared_source(tmp_path: Path) -> LongPreparedSource:
 
 def _prepared_overlapped_source(tmp_path: Path) -> LongPreparedSource:
     prepared = _prepared_source(tmp_path)
-    source = prepared.source.model_copy(update={"duration_seconds": 100})
     second_chunk = LongVideoChunk(
         source_id="seven",
         index=1,
@@ -336,7 +398,8 @@ def _prepared_overlapped_source(tmp_path: Path) -> LongPreparedSource:
     )
     first = prepared.chunks[0]
     return LongPreparedSource(
-        source=source,
+        source_id=prepared.source_id,
+        duration_seconds=100,
         audio_path=prepared.audio_path,
         chunks=(
             first,
@@ -370,6 +433,49 @@ async def test_seed_arm_runs_full_asr_contact_sheet_fusion_and_maps_absolute_tim
     assert [(item.start_seconds, item.end_seconds) for item in result.candidates] == [(5, 15)]
     assert seed.contact_windows == [(0, 60)]
     assert result.completed_coverage_seconds == 60
+
+
+@pytest.mark.asyncio
+async def test_v2_seed_arm_returns_one_candidate_for_repeated_same_action_chunks(
+    tmp_path: Path,
+) -> None:
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_overlapped_source(tmp_path)},
+        providers=LongProviderBundle(asr=FakeAsr(), seed=FakeSeed(), qwen=FakeQwen()),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+        prompt_version="long-video-ab-v2",
+    )
+
+    result = await executor.execute(
+        LongRunKey("seven", ArmId.SEED_CONTACT_SHEET, 1),
+        ProviderPermits({"asr": 1, "seed": 1, "qwen": 1}),
+    )
+
+    assert [
+        (item.action_name, item.start_seconds, item.end_seconds) for item in result.candidates
+    ] == [("Romanian Deadlift", 5, 15)]
+
+
+@pytest.mark.asyncio
+async def test_qwen_arm_fails_closed_before_upload_without_lifecycle_sink(
+    tmp_path: Path,
+) -> None:
+    qwen = UploadTrackingQwen()
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_source(tmp_path)},
+        providers=LongProviderBundle(asr=FakeAsr(), seed=FakeSeed(), qwen=qwen),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+    )
+
+    with pytest.raises(LongExecutionFailure, match="qwen_lifecycle_sink_missing"):
+        await executor.execute(
+            LongRunKey("seven", ArmId.QWEN_VIDEO, 1),
+            ProviderPermits({"asr": 1, "seed": 1, "qwen": 1}),
+        )
+
+    assert qwen.upload_started is False
 
 
 @pytest.mark.asyncio
@@ -445,9 +551,13 @@ async def test_qwen_upload_is_not_replayed_after_an_ambiguous_transport_failure(
         )
 
     assert qwen.upload_attempts == 1
-    assert caught.value.lifecycle_audit[0].cleanup_outcome == CleanupOutcome.EXPIRY_RECORDED
+    assert caught.value.lifecycle_audit[0].cleanup_outcome == CleanupOutcome.FAILED
     assert caught.value.lifecycle_audit[0].expires_at == "2099-01-01T00:00:00+00:00"
-    assert persisted == list(caught.value.lifecycle_audit)
+    qwen_records = [record for record in persisted if record.provider == "qwen"]
+    assert [record.cleanup_outcome for record in qwen_records] == [
+        CleanupOutcome.EXPIRY_RECORDED,
+        CleanupOutcome.FAILED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -474,9 +584,75 @@ async def test_qwen_upload_cancellation_is_journaled_before_cancellation_propaga
         )
 
     qwen_records = [record for record in persisted if record.provider == "qwen"]
-    assert len(qwen_records) == 1
-    assert qwen_records[0].cleanup_outcome == CleanupOutcome.EXPIRY_RECORDED
-    assert qwen_records[0].expires_at == "2099-01-01T00:00:00+00:00"
+    assert [record.cleanup_outcome for record in qwen_records] == [
+        CleanupOutcome.EXPIRY_RECORDED,
+        CleanupOutcome.FAILED,
+    ]
+    assert all(record.expires_at == "2099-01-01T00:00:00+00:00" for record in qwen_records)
+
+
+@pytest.mark.asyncio
+async def test_qwen_upload_cancellation_survives_a_terminal_journal_failure(
+    tmp_path: Path,
+) -> None:
+    persisted: list[LongMediaLifecycleRecord] = []
+
+    def lifecycle_sink(_key: LongRunKey, record: LongMediaLifecycleRecord) -> None:
+        if persisted:
+            raise RuntimeError("journal unavailable")
+        persisted.append(record)
+
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_source(tmp_path)},
+        providers=LongProviderBundle(
+            asr=FakeAsr(),
+            seed=FakeSeed(),
+            qwen=CancelledUploadQwen(),
+        ),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+        lifecycle_sink=lifecycle_sink,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor.execute(
+            LongRunKey("seven", ArmId.QWEN_VIDEO, 1),
+            ProviderPermits({"asr": 1, "seed": 1, "qwen": 1}),
+        )
+
+    assert [record.cleanup_outcome for record in persisted] == [CleanupOutcome.EXPIRY_RECORDED]
+
+
+@pytest.mark.asyncio
+async def test_qwen_expiry_mismatch_is_a_persisted_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    persisted: list[LongMediaLifecycleRecord] = []
+    executor = LongArmExecutor(
+        prepared_sources={"seven": _prepared_source(tmp_path)},
+        providers=LongProviderBundle(
+            asr=FakeAsr(),
+            seed=FakeSeed(),
+            qwen=MismatchedExpiryQwen(),
+        ),
+        asr_model_id="asr",
+        qwen_model_id="qwen",
+        lifecycle_sink=lambda _key, record: persisted.append(record),
+    )
+
+    with pytest.raises(LongExecutionFailure) as caught:
+        await executor.execute(
+            LongRunKey("seven", ArmId.QWEN_VIDEO, 1),
+            ProviderPermits({"asr": 1, "seed": 1, "qwen": 1}),
+        )
+
+    qwen_records = [record for record in persisted if record.provider == "qwen"]
+    assert caught.value.cleanup_failed is True
+    assert caught.value.lifecycle_audit[-1].cleanup_outcome == CleanupOutcome.FAILED
+    assert [record.cleanup_outcome for record in qwen_records] == [
+        CleanupOutcome.EXPIRY_RECORDED,
+        CleanupOutcome.FAILED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -537,6 +713,7 @@ async def test_long_runs_with_the_same_repetition_use_distinct_asr_connect_ids(
         providers=LongProviderBundle(asr=asr, seed=FakeSeed(), qwen=FakeQwen()),
         asr_model_id="asr",
         qwen_model_id="qwen",
+        lifecycle_sink=lambda _key, _record: None,
     )
     permits = ProviderPermits({"asr": 2, "seed": 2, "qwen": 2})
 
@@ -656,6 +833,7 @@ async def test_failure_retains_only_safe_qwen_expiry_audit_metadata(tmp_path: Pa
         providers=LongProviderBundle(asr=FakeAsr(), seed=FakeSeed(), qwen=FailingQwen()),
         asr_model_id="asr",
         qwen_model_id="qwen",
+        lifecycle_sink=lambda _key, _record: None,
     )
 
     with pytest.raises(LongExecutionFailure) as caught:
@@ -675,6 +853,7 @@ async def test_cleanup_failure_is_recorded_before_the_arm_fails(tmp_path: Path) 
         providers=LongProviderBundle(asr=FakeAsr(), seed=FakeSeed(), qwen=CleanupFailingQwen()),
         asr_model_id="asr",
         qwen_model_id="qwen",
+        lifecycle_sink=lambda _key, _record: None,
     )
 
     result = await executor.execute(

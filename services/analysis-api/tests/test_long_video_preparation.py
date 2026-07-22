@@ -18,7 +18,13 @@ def _source(tmp_path: Path, *, duration: float = 120) -> LongExperimentSource:
         sha256="a" * 64,
         duration_seconds=duration,
         gold_path=tmp_path / "gold.json",
-        gold_version="v1",
+        gold_version="long-video-gold-v2",
+        gold_contract={
+            "version": "long-video-unique-actions-v1",
+            "actions": [
+                {"canonical_name": "罗马尼亚硬拉", "accepted_aliases": ["RDL"]}
+            ],
+        },
     )
 
 
@@ -42,6 +48,9 @@ async def test_preparer_creates_full_audio_and_complete_silent_chunk_contact_pai
     policy = LongVideoChunkPolicy(version="v1", duration_seconds=60, overlap_seconds=10)
 
     async with preparer.prepare_source(_source(tmp_path), policy) as prepared:
+        assert prepared.source_id == "source-a"
+        assert prepared.duration_seconds == 120
+        assert not hasattr(prepared, "source")
         assert prepared.audio_path.is_file()
         assert len(prepared.chunks) == 3
         assert [(item.chunk.start_seconds, item.chunk.end_seconds) for item in prepared.chunks] == [

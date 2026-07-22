@@ -76,7 +76,8 @@ class LongMediaPreparer:
                 await asyncio.gather(*tasks)
                 prepared_chunks = tuple(task.result() for task in chunk_tasks)
                 yield LongPreparedSource(
-                    source=source,
+                    source_id=source.source_id,
+                    duration_seconds=source.duration_seconds,
                     audio_path=audio_path,
                     chunks=prepared_chunks,
                 )

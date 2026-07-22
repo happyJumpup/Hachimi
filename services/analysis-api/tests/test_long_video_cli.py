@@ -1,6 +1,7 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator
+import sys
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ import hakimi_analysis.benchmark.long_cli as long_cli
 from hakimi_analysis.benchmark.long_cli import (
     LongBenchmarkRuntime,
     LongPreflightCheck,
+    LongPricing,
     _completed_run,
     _load_reviewed_gold,
     _preflight_minimal,
@@ -23,15 +25,17 @@ from hakimi_analysis.benchmark.long_cli import (
     _write_long_gold_templates,
     calibrate_provider_concurrency,
 )
+from hakimi_analysis.benchmark.long_execution import LongExecutionError
 from hakimi_analysis.benchmark.long_models import (
     EXPECTED_LONG_EXPERIMENT_MODELS,
     ArmId,
     LongExperimentManifest,
 )
 from hakimi_analysis.benchmark.long_pipeline import LongArmResult, LongExecutionAudit
-from hakimi_analysis.benchmark.long_real_providers import LongProviderContractError
 from hakimi_analysis.benchmark.long_results import (
+    LongExpiryAuditReceipt,
     LongLifecycleJournal,
+    LongLifecycleJournalEntry,
     LongLifecycleJournalPayload,
 )
 from hakimi_analysis.benchmark.long_runtime import LongRunKey
@@ -40,13 +44,20 @@ from hakimi_analysis.benchmark.media import ProbeMedia
 from hakimi_analysis.benchmark.models import CleanupOutcome
 
 
+def _gold_contract(*names: str) -> dict[str, object]:
+    return {
+        "version": "long-video-unique-actions-v1",
+        "actions": [{"canonical_name": name, "accepted_aliases": [name]} for name in names],
+    }
+
+
 def _manifest(tmp_path: Path) -> LongExperimentManifest:
     ignored_root = tmp_path / ".benchmark-work" / "long-video"
     return LongExperimentManifest.model_validate(
         {
             "version": 1,
             "models": EXPECTED_LONG_EXPERIMENT_MODELS,
-            "prompt_version": "long-video-ab-v1",
+            "prompt_version": "long-video-ab-v2",
             "chunk": {
                 "version": "long-video-chunks-v1",
                 "duration_seconds": 60,
@@ -69,7 +80,8 @@ def _manifest(tmp_path: Path) -> LongExperimentManifest:
                     "sha256": "a" * 64,
                     "duration_seconds": 424.31,
                     "gold_path": str(ignored_root / "seven-gold.json"),
-                    "gold_version": "seven-v1",
+                    "gold_version": "long-video-gold-v2",
+                    "gold_contract": _gold_contract("罗马尼亚硬拉"),
                 },
                 {
                     "source_id": "nineteen-minute-workout",
@@ -77,7 +89,16 @@ def _manifest(tmp_path: Path) -> LongExperimentManifest:
                     "sha256": "b" * 64,
                     "duration_seconds": 1157.46,
                     "gold_path": str(ignored_root / "nineteen-gold.json"),
-                    "gold_version": "nineteen-v1",
+                    "gold_version": "long-video-gold-v2",
+                    "gold_contract": _gold_contract(
+                        "弹力带肩活动",
+                        "推撑类激活",
+                        "低位绳索夹胸",
+                        "平板杠铃卧推",
+                        "上斜器械卧推",
+                        "坐姿杠铃实力推",
+                        "颈后绳索臂屈伸",
+                    ),
                 },
             ],
             "output": {
@@ -151,6 +172,177 @@ def _qwen_expiry_audit() -> list[LongMediaLifecycleRecord]:
     ]
 
 
+def _append_qwen_lifecycle(
+    manifest: LongExperimentManifest,
+    *,
+    expires_at: datetime,
+    outcome: CleanupOutcome = CleanupOutcome.EXPIRY_RECORDED,
+) -> None:
+    long_cli._lifecycle_journal(manifest).append(
+        LongLifecycleJournalEntry(
+            phase="experiment",
+            source_id=manifest.sources[0].source_id,
+            arm=ArmId.QWEN_VIDEO,
+            run_index=1,
+            recorded_at=expires_at - timedelta(hours=48),
+            lifecycle=LongMediaLifecycleRecord(
+                provider="qwen",
+                model_id=manifest.models.qwen_visual_model,
+                media_kind="video",
+                upload_seconds=1,
+                cleanup_outcome=outcome,
+                expires_at=expires_at.isoformat(),
+            ),
+        )
+    )
+
+
+def test_parser_exposes_a_local_expiry_audit_without_a_real_provider_flag() -> None:
+    args = long_cli.build_parser().parse_args(
+        ["audit-expiry", "--manifest", ".benchmark-work/long-video/manifest.json"]
+    )
+
+    assert args.command == "audit-expiry"
+    assert not hasattr(args, "real")
+
+
+def test_audit_expiry_command_writes_an_ignored_receipt_without_building_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    monkeypatch.setattr(long_cli, "_load_manifest", lambda _path: manifest)
+    monkeypatch.setattr(
+        long_cli,
+        "_build_runtime",
+        lambda: pytest.fail("the local expiry audit must not build cloud providers"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["long-video", "audit-expiry", "--manifest", "manifest.json"],
+    )
+
+    assert long_cli.main() == 1
+    receipt_path = long_cli._expiry_audit_receipt_path(manifest)
+    receipt = LongExpiryAuditReceipt.model_validate_json(receipt_path.read_text(encoding="utf-8"))
+    assert receipt.status == "pending"
+    assert receipt.journal_sha256 is None
+
+
+def test_expiry_audit_is_pending_when_the_journal_is_missing_or_margin_has_not_elapsed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    checked_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+
+    missing = long_cli._audit_qwen_expiry(manifest, checked_at=checked_at)
+    assert missing.status == "pending"
+    assert missing.journal_sha256 is None
+
+    _append_qwen_lifecycle(
+        manifest,
+        expires_at=checked_at - timedelta(minutes=4),
+    )
+    not_elapsed = long_cli._audit_qwen_expiry(manifest, checked_at=checked_at)
+    assert not_elapsed.status == "pending"
+    assert not_elapsed.journal_sha256 is not None
+    assert not_elapsed.max_expires_at == checked_at - timedelta(minutes=4)
+
+
+def test_expiry_audit_records_provider_ttl_elapsed_only_after_the_margin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    checked_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    _append_qwen_lifecycle(
+        manifest,
+        expires_at=checked_at - timedelta(minutes=6),
+    )
+
+    receipt = long_cli._audit_qwen_expiry(manifest, checked_at=checked_at)
+
+    assert receipt.status == "provider_ttl_elapsed"
+    assert receipt.margin_seconds == 300
+    assert receipt.record_count == 1
+    assert receipt.blocking_record_count == 0
+
+
+def test_score_gate_consumes_only_a_receipt_bound_to_the_current_journal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    checked_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    _append_qwen_lifecycle(
+        manifest,
+        expires_at=checked_at - timedelta(minutes=6),
+    )
+    receipt = long_cli._audit_qwen_expiry(manifest, checked_at=checked_at)
+    long_cli._write_json(
+        long_cli._expiry_audit_receipt_path(manifest),
+        receipt.model_dump(mode="json"),
+    )
+
+    assert long_cli._load_expiry_audit_status(manifest) == "provider_ttl_elapsed"
+
+    _append_qwen_lifecycle(
+        manifest,
+        expires_at=checked_at + timedelta(hours=48),
+    )
+    assert long_cli._load_expiry_audit_status(manifest) == "pending"
+
+
+def test_expiry_audit_keeps_any_failed_lifecycle_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    checked_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    _append_qwen_lifecycle(
+        manifest,
+        expires_at=checked_at - timedelta(hours=1),
+        outcome=CleanupOutcome.FAILED,
+    )
+
+    receipt = long_cli._audit_qwen_expiry(manifest, checked_at=checked_at)
+
+    assert receipt.status == "lifecycle_failed"
+    assert receipt.blocking_record_count == 1
+    long_cli._write_json(
+        long_cli._expiry_audit_receipt_path(manifest),
+        receipt.model_dump(mode="json"),
+    )
+    assert long_cli._load_expiry_audit_status(manifest) == "lifecycle_failed"
+
+
+def test_expiry_audit_rejects_a_journal_bound_to_another_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(long_cli, "PROJECT_ROOT", tmp_path)
+    manifest = _manifest(tmp_path)
+    path = long_cli._lifecycle_journal_path(manifest)
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        LongLifecycleJournalPayload(manifest_sha256="f" * 64).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="journal manifest mismatch"):
+        long_cli._audit_qwen_expiry(
+            manifest,
+            checked_at=datetime(2026, 7, 25, 12, tzinfo=UTC),
+        )
+
+
 def test_preflight_receipt_requires_every_provider_and_media_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -179,9 +371,7 @@ def test_preflight_receipt_requires_every_provider_and_media_probe(
 
     complete_checks = _complete_preflight_checks(manifest)
     missing_expiry_checks = [
-        check.model_copy(update={"expires_at": None})
-        if check.component == "qwen_visual"
-        else check
+        check.model_copy(update={"expires_at": None}) if check.component == "qwen_visual" else check
         for check in complete_checks
     ]
     write_receipt(missing_expiry_checks)
@@ -216,6 +406,34 @@ def test_calibration_receipt_requires_a_contiguous_safe_limit_and_freshness(
             provider_concurrency_limit=2,
             attempted_limits=[1, 2, 3],
         )
+
+    terminal_failure = LongMediaLifecycleRecord(
+        provider="qwen",
+        model_id="qwen3-vl-flash-2026-01-22",
+        media_kind="video",
+        upload_seconds=1,
+        cleanup_outcome=CleanupOutcome.FAILED,
+        expires_at=(datetime.now(UTC) + timedelta(hours=48)).isoformat(),
+    )
+    fallback = long_cli.LongCalibrationReceipt(
+        status="PASS",
+        created_at=datetime.now(UTC),
+        manifest_sha256=long_cli._file_sha256_from_manifest(manifest),
+        prompt_sha256=manifest.prompt_sha256,
+        provider_concurrency_limit=1,
+        attempted_limits=[1, 2],
+        qwen_lifecycle_audit=_qwen_expiry_audit(),
+        terminal_unsafe_qwen_lifecycle_audit=[terminal_failure],
+    )
+    assert fallback.provider_concurrency_limit == 1
+    assert fallback.terminal_unsafe_qwen_lifecycle_audit == [terminal_failure]
+    safe_records, terminal_records = long_cli._partition_calibration_lifecycle(
+        {1: _qwen_expiry_audit(), 2: [*_qwen_expiry_audit(), terminal_failure]},
+        selected_limit=1,
+        attempted_limits=[1, 2],
+    )
+    assert all(record.cleanup_outcome == CleanupOutcome.EXPIRY_RECORDED for record in safe_records)
+    assert terminal_records[-1] == terminal_failure
 
     stale = long_cli.LongCalibrationReceipt(
         status="PASS",
@@ -264,7 +482,16 @@ async def test_preflight_qwen_cancellation_is_journaled_before_it_propagates(
         expires_at = (datetime.now(UTC) + timedelta(hours=48)).isoformat()
 
     class Provider:
-        async def upload(self, _model_id: str, _path: Path, _media_kind: str) -> object:
+        async def upload(
+            self,
+            _model_id: str,
+            _path: Path,
+            _media_kind: str,
+            *,
+            on_expiry: Callable[[str], None] | None = None,
+        ) -> object:
+            if on_expiry is not None:
+                on_expiry(ExpiringCancelledError.expires_at)
             raise ExpiringCancelledError
 
     video = tmp_path / "probe.mp4"
@@ -285,8 +512,66 @@ async def test_preflight_qwen_cancellation_is_journaled_before_it_propagates(
     payload = LongLifecycleJournalPayload.model_validate_json(
         journal_path.read_text(encoding="utf-8")
     )
-    assert len(payload.entries) == 1
-    assert payload.entries[0].lifecycle.cleanup_outcome == CleanupOutcome.EXPIRY_RECORDED
+    assert [entry.lifecycle.cleanup_outcome for entry in payload.entries] == [
+        CleanupOutcome.EXPIRY_RECORDED,
+        CleanupOutcome.FAILED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_preflight_qwen_fails_closed_before_upload_without_journal(
+    tmp_path: Path,
+) -> None:
+    class Provider:
+        upload_started = False
+
+        async def upload(self, *_args: object, **_kwargs: object) -> object:
+            self.upload_started = True
+            raise AssertionError("upload must not start without a lifecycle journal")
+
+    provider = Provider()
+    video = tmp_path / "probe.mp4"
+    video.write_bytes(b"video")
+
+    with pytest.raises(LongExecutionError, match="qwen_lifecycle_sink_missing"):
+        await long_cli._qwen_visual_probe(
+            cast(Any, provider),
+            video,
+            "Return action events.",
+            source_id="seven-minute-rdl",
+            stage="real_8_seconds",
+            journal=None,
+        )
+
+    assert provider.upload_started is False
+
+
+@pytest.mark.asyncio
+async def test_calibration_fails_before_media_preparation_without_journal(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(LongExecutionError, match="qwen_lifecycle_sink_missing"):
+        await long_cli._run_calibration(
+            _manifest(tmp_path),
+            cast(Any, object()),
+            journal=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_experiment_fails_before_media_preparation_without_journal(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(LongExecutionError, match="qwen_lifecycle_sink_missing"):
+        await long_cli._run_experiment(
+            _manifest(tmp_path),
+            cast(Any, object()),
+            provider_concurrency_limit=1,
+            timeout_seconds=180,
+            pricing=None,
+            gold_sha256="a" * 64,
+            journal=None,
+        )
 
 
 @pytest.mark.asyncio
@@ -297,7 +582,15 @@ async def test_preflight_qwen_invalid_expiry_cleans_and_journals_failure(
         def __init__(self) -> None:
             self.cleaned = False
 
-        async def upload(self, model_id: str, path: Path, media_kind: str) -> object:
+        async def upload(
+            self,
+            model_id: str,
+            path: Path,
+            media_kind: str,
+            *,
+            on_expiry: Callable[[str], None] | None = None,
+        ) -> object:
+            del on_expiry
             return SimpleNamespace(
                 provider="qwen",
                 model_id=model_id,
@@ -321,7 +614,7 @@ async def test_preflight_qwen_invalid_expiry_cleans_and_journals_failure(
     journal = LongLifecycleJournal(journal_path, manifest_sha256="a" * 64)
     provider = Provider()
 
-    with pytest.raises(LongProviderContractError, match="qwen_expiry_missing"):
+    with pytest.raises(LongExecutionError, match="qwen_expiry_missing"):
         await long_cli._qwen_visual_probe(
             cast(Any, provider),
             video,
@@ -338,6 +631,64 @@ async def test_preflight_qwen_invalid_expiry_cleans_and_journals_failure(
     assert len(payload.entries) == 1
     assert payload.entries[0].lifecycle.cleanup_outcome == CleanupOutcome.FAILED
     assert payload.entries[0].lifecycle.expires_at is None
+
+
+@pytest.mark.asyncio
+async def test_preflight_qwen_expiry_mismatch_is_journaled_as_failed(
+    tmp_path: Path,
+) -> None:
+    recorded_expiry = (datetime.now(UTC) + timedelta(hours=47)).isoformat()
+    returned_expiry = (datetime.now(UTC) + timedelta(hours=48)).isoformat()
+
+    class Provider:
+        async def upload(
+            self,
+            model_id: str,
+            _path: Path,
+            media_kind: str,
+            *,
+            on_expiry: Callable[[str], None] | None = None,
+        ) -> object:
+            if on_expiry is not None:
+                on_expiry(recorded_expiry)
+            return SimpleNamespace(
+                provider="qwen",
+                model_id=model_id,
+                media_kind=media_kind,
+                expires_at=returned_expiry,
+            )
+
+        async def analyze(self, _handle: object, _prompt: str) -> None:
+            raise AssertionError("mismatched handle must not be analyzed")
+
+        async def cleanup(self, _handle: object) -> None:
+            return None
+
+        async def verify_cleanup(self, _handle: object) -> CleanupOutcome:
+            return CleanupOutcome.EXPIRY_RECORDED
+
+    video = tmp_path / "probe.mp4"
+    video.write_bytes(b"video")
+    journal_path = tmp_path / "lifecycle.json"
+    journal = LongLifecycleJournal(journal_path, manifest_sha256="a" * 64)
+
+    with pytest.raises(LongExecutionError, match="qwen_expiry_mismatch"):
+        await long_cli._qwen_visual_probe(
+            cast(Any, Provider()),
+            video,
+            "Return action events.",
+            source_id="seven-minute-rdl",
+            stage="real_8_seconds",
+            journal=journal,
+        )
+
+    payload = LongLifecycleJournalPayload.model_validate_json(
+        journal_path.read_text(encoding="utf-8")
+    )
+    assert [entry.lifecycle.cleanup_outcome for entry in payload.entries] == [
+        CleanupOutcome.EXPIRY_RECORDED,
+        CleanupOutcome.FAILED,
+    ]
 
 
 @pytest.mark.asyncio
@@ -608,15 +959,33 @@ def test_completed_run_keeps_union_coverage_and_only_sanitized_timing_fields() -
             ),
         ),
         cleanup_failed=False,
+        token_usage_by_provider={"seed": (1000, 500)},
+        # Retried billable calls deliberately leave this false because a
+        # failed attempt may have charged tokens without returning usage.
+        token_usage_known=False,
     )
 
-    run = _completed_run(result, 424.31, preprocessing_seconds=8)
+    run = _completed_run(
+        result,
+        424.31,
+        preprocessing_seconds=8,
+        pricing=LongPricing(
+            seed_input_cny_per_1k=1,
+            seed_output_cny_per_1k=1,
+            qwen_input_cny_per_1k=1,
+            qwen_output_cny_per_1k=1,
+            asr_cny_per_minute=1,
+        ),
+    )
 
     assert run.full_coverage is True
     assert run.cleanup_ok is True
     assert run.queue_seconds == 3
     assert run.preprocessing_seconds == 8
     assert run.completed_seconds == 22
+    assert run.input_tokens is None
+    assert run.output_tokens is None
+    assert run.cost_cny is None
     assert run.lifecycle_audit[1].expires_at == "2099-01-01T00:00:00+00:00"
 
 
@@ -672,6 +1041,17 @@ def test_gold_templates_require_an_explicit_human_review_lock(
         _load_reviewed_gold(manifest)
 
     for source in manifest.sources:
+        events = [
+            {
+                "canonical_name": action.canonical_name,
+                "accepted_aliases": action.accepted_aliases,
+                "start_seconds": index * 10,
+                "end_seconds": index * 10 + 5,
+                "kind": "action",
+                "evidence_channels": ["visual"],
+            }
+            for index, action in enumerate(source.gold_contract.actions)
+        ]
         source.gold_path.write_text(
             json.dumps(
                 {
@@ -679,7 +1059,7 @@ def test_gold_templates_require_an_explicit_human_review_lock(
                     "duration_seconds": source.duration_seconds,
                     "gold_version": source.gold_version,
                     "reviewed": True,
-                    "events": [],
+                    "events": events,
                 }
             ),
             encoding="utf-8",
@@ -692,16 +1072,7 @@ def test_gold_templates_require_an_explicit_human_review_lock(
 
     first_digest = _reviewed_gold_sha256(_load_reviewed_gold(manifest))
     payload = json.loads(manifest.sources[0].gold_path.read_text(encoding="utf-8"))
-    payload["events"] = [
-        {
-            "canonical_name": "Romanian deadlift",
-            "accepted_aliases": ["RDL"],
-            "start_seconds": 10,
-            "end_seconds": 20,
-            "kind": "action",
-            "evidence_channels": ["visual"],
-        }
-    ]
+    payload["events"][0]["start_seconds"] = 1
     manifest.sources[0].gold_path.write_text(json.dumps(payload), encoding="utf-8")
 
     assert _reviewed_gold_sha256(_load_reviewed_gold(manifest)) != first_digest

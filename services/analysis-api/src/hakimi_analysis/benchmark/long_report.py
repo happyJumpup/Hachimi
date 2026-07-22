@@ -5,6 +5,7 @@ import re
 from collections.abc import Mapping, Sequence
 from math import isfinite
 
+from hakimi_analysis.benchmark.long_results import LongExpiryAuditStatus
 from hakimi_analysis.benchmark.long_scoring import LongArmAggregate, LongVideoDecision
 
 _COMPARISON_ARM = {
@@ -20,8 +21,10 @@ _SAFE_PROTOCOL_NUMBERS = {
     "retry_limit",
 }
 _SAFE_PROTOCOL_IDENTIFIERS = {
+    "gold_sha256",
     "prompt_version",
     "prompt_sha256",
+    "manifest_sha256",
     "gold_version",
     "asr_model_id",
     "asr_resource",
@@ -42,6 +45,11 @@ _SAFE_DIAGNOSTIC_VALUES = {
     "experiment_status": {"completed", "incomplete", "failed", "cancelled"},
 }
 _SAFE_DIAGNOSTIC_NUMBERS = {"provider_concurrency_limit"}
+_PROMOTION_STATUS_BY_EXPIRY_AUDIT: Mapping[LongExpiryAuditStatus, str] = {
+    "pending": "pending",
+    "lifecycle_failed": "lifecycle_failed",
+    "provider_ttl_elapsed": "provider_ttl_elapsed_research_only",
+}
 
 
 def _safe_protocol(protocol: Mapping[str, object]) -> dict[str, object]:
@@ -81,6 +89,7 @@ def sanitized_long_video_report(
     *,
     protocol: Mapping[str, object],
     diagnostics: Mapping[str, object] | None = None,
+    expiry_audit_status: LongExpiryAuditStatus = "pending",
 ) -> dict[str, object]:
     """Return a report that cannot contain media content or provider output.
 
@@ -92,10 +101,10 @@ def sanitized_long_video_report(
     return {
         "version": 1,
         "scope": "local_long_video_quality_only",
-        # A local winner is only a research result. Every comparison includes
-        # Qwen temporary OSS objects, whose provider-managed 48-hour expiry is
-        # recorded but cannot be immediately verified through this API.
-        "promotion_status": "blocked_pending_qwen_48h_expiry_audit",
+        # This status only attests that the provider-declared TTL boundary and
+        # safety margin elapsed. It never claims that an object was inspected
+        # or verified deleted, and remains research-only after the gate opens.
+        "promotion_status": _PROMOTION_STATUS_BY_EXPIRY_AUDIT[expiry_audit_status],
         "protocol": _safe_protocol(protocol),
         "arms": [
             {
@@ -115,6 +124,7 @@ def render_long_video_report(
     *,
     protocol: Mapping[str, object],
     diagnostics: Mapping[str, object] | None = None,
+    expiry_audit_status: LongExpiryAuditStatus = "pending",
 ) -> str:
     """Render a deterministic JSON artifact from the sanitized report only."""
 
@@ -125,6 +135,7 @@ def render_long_video_report(
                 decision,
                 protocol=protocol,
                 diagnostics=diagnostics,
+                expiry_audit_status=expiry_audit_status,
             ),
             ensure_ascii=False,
             indent=2,

@@ -12,13 +12,22 @@ from hakimi_analysis.benchmark.long_manifest import (
 )
 
 
+def _gold_contract(*names: str) -> dict[str, object]:
+    return {
+        "version": "long-video-unique-actions-v1",
+        "actions": [
+            {"canonical_name": name, "accepted_aliases": [name]} for name in names
+        ],
+    }
+
+
 def valid_manifest_payload(tmp_path: Path) -> dict[str, object]:
     ignored_root = tmp_path / ".benchmark-work" / "long-video"
     external_downloads = tmp_path.parent / f"{tmp_path.name}-downloads"
     return {
         "version": 1,
         "models": dict(EXPECTED_LONG_EXPERIMENT_MODELS),
-        "prompt_version": "long-video-ab-v1",
+        "prompt_version": "long-video-ab-v2",
         "chunk": {
             "version": "long-video-chunks-v1",
             "duration_seconds": 60,
@@ -41,15 +50,25 @@ def valid_manifest_payload(tmp_path: Path) -> dict[str, object]:
                 "sha256": "a" * 64,
                 "duration_seconds": 424.31,
                 "gold_path": str(ignored_root / "gold" / "seven.json"),
-                "gold_version": "seven-v1",
+                "gold_version": "long-video-gold-v2",
+                "gold_contract": _gold_contract("罗马尼亚硬拉"),
             },
             {
-                "source_id": "newcomer-workout-19m",
+                "source_id": "beginner-full-workout-19m",
                 "source_path": str(external_downloads / "nineteen.mp4"),
                 "sha256": "b" * 64,
                 "duration_seconds": 1157.46,
                 "gold_path": str(ignored_root / "gold" / "nineteen.json"),
-                "gold_version": "nineteen-v1",
+                "gold_version": "long-video-gold-v2",
+                "gold_contract": _gold_contract(
+                    "弹力带肩活动",
+                    "推撑类激活",
+                    "低位绳索夹胸",
+                    "平板杠铃卧推",
+                    "上斜器械卧推",
+                    "坐姿杠铃实力推",
+                    "颈后绳索臂屈伸",
+                ),
             },
         ],
         "output": {
@@ -70,7 +89,7 @@ def test_manifest_locks_two_full_sources_and_long_video_protocol(tmp_path: Path)
     assert manifest.chunk.overlap_seconds == 10
     assert [source.source_id for source in manifest.sources] == [
         "romanian-deadlift-7m",
-        "newcomer-workout-19m",
+        "beginner-full-workout-19m",
     ]
 
 
@@ -102,7 +121,32 @@ def test_manifest_rejects_non_frozen_protocol_or_duplicate_sources(tmp_path: Pat
     payload = valid_manifest_payload(tmp_path)
     payload["prompt_version"] = "unfrozen-prompt-v1"
 
-    with pytest.raises(ValidationError, match="prompt version is not frozen"):
+    with pytest.raises(ValidationError, match="long-video-ab-v2"):
+        LongExperimentManifest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("prompt_version", "long-video-ab-v1", "long-video-ab-v2"),
+        ("gold_version", "seven-v1", "long-video-gold-v2"),
+    ],
+)
+def test_manifest_rejects_historical_prompt_or_gold_contract(
+    tmp_path: Path,
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    payload = valid_manifest_payload(tmp_path)
+    if field == "prompt_version":
+        payload[field] = value
+    else:
+        sources = payload["sources"]
+        assert isinstance(sources, list)
+        sources[0][field] = value
+
+    with pytest.raises(ValidationError, match=message):
         LongExperimentManifest.model_validate(payload)
 
 

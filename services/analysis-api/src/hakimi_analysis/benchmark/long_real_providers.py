@@ -13,6 +13,7 @@ import hashlib
 import json
 import mimetypes
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
@@ -277,7 +278,14 @@ class LongQwenVlProvider:
         text, _, _, _ = _parse_qwen_native_sse(response.body)
         _validate_envelope(text)
 
-    async def upload(self, model_id: str, path: Path, media_kind: str) -> MediaHandle:
+    async def upload(
+        self,
+        model_id: str,
+        path: Path,
+        media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle:
         self._require_model(model_id)
         if media_kind != "video":
             raise LongProviderContractError("long_qwen_media_kind_invalid")
@@ -322,6 +330,11 @@ class LongQwenVlProvider:
         if path.stat().st_size / 1024 / 1024 > max_file_size_mb:
             raise LongProviderContractError("qwen_file_too_large")
         expires_at = (datetime.now(UTC) + timedelta(hours=48)).isoformat()
+        # Persist the provider-managed retention boundary before the first
+        # byte can leave this process. If the journal is unavailable, abort
+        # instead of creating an object whose expiry cannot be audited.
+        if on_expiry is not None:
+            on_expiry(expires_at)
         try:
             upload = await self._transport.multipart_request(
                 upload_host,

@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from hakimi_analysis.benchmark.long_models import ArmId
 from hakimi_analysis.benchmark.long_results import (
     LongExperimentRawResult,
+    LongExpiryAuditReceipt,
     LongLifecycleJournal,
     LongLifecycleJournalEntry,
     LongLifecycleJournalPayload,
@@ -80,6 +81,30 @@ def test_lifecycle_journal_atomically_persists_only_sanitized_expiry_metadata(
 
     reloaded = LongLifecycleJournal(path, manifest_sha256="a" * 64)
     reloaded.append(payload.entries[0].model_copy(update={"phase": "experiment"}))
-    assert len(
-        LongLifecycleJournalPayload.model_validate_json(path.read_text(encoding="utf-8")).entries
-    ) == 2
+    assert (
+        len(
+            LongLifecycleJournalPayload.model_validate_json(
+                path.read_text(encoding="utf-8")
+            ).entries
+        )
+        == 2
+    )
+
+
+def test_expiry_receipt_cannot_claim_deletion_or_elapsed_before_the_margin() -> None:
+    expires_at = datetime(2026, 7, 25, 12, tzinfo=UTC)
+    payload = {
+        "manifest_sha256": "a" * 64,
+        "journal_sha256": "b" * 64,
+        "checked_at": expires_at + timedelta(minutes=4),
+        "margin_seconds": 300,
+        "status": "provider_ttl_elapsed",
+        "record_count": 1,
+        "blocking_record_count": 0,
+        "max_expires_at": expires_at,
+    }
+
+    with pytest.raises(ValidationError, match="TTL has not safely elapsed"):
+        LongExpiryAuditReceipt.model_validate(payload)
+    with pytest.raises(ValidationError):
+        LongExpiryAuditReceipt.model_validate({**payload, "status": "verified_deleted"})

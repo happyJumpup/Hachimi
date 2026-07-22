@@ -189,6 +189,57 @@ async def test_long_qwen_does_not_replay_an_ambiguous_multipart_transfer(
 
 
 @pytest.mark.asyncio
+async def test_long_qwen_records_expiry_before_starting_multipart(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "silent.mp4"
+    video.write_bytes(b"video")
+    transport = _CancelledMultipartTransport()
+    provider = LongQwenVlProvider(
+        api_key="test-key",
+        transport=transport,  # type: ignore[arg-type]
+    )
+    recorded_expiries: list[str] = []
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider.upload(
+            EXPECTED_LONG_EXPERIMENT_MODELS["qwen_visual_model"],
+            video,
+            "video",
+            on_expiry=recorded_expiries.append,
+        )
+
+    assert len(recorded_expiries) == 1
+    assert recorded_expiries[0].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_long_qwen_aborts_before_multipart_when_expiry_journal_fails(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "silent.mp4"
+    video.write_bytes(b"video")
+    transport = _FakeTransport()
+    provider = LongQwenVlProvider(
+        api_key="test-key",
+        transport=transport,  # type: ignore[arg-type]
+    )
+
+    def fail_journal(_expires_at: str) -> None:
+        raise RuntimeError("journal unavailable")
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await provider.upload(
+            EXPECTED_LONG_EXPERIMENT_MODELS["qwen_visual_model"],
+            video,
+            "video",
+            on_expiry=fail_journal,
+        )
+
+    assert transport.multipart_fields == []
+
+
+@pytest.mark.asyncio
 async def test_long_qwen_attaches_expiry_metadata_when_multipart_is_cancelled(
     tmp_path: Path,
 ) -> None:

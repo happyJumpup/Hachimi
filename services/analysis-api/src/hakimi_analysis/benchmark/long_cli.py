@@ -14,19 +14,23 @@ import re
 import socket
 import sys
 import tempfile
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from pydantic import Field, model_validator
 
-from hakimi_analysis.benchmark.long_execution import LongCheckpointStore, retry_long_operation
+from hakimi_analysis.benchmark.long_execution import (
+    LongCheckpointStore,
+    LongExecutionError,
+    retry_long_operation,
+)
 from hakimi_analysis.benchmark.long_manifest import load_long_experiment_manifest
 from hakimi_analysis.benchmark.long_media import (
     build_complete_source_chunks,
@@ -44,7 +48,9 @@ from hakimi_analysis.benchmark.long_pipeline import (
     LongExecutionAudit,
     LongPreparedChunk,
     LongPreparedSource,
+    LongPromptVersion,
     LongProviderBundle,
+    LongQwenExpiryLifecycle,
 )
 from hakimi_analysis.benchmark.long_preparation import (
     LongMediaPreparer,
@@ -64,7 +70,10 @@ from hakimi_analysis.benchmark.long_real_providers import (
 )
 from hakimi_analysis.benchmark.long_report import render_long_video_report
 from hakimi_analysis.benchmark.long_results import (
+    LONG_EXPIRY_AUDIT_MARGIN_SECONDS,
     LongExperimentRawResult,
+    LongExpiryAuditReceipt,
+    LongExpiryAuditStatus,
     LongLifecycleJournal,
     LongLifecycleJournalEntry,
 )
@@ -81,6 +90,7 @@ from hakimi_analysis.benchmark.long_scoring import (
     LongVideoSourceGold,
     choose_long_video_arm,
     score_long_video_runs,
+    validate_gold_against_source_contract,
 )
 from hakimi_analysis.benchmark.long_transport import (
     LongBenchmarkTransportError,
@@ -179,6 +189,9 @@ class LongCalibrationReceipt(StrictModel):
     provider_concurrency_limit: int = Field(ge=1, le=3)
     attempted_limits: list[int]
     qwen_lifecycle_audit: list[LongMediaLifecycleRecord] = Field(default_factory=list)
+    terminal_unsafe_qwen_lifecycle_audit: list[LongMediaLifecycleRecord] = Field(
+        default_factory=list
+    )
 
     @model_validator(mode="after")
     def validate_attempted_limits(self) -> "LongCalibrationReceipt":
@@ -196,6 +209,29 @@ class LongCalibrationReceipt(StrictModel):
             for record in self.qwen_lifecycle_audit
         ):
             raise ValueError("long-video calibration requires Qwen expiry lifecycle audit")
+        if self.provider_concurrency_limit == 3 and self.terminal_unsafe_qwen_lifecycle_audit:
+            raise ValueError("maximum safe calibration cannot contain a terminal unsafe audit")
+        if any(
+            record.provider != "qwen"
+            or record.cleanup_outcome not in {CleanupOutcome.EXPIRY_RECORDED, CleanupOutcome.FAILED}
+            or (
+                record.cleanup_outcome == CleanupOutcome.EXPIRY_RECORDED
+                and (
+                    (expiry := _expiry_datetime_from_value(record.expires_at)) is None
+                    or expiry <= self.created_at
+                )
+            )
+            or (
+                record.cleanup_outcome == CleanupOutcome.FAILED
+                and record.expires_at is not None
+                and (
+                    (failed_expiry := _expiry_datetime_from_value(record.expires_at)) is None
+                    or failed_expiry <= self.created_at
+                )
+            )
+            for record in self.terminal_unsafe_qwen_lifecycle_audit
+        ):
+            raise ValueError("long-video terminal unsafe Qwen lifecycle audit is invalid")
         return self
 
 
@@ -204,7 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("prepare", "gold-template"):
+    for name in ("prepare", "gold-template", "audit-expiry"):
         command = subparsers.add_parser(name)
         command.add_argument("--manifest", type=Path, required=True)
 
@@ -251,6 +287,24 @@ def main() -> int:
         _write_long_gold_templates(manifest)
         print(json.dumps({"status": "PASS", "scope": "long_video_gold_template"}))
         return 0
+    if args.command == "audit-expiry":
+        receipt = _audit_qwen_expiry(manifest, checked_at=datetime.now(UTC))
+        _write_json(
+            _expiry_audit_receipt_path(manifest),
+            receipt.model_dump(mode="json"),
+        )
+        print(
+            json.dumps(
+                {
+                    "status": receipt.status,
+                    "scope": "long_video_qwen_expiry_audit",
+                    "record_count": receipt.record_count,
+                    "blocking_record_count": receipt.blocking_record_count,
+                }
+            ),
+            file=sys.stdout if receipt.status == "provider_ttl_elapsed" else sys.stderr,
+        )
+        return 0 if receipt.status == "provider_ttl_elapsed" else 1
     if args.command == "preflight":
         verify_long_source_media(manifest)
         receipt_path = _preflight_receipt_path(manifest)
@@ -357,7 +411,8 @@ def main() -> int:
         report = render_long_video_report(
             aggregates,
             choose_long_video_arm(aggregates),
-            protocol=_report_protocol(manifest),
+            protocol=_report_protocol(manifest, gold_sha256=raw.gold_sha256),
+            expiry_audit_status=_load_expiry_audit_status(manifest),
             diagnostics={
                 "proxy_mode": "explicit-socks5h",
                 "preflight_status": "passed",
@@ -1056,51 +1111,44 @@ async def _qwen_visual_probe(
     journal: LongLifecycleJournal | None,
 ) -> datetime:
     upload_started = perf_counter()
+    lifecycle = LongQwenExpiryLifecycle(
+        model_id="qwen3-vl-flash-2026-01-22",
+        persist=(
+            None
+            if journal is None
+            else lambda record: _append_preflight_lifecycle(
+                journal,
+                source_id=source_id,
+                stage=stage,
+                record=record,
+            )
+        ),
+    )
+
     try:
         # Multipart upload is intentionally one-shot: a transport-ambiguous
         # object would otherwise escape this run's lifecycle audit.
-        handle = await provider.upload("qwen3-vl-flash-2026-01-22", silent_video_path, "video")
+        handle = await provider.upload(
+            "qwen3-vl-flash-2026-01-22",
+            silent_video_path,
+            "video",
+            on_expiry=lifecycle.record_before_upload,
+        )
     except BaseException as error:
-        expires_at = _expiry_datetime_from_value(getattr(error, "expires_at", None))
-        if expires_at is not None and journal is not None:
-            _append_preflight_lifecycle(
-                journal,
-                source_id=source_id,
-                stage=stage,
-                record=LongMediaLifecycleRecord(
-                    provider="qwen",
-                    model_id="qwen3-vl-flash-2026-01-22",
-                    media_kind="video",
-                    upload_seconds=perf_counter() - upload_started,
-                    cleanup_outcome=CleanupOutcome.EXPIRY_RECORDED,
-                    expires_at=expires_at.isoformat(),
-                ),
-            )
+        try:
+            lifecycle.persist_upload_failure(error)
+        except BaseException:
+            if isinstance(error, asyncio.CancelledError):
+                raise error from None
+            raise
         if isinstance(error, LongBenchmarkTransportError):
             raise LongProviderContractError(f"qwen_upload_{error.code}") from error
         raise
-    expires_at = _expiry_datetime_from_value(handle.expires_at)
-    if expires_at is not None and expires_at <= datetime.now(UTC):
-        expires_at = None
     upload_seconds = perf_counter() - upload_started
     primary_error: BaseException | None = None
+    expires_at: datetime | None = None
     try:
-        if expires_at is None:
-            raise LongProviderContractError("qwen_expiry_missing")
-        if journal is not None:
-            _append_preflight_lifecycle(
-                journal,
-                source_id=source_id,
-                stage=stage,
-                record=LongMediaLifecycleRecord(
-                    provider="qwen",
-                    model_id="qwen3-vl-flash-2026-01-22",
-                    media_kind="video",
-                    upload_seconds=upload_seconds,
-                    cleanup_outcome=CleanupOutcome.EXPIRY_RECORDED,
-                    expires_at=expires_at.isoformat(),
-                ),
-            )
+        expires_at = datetime.fromisoformat(lifecycle.bind_handle(handle.expires_at))
         await retry_long_operation(
             lambda: provider.analyze(handle, task_instructions + VISUAL_ONLY_SUFFIX)
         )
@@ -1119,13 +1167,11 @@ async def _qwen_visual_probe(
         except BaseException:
             cleanup_outcome = CleanupOutcome.FAILED
         lifecycle_failed = (
-            cleanup_failed
-            or cleanup_outcome != CleanupOutcome.EXPIRY_RECORDED
-            or expires_at is None
+            cleanup_failed or cleanup_outcome != CleanupOutcome.EXPIRY_RECORDED or lifecycle.invalid
         )
-        if lifecycle_failed and journal is not None:
+        if lifecycle_failed:
             _append_preflight_lifecycle(
-                journal,
+                cast(LongLifecycleJournal, journal),
                 source_id=source_id,
                 stage=stage,
                 record=LongMediaLifecycleRecord(
@@ -1135,7 +1181,7 @@ async def _qwen_visual_probe(
                     upload_seconds=upload_seconds,
                     cleanup_seconds=perf_counter() - cleanup_started,
                     cleanup_outcome=CleanupOutcome.FAILED,
-                    expires_at=expires_at.isoformat() if expires_at is not None else None,
+                    expires_at=lifecycle.handle_expiry,
                 ),
             )
         if lifecycle_failed and primary_error is None:
@@ -1145,6 +1191,8 @@ async def _qwen_visual_probe(
                 "cleanup_error",
                 expires_at=expires_at,
             )
+    if expires_at is None:
+        raise LongExecutionError("qwen_expiry_missing")
     return expires_at
 
 
@@ -1199,25 +1247,37 @@ async def _run_calibration(
     *,
     journal: LongLifecycleJournal | None = None,
 ) -> LongCalibrationReceipt:
-    qwen_lifecycle_audit: list[LongMediaLifecycleRecord] = []
+    if journal is None:
+        raise LongExecutionError("qwen_lifecycle_sink_missing")
+    qwen_lifecycle_by_limit: dict[int, list[LongMediaLifecycleRecord]] = {}
+    active_capacity: int | None = None
 
     def lifecycle_sink(key: LongRunKey, record: LongMediaLifecycleRecord) -> None:
         if record.provider != "qwen":
             return
-        qwen_lifecycle_audit.append(record)
-        if journal is not None:
-            _append_run_lifecycle(journal, "calibration", key, record)
+        if active_capacity is None:
+            raise RuntimeError("long-video calibration lifecycle escaped its capacity trial")
+        qwen_lifecycle_by_limit.setdefault(active_capacity, []).append(record)
+        _append_run_lifecycle(
+            journal,
+            "calibration",
+            key,
+            record,
+            stage=f"capacity_{active_capacity}",
+        )
 
     async with _representative_sources(manifest) as prepared_sources:
 
         async def trial(capacity: int) -> bool:
+            nonlocal active_capacity
+            active_capacity = capacity
             executor = LongArmExecutor(
                 prepared_sources=prepared_sources,
                 providers=runtime.providers,
                 asr_model_id=manifest.models.asr_resource,
                 qwen_model_id=manifest.models.qwen_visual_model,
                 retry_delays=(1.0, 2.0),
-                task_instructions=long_video_prompt(manifest.prompt_version),
+                prompt_version=cast(LongPromptVersion, manifest.prompt_version),
                 lifecycle_sink=lifecycle_sink,
             )
             permits = ProviderPermits({"asr": capacity, "seed": capacity, "qwen": capacity})
@@ -1229,26 +1289,34 @@ async def _run_calibration(
                     LongRunKey(manifest.sources[1].source_id, ArmId.QWEN_VIDEO, run_index),
                 )
             ]
-            runs = await asyncio.gather(
-                *(
-                    _safe_execute(
-                        executor,
-                        key,
-                        permits,
-                        source_duration_seconds=60,
-                        preprocessing_seconds=0,
-                        timeout_seconds=180,
-                        pricing=None,
+            try:
+                runs = await asyncio.gather(
+                    *(
+                        _safe_execute(
+                            executor,
+                            key,
+                            permits,
+                            source_duration_seconds=60,
+                            preprocessing_seconds=0,
+                            timeout_seconds=180,
+                            pricing=None,
+                        )
+                        for key in keys
                     )
-                    for key in keys
                 )
-            )
-            return all(
-                run.status == LongRunStatus.COMPLETED and run.full_coverage and run.cleanup_ok
-                for run in runs
-            )
+                return all(
+                    run.status == LongRunStatus.COMPLETED and run.full_coverage and run.cleanup_ok
+                    for run in runs
+                )
+            finally:
+                active_capacity = None
 
         limit, attempted = await calibrate_provider_concurrency(3, trial)
+    safe_lifecycle, terminal_unsafe_lifecycle = _partition_calibration_lifecycle(
+        qwen_lifecycle_by_limit,
+        selected_limit=limit,
+        attempted_limits=attempted,
+    )
     return LongCalibrationReceipt(
         status="PASS",
         created_at=datetime.now(UTC),
@@ -1256,8 +1324,28 @@ async def _run_calibration(
         prompt_sha256=manifest.prompt_sha256,
         provider_concurrency_limit=limit,
         attempted_limits=attempted,
-        qwen_lifecycle_audit=qwen_lifecycle_audit,
+        qwen_lifecycle_audit=safe_lifecycle,
+        terminal_unsafe_qwen_lifecycle_audit=terminal_unsafe_lifecycle,
     )
+
+
+def _partition_calibration_lifecycle(
+    records_by_limit: Mapping[int, Sequence[LongMediaLifecycleRecord]],
+    *,
+    selected_limit: int,
+    attempted_limits: Sequence[int],
+) -> tuple[list[LongMediaLifecycleRecord], list[LongMediaLifecycleRecord]]:
+    safe = [
+        record
+        for limit in attempted_limits
+        if limit <= selected_limit
+        for record in records_by_limit.get(limit, ())
+    ]
+    terminal_limit = selected_limit + 1
+    terminal = (
+        list(records_by_limit.get(terminal_limit, ())) if terminal_limit in attempted_limits else []
+    )
+    return safe, terminal
 
 
 @asynccontextmanager
@@ -1313,9 +1401,6 @@ def _prepared_representative_source(
 ) -> LongPreparedSource:
     if media.contact_sheet_path is None:
         raise RuntimeError("long-video representative contact sheet is missing")
-    representative = source.model_copy(
-        update={"source_path": probe.av_path, "duration_seconds": 60.0}
-    )
     chunk = LongVideoChunk(
         source_id=source.source_id,
         index=0,
@@ -1324,7 +1409,8 @@ def _prepared_representative_source(
         duration_seconds=60,
     )
     return LongPreparedSource(
-        source=representative,
+        source_id=source.source_id,
+        duration_seconds=60.0,
         audio_path=media.audio_path,
         chunks=(
             LongPreparedChunk(
@@ -1347,17 +1433,19 @@ async def _run_experiment(
     gold_sha256: str,
     journal: LongLifecycleJournal | None = None,
 ) -> LongExperimentRawResult:
+    if journal is None:
+        raise LongExecutionError("qwen_lifecycle_sink_missing")
     prepared_sources: dict[str, LongPreparedSource] = {}
     preprocessing_seconds: dict[str, float] = {}
     preparer = LongMediaPreparer(temp_root=manifest.output.temporary_root)
     first_started = perf_counter()
     async with preparer.prepare_source(manifest.sources[0], manifest.chunk) as first:
-        prepared_sources[first.source.source_id] = first
-        preprocessing_seconds[first.source.source_id] = perf_counter() - first_started
+        prepared_sources[first.source_id] = first
+        preprocessing_seconds[first.source_id] = perf_counter() - first_started
         second_started = perf_counter()
         async with preparer.prepare_source(manifest.sources[1], manifest.chunk) as second:
-            prepared_sources[second.source.source_id] = second
-            preprocessing_seconds[second.source.source_id] = perf_counter() - second_started
+            prepared_sources[second.source_id] = second
+            preprocessing_seconds[second.source_id] = perf_counter() - second_started
             executor = LongArmExecutor(
                 prepared_sources=prepared_sources,
                 providers=runtime.providers,
@@ -1367,18 +1455,12 @@ async def _run_experiment(
                     manifest.output.working_root / "checkpoints",
                     manifest_sha256=_file_sha256_from_manifest(manifest),
                 ),
-                task_instructions=long_video_prompt(manifest.prompt_version),
-                lifecycle_sink=(
-                    (
-                        lambda key, record: _append_run_lifecycle(
-                            journal,
-                            "experiment",
-                            key,
-                            record,
-                        )
-                    )
-                    if journal is not None
-                    else None
+                prompt_version=cast(LongPromptVersion, manifest.prompt_version),
+                lifecycle_sink=lambda key, record: _append_run_lifecycle(
+                    journal,
+                    "experiment",
+                    key,
+                    record,
                 ),
             )
             sources = {source.source_id: source for source in manifest.sources}
@@ -1614,20 +1696,17 @@ def _load_reviewed_gold(manifest: LongExperimentManifest) -> list[LongVideoSourc
             annotation = LongVideoSourceGold.model_validate(payload)
         except Exception as error:
             raise RuntimeError("long-video gold annotation is not review-locked") from error
-        if (
-            annotation.source_id != source.source_id
-            or abs(annotation.duration_seconds - source.duration_seconds) > 1e-6
-            or annotation.gold_version != source.gold_version
-        ):
-            raise RuntimeError("long-video gold annotation does not match the manifest")
+        try:
+            validate_gold_against_source_contract(source, annotation)
+        except ValueError as error:
+            raise RuntimeError("long-video gold annotation does not match the manifest") from error
         gold.append(annotation)
     return gold
 
 
 def _reviewed_gold_sha256(gold: list[LongVideoSourceGold]) -> str:
     canonical = [
-        item.model_dump(mode="json")
-        for item in sorted(gold, key=lambda item: item.source_id)
+        item.model_dump(mode="json") for item in sorted(gold, key=lambda item: item.source_id)
     ]
     payload = json.dumps(
         canonical,
@@ -1653,14 +1732,105 @@ def _expiry_datetime_from_value(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+def _lifecycle_journal_path(manifest: LongExperimentManifest) -> Path:
+    manifest_sha256 = _file_sha256_from_manifest(manifest)
+    path = manifest.output.working_root / f"long-video-lifecycle-{manifest_sha256[:12]}.json"
+    _assert_ignored_output(path)
+    return path
+
+
 def _lifecycle_journal(manifest: LongExperimentManifest) -> LongLifecycleJournal:
     manifest_sha256 = _file_sha256_from_manifest(manifest)
-    path = (
-        manifest.output.working_root
-        / f"long-video-lifecycle-{manifest_sha256[:12]}.json"
-    )
-    _assert_ignored_output(path)
+    path = _lifecycle_journal_path(manifest)
     return LongLifecycleJournal(path, manifest_sha256=manifest_sha256)
+
+
+def _audit_qwen_expiry(
+    manifest: LongExperimentManifest,
+    *,
+    checked_at: datetime,
+) -> LongExpiryAuditReceipt:
+    if checked_at.tzinfo is None:
+        raise RuntimeError("long-video expiry audit time must include a timezone")
+    checked_at = checked_at.astimezone(UTC)
+    manifest_sha256 = _file_sha256_from_manifest(manifest)
+    journal_path = _lifecycle_journal_path(manifest)
+    journal = LongLifecycleJournal(
+        journal_path,
+        manifest_sha256=manifest_sha256,
+    )
+    payload = journal.snapshot()
+    source_ids = {source.source_id for source in manifest.sources}
+    blocking_record_count = 0
+    expiries: list[datetime] = []
+    for entry in payload.entries:
+        record = entry.lifecycle
+        expires_at = _expiry_datetime_from_value(record.expires_at)
+        recorded_at = entry.recorded_at
+        recorded_at_is_valid = recorded_at.tzinfo is not None
+        if expires_at is not None:
+            expiries.append(expires_at)
+        if (
+            entry.arm != ArmId.QWEN_VIDEO
+            or entry.source_id not in source_ids
+            or record.provider != "qwen"
+            or record.model_id != manifest.models.qwen_visual_model
+            or record.media_kind != "video"
+            or record.cleanup_outcome != CleanupOutcome.EXPIRY_RECORDED
+            or expires_at is None
+            or not recorded_at_is_valid
+            or (
+                recorded_at_is_valid
+                and expires_at is not None
+                and expires_at <= recorded_at.astimezone(UTC)
+            )
+        ):
+            blocking_record_count += 1
+    max_expires_at = max(expiries, default=None)
+    if blocking_record_count:
+        status: LongExpiryAuditStatus = "lifecycle_failed"
+    elif not payload.entries or max_expires_at is None:
+        status = "pending"
+    elif checked_at >= max_expires_at + timedelta(seconds=LONG_EXPIRY_AUDIT_MARGIN_SECONDS):
+        status = "provider_ttl_elapsed"
+    else:
+        status = "pending"
+    return LongExpiryAuditReceipt(
+        manifest_sha256=manifest_sha256,
+        journal_sha256=journal.snapshot_sha256,
+        checked_at=checked_at,
+        status=status,
+        record_count=len(payload.entries),
+        blocking_record_count=blocking_record_count,
+        max_expires_at=max_expires_at,
+    )
+
+
+def _load_expiry_audit_status(manifest: LongExperimentManifest) -> LongExpiryAuditStatus:
+    receipt_path = _expiry_audit_receipt_path(manifest)
+    if not receipt_path.is_file():
+        return "pending"
+    try:
+        receipt = LongExpiryAuditReceipt.model_validate_json(
+            receipt_path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return "lifecycle_failed"
+    manifest_sha256 = _file_sha256_from_manifest(manifest)
+    if receipt.manifest_sha256 != manifest_sha256:
+        return "lifecycle_failed"
+    journal_path = _lifecycle_journal_path(manifest)
+    if receipt.journal_sha256 is None:
+        return "pending"
+    if not journal_path.is_file():
+        return "pending"
+    try:
+        journal = LongLifecycleJournal(journal_path, manifest_sha256=manifest_sha256)
+    except RuntimeError:
+        return "lifecycle_failed"
+    if journal.snapshot_sha256 != receipt.journal_sha256:
+        return "pending"
+    return receipt.status
 
 
 def _append_preflight_lifecycle(
@@ -1686,6 +1856,8 @@ def _append_run_lifecycle(
     phase: Literal["calibration", "experiment"],
     key: LongRunKey,
     record: LongMediaLifecycleRecord,
+    *,
+    stage: str | None = None,
 ) -> None:
     if record.provider != "qwen":
         return
@@ -1695,6 +1867,7 @@ def _append_run_lifecycle(
             source_id=key.source_id,
             arm=key.arm_id,
             run_index=key.repetition,
+            stage=stage,
             lifecycle=record,
         )
     )
@@ -1793,15 +1966,28 @@ def _file_sha256_from_manifest(manifest: LongExperimentManifest) -> str:
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
-def _report_protocol(manifest: LongExperimentManifest) -> dict[str, object]:
+def _expiry_audit_receipt_path(manifest: LongExperimentManifest) -> Path:
+    manifest_sha256 = _file_sha256_from_manifest(manifest)
+    path = manifest.output.working_root / f"long-video-expiry-audit-{manifest_sha256[:12]}.json"
+    _assert_ignored_output(path)
+    return path
+
+
+def _report_protocol(
+    manifest: LongExperimentManifest,
+    *,
+    gold_sha256: str,
+) -> dict[str, object]:
     return {
         "chunk_seconds": manifest.chunk.duration_seconds,
         "overlap_seconds": manifest.chunk.overlap_seconds,
+        "manifest_sha256": _file_sha256_from_manifest(manifest),
         "repetitions_per_source_arm": manifest.repetitions,
         "retry_limit": manifest.retry.max_retries,
         "prompt_version": manifest.prompt_version,
         "prompt_sha256": manifest.prompt_sha256,
         "gold_version": "+".join(source.gold_version for source in manifest.sources),
+        "gold_sha256": gold_sha256,
         "asr_resource": manifest.models.asr_resource,
         "seed_visual_model": manifest.models.seed_visual_model,
         "seed_fusion_model": manifest.models.seed_fusion_model,

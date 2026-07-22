@@ -1,9 +1,10 @@
 import asyncio
 import json
 import re
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from pathlib import Path
 
+from hakimi_analysis.benchmark.long_contract import MAX_LONG_PRIMARY_DEMO_SECONDS
 from hakimi_analysis.benchmark.long_models import LongVideoChunk
 from hakimi_analysis.benchmark.models import BenchmarkCandidate
 
@@ -60,6 +61,38 @@ def deduplicate_chunk_candidates(
         active.append(candidate)
     return sorted(
         (candidate for group in by_identity.values() for candidate in group),
+        key=lambda candidate: (
+            candidate.start_seconds,
+            candidate.end_seconds,
+            _normalized_name(candidate.action_name),
+        ),
+    )
+
+
+def consolidate_unique_action_candidates(
+    candidates: Sequence[BenchmarkCandidate],
+) -> list[BenchmarkCandidate]:
+    """Keep one primary demonstration for each distinct trainable action.
+
+    The v2 long-video study evaluates product-level actions rather than every
+    repeated demonstration. Exact normalized names are consolidated locally;
+    semantic alias resolution remains the fusion model's responsibility.
+    """
+
+    deduplicated = deduplicate_chunk_candidates(candidates)
+    action_groups: dict[str, list[BenchmarkCandidate]] = {}
+    non_actions: list[BenchmarkCandidate] = []
+    for candidate in deduplicated:
+        if candidate.kind.value != "action":
+            non_actions.append(candidate)
+            continue
+        if candidate.end_seconds - candidate.start_seconds > MAX_LONG_PRIMARY_DEMO_SECONDS:
+            continue
+        action_groups.setdefault(_normalized_name(candidate.action_name), []).append(candidate)
+
+    consolidated = [_consolidate_action_group(group) for group in action_groups.values()]
+    return sorted(
+        [*consolidated, *non_actions],
         key=lambda candidate: (
             candidate.start_seconds,
             candidate.end_seconds,
@@ -170,9 +203,8 @@ def _normalized_name(value: str) -> str:
 
 
 def _should_merge(left: BenchmarkCandidate, right: BenchmarkCandidate) -> bool:
-    if (
-        left.kind != right.kind
-        or _normalized_name(left.action_name) != _normalized_name(right.action_name)
+    if left.kind != right.kind or _normalized_name(left.action_name) != _normalized_name(
+        right.action_name
     ):
         return False
     return max(left.start_seconds, right.start_seconds) <= min(
@@ -195,9 +227,7 @@ def _merge_candidates(
             "end_seconds": max(left.end_seconds, right.end_seconds),
             "sets": _shared_value(left.sets, right.sets),
             "reps": _shared_value(left.reps, right.reps),
-            "duration_seconds": _shared_value(
-                left.duration_seconds, right.duration_seconds
-            ),
+            "duration_seconds": _shared_value(left.duration_seconds, right.duration_seconds),
             "rest_seconds": _shared_value(left.rest_seconds, right.rest_seconds),
             "weight_kg": None,
             "evidence_channels": list(channels),
@@ -205,5 +235,58 @@ def _merge_candidates(
     )
 
 
+def _consolidate_action_group(
+    candidates: Sequence[BenchmarkCandidate],
+) -> BenchmarkCandidate:
+    representative = max(
+        candidates,
+        key=_primary_demo_rank,
+    )
+    channels = sorted(
+        {channel for candidate in candidates for channel in candidate.evidence_channels},
+        key=lambda channel: channel.value,
+    )
+    return representative.model_copy(
+        update={
+            "sets": _non_conflicting_value(candidate.sets for candidate in candidates),
+            "reps": _non_conflicting_value(candidate.reps for candidate in candidates),
+            "duration_seconds": _non_conflicting_value(
+                candidate.duration_seconds for candidate in candidates
+            ),
+            "rest_seconds": _non_conflicting_value(
+                candidate.rest_seconds for candidate in candidates
+            ),
+            "weight_kg": None,
+            "evidence_channels": channels,
+        }
+    )
+
+
+def _primary_demo_rank(candidate: BenchmarkCandidate) -> tuple[int, int, float, float]:
+    """Prefer the most complete evidence-rich segment inside the v2 duration bound."""
+
+    segment_seconds = candidate.end_seconds - candidate.start_seconds
+    parameter_count = sum(
+        value is not None
+        for value in (
+            candidate.sets,
+            candidate.reps,
+            candidate.duration_seconds,
+            candidate.rest_seconds,
+        )
+    )
+    return (
+        len(set(candidate.evidence_channels)),
+        parameter_count,
+        segment_seconds,
+        -candidate.start_seconds,
+    )
+
+
 def _shared_value[T](left: T | None, right: T | None) -> T | None:
     return left if left == right else None
+
+
+def _non_conflicting_value[T](values: Iterable[T | None]) -> T | None:
+    non_null = {value for value in values if value is not None}
+    return next(iter(non_null)) if len(non_null) == 1 else None

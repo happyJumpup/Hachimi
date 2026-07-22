@@ -6,7 +6,7 @@
     "seed_fusion_model": "doubao-seed-2-0-mini-260428",
     "qwen_visual_model": "qwen3-vl-flash-2026-01-22"
   },
-  "prompt_version": "long-video-ab-v1",
+  "prompt_version": "long-video-ab-v2",
   "chunk": {
     "version": "60s-10s-overlap-v1",
     "duration_seconds": 60,
@@ -30,7 +30,23 @@
       "duration_seconds": 424.31,
       "representative_start_seconds": 0,
       "gold_path": ".benchmark-work/long-video/gold/romanian-deadlift-7m.json",
-      "gold_version": "long-video-gold-v1"
+      "gold_version": "long-video-gold-v2",
+      "gold_contract": {
+        "version": "long-video-unique-actions-v1",
+        "actions": [
+          {
+            "canonical_name": "罗马尼亚硬拉",
+            "accepted_aliases": [
+              "RDL",
+              "罗马尼亚式硬拉",
+              "哑铃罗马尼亚硬拉",
+              "哑铃RDL",
+              "Romanian deadlift",
+              "dumbbell Romanian deadlift"
+            ]
+          }
+        ]
+      }
     },
     {
       "source_id": "beginner-full-workout-19m",
@@ -39,7 +55,40 @@
       "duration_seconds": 1157.46,
       "representative_start_seconds": 0,
       "gold_path": ".benchmark-work/long-video/gold/beginner-full-workout-19m.json",
-      "gold_version": "long-video-gold-v1"
+      "gold_version": "long-video-gold-v2",
+      "gold_contract": {
+        "version": "long-video-unique-actions-v1",
+        "actions": [
+          {
+            "canonical_name": "弹力带肩活动",
+            "accepted_aliases": ["弹力带肩关节活动", "弹力带前后拉伸与绕肩", "弹力带绕肩", "弹力带环绕"]
+          },
+          {
+            "canonical_name": "推撑类激活",
+            "accepted_aliases": ["倒立推肩/俯卧撑", "倒立俯卧撑与俯卧撑激活", "倒立俯卧撑", "折刀式俯卧撑", "标准俯卧撑", "推撑热身"]
+          },
+          {
+            "canonical_name": "低位绳索夹胸",
+            "accepted_aliases": ["龙门架绳索夹胸", "低位龙门架夹胸", "绳索夹胸", "low cable fly"]
+          },
+          {
+            "canonical_name": "平板杠铃卧推",
+            "accepted_aliases": ["杠铃卧推", "平板卧推", "bench press", "barbell bench press"]
+          },
+          {
+            "canonical_name": "上斜器械卧推",
+            "accepted_aliases": ["上斜卧推", "器械上斜卧推", "incline machine press", "incline chest press"]
+          },
+          {
+            "canonical_name": "坐姿杠铃实力推",
+            "accepted_aliases": ["杠铃实力推", "坐姿杠铃推举", "杠铃肩推", "overhead press", "military press"]
+          },
+          {
+            "canonical_name": "颈后绳索臂屈伸",
+            "accepted_aliases": ["绳索过顶臂屈伸", "绳索颈后臂屈伸", "过顶绳索臂屈伸", "overhead rope triceps extension"]
+          }
+        ]
+      }
     }
   ],
   "output": {

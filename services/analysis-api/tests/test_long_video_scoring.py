@@ -18,10 +18,16 @@ from hakimi_analysis.benchmark.models import (
 )
 
 
-def _gold(name: str, start: float, end: float) -> GoldEvent:
+def _gold(
+    name: str,
+    start: float,
+    end: float,
+    *,
+    aliases: list[str] | None = None,
+) -> GoldEvent:
     return GoldEvent(
         canonical_name=name,
-        accepted_aliases=[name],
+        accepted_aliases=aliases or [name],
         start_seconds=start,
         end_seconds=end,
         kind=EventKind.ACTION,
@@ -97,6 +103,41 @@ def test_score_long_video_runs_aggregates_three_repetitions_per_source_and_arm()
     assert aggregate.f1_tiou_05 == 1
     assert aggregate.stability_f1 == 1
     assert aggregate.eligible is True
+
+
+def test_alias_duplicates_are_penalized_instead_of_repaired_with_gold_knowledge() -> None:
+    source = LongVideoSourceGold(
+        source_id="seven-minute-rdl-aliases",
+        duration_seconds=420,
+        reviewed=True,
+        events=[
+            _gold(
+                "罗马尼亚硬拉",
+                120,
+                150,
+                aliases=["RDL", "罗马尼亚式硬拉"],
+            )
+        ],
+    )
+    runs = [
+        _run(
+            source.source_id,
+            LongVideoArm.SEED_CONTACT_SHEET,
+            run_index,
+            [
+                _candidate("RDL", 120, 150),
+                _candidate("罗马尼亚式硬拉", 120, 150),
+            ],
+        )
+        for run_index in range(1, 4)
+    ]
+
+    aggregate = score_long_video_runs([source], runs)[0]
+
+    assert aggregate.precision == 0.5
+    assert aggregate.recall == 1
+    assert aggregate.duplicate_count == 3
+    assert aggregate.eligible is False
 
 
 def test_score_long_video_runs_keeps_tiou_parameter_and_safety_metrics() -> None:

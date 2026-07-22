@@ -6,16 +6,17 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Protocol
+from typing import Literal, Protocol
 
 from hakimi_analysis.benchmark.long_execution import (
     LongCheckpointStore,
     LongExecutionError,
+    consolidate_unique_action_candidates,
     deduplicate_chunk_candidates,
     normalize_chunk_candidate,
     retry_long_operation,
 )
-from hakimi_analysis.benchmark.long_models import ArmId, LongExperimentSource, LongVideoChunk
+from hakimi_analysis.benchmark.long_models import ArmId, LongVideoChunk
 from hakimi_analysis.benchmark.long_prompts import (
     VISUAL_ONLY_SUFFIX,
     long_fusion_prompt,
@@ -31,6 +32,14 @@ from hakimi_analysis.benchmark.models import (
     ProviderInference,
 )
 from hakimi_analysis.models import Transcript
+
+LongPromptVersion = Literal["long-video-ab-v1", "long-video-ab-v2"]
+LongCandidateGranularity = Literal["event", "unique_action"]
+
+_CANDIDATE_GRANULARITY_BY_PROMPT: Mapping[LongPromptVersion, LongCandidateGranularity] = {
+    "long-video-ab-v1": "event",
+    "long-video-ab-v2": "unique_action",
+}
 
 
 class LongExecutionFailure(LongExecutionError):
@@ -57,6 +66,90 @@ class LongExecutionAudit:
     cleanup_failed: bool = False
 
 
+class LongQwenExpiryLifecycle:
+    """Fail-closed expiry audit shared by Qwen preflight and arm execution."""
+
+    def __init__(
+        self,
+        *,
+        model_id: str,
+        persist: Callable[[LongMediaLifecycleRecord], None] | None,
+    ) -> None:
+        if persist is None:
+            raise LongExecutionError("qwen_lifecycle_sink_missing")
+        self._model_id = model_id
+        self._persist = persist
+        self._upload_started = perf_counter()
+        self._recorded_expiry: str | None = None
+        self._handle_expiry: str | None = None
+        self._invalid = False
+
+    @property
+    def handle_expiry(self) -> str | None:
+        return self._handle_expiry
+
+    @property
+    def invalid(self) -> bool:
+        return self._invalid
+
+    def record_before_upload(self, value: str) -> None:
+        expires_at = _safe_expiry_value(value)
+        if expires_at is None:
+            self._invalid = True
+            raise LongExecutionError("qwen_expiry_missing")
+        if self._recorded_expiry is not None:
+            if self._recorded_expiry != expires_at:
+                self._invalid = True
+                raise LongExecutionError("qwen_expiry_mismatch")
+            return
+        self._persist(self._record(CleanupOutcome.EXPIRY_RECORDED, expires_at))
+        self._recorded_expiry = expires_at
+
+    def bind_handle(self, value: object) -> str:
+        expires_at = _safe_expiry_value(value)
+        self._handle_expiry = expires_at
+        if expires_at is None:
+            self._invalid = True
+            raise LongExecutionError("qwen_expiry_missing")
+        if self._recorded_expiry is None:
+            self._invalid = True
+            raise LongExecutionError("qwen_expiry_not_persisted")
+        if self._recorded_expiry != expires_at:
+            self._invalid = True
+            raise LongExecutionError("qwen_expiry_mismatch")
+        return expires_at
+
+    def persist_upload_failure(
+        self,
+        error: BaseException,
+    ) -> LongMediaLifecycleRecord | None:
+        error_expiry = _safe_expiry_from_error(error)
+        expires_at = self._recorded_expiry or error_expiry
+        if expires_at is None:
+            return None
+        if self._recorded_expiry is None or (
+            error_expiry is not None and error_expiry != self._recorded_expiry
+        ):
+            self._invalid = True
+        record = self._record(CleanupOutcome.FAILED, expires_at)
+        self._persist(record)
+        return record
+
+    def _record(
+        self,
+        outcome: CleanupOutcome,
+        expires_at: str,
+    ) -> LongMediaLifecycleRecord:
+        return LongMediaLifecycleRecord(
+            provider="qwen",
+            model_id=self._model_id,
+            media_kind="video",
+            upload_seconds=perf_counter() - self._upload_started,
+            cleanup_outcome=outcome,
+            expires_at=expires_at,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class LongPreparedChunk:
     chunk: LongVideoChunk
@@ -67,7 +160,8 @@ class LongPreparedChunk:
 
 @dataclass(frozen=True, slots=True)
 class LongPreparedSource:
-    source: LongExperimentSource
+    source_id: str
+    duration_seconds: float
     audio_path: Path
     chunks: tuple[LongPreparedChunk, ...]
 
@@ -97,7 +191,14 @@ class LongSeedProvider(Protocol):
 
 
 class LongQwenProvider(Protocol):
-    async def upload(self, model_id: str, path: Path, media_kind: str) -> MediaHandle: ...
+    async def upload(
+        self,
+        model_id: str,
+        path: Path,
+        media_kind: str,
+        *,
+        on_expiry: Callable[[str], None] | None = None,
+    ) -> MediaHandle: ...
 
     async def analyze(self, handle: MediaHandle, prompt: str) -> ProviderInference: ...
 
@@ -146,7 +247,7 @@ class LongArmExecutor:
         qwen_model_id: str,
         checkpoints: LongCheckpointStore | None = None,
         retry_delays: tuple[float, float] = (1.0, 2.0),
-        task_instructions: str = long_video_prompt("long-video-ab-v1"),
+        prompt_version: LongPromptVersion = "long-video-ab-v1",
         lifecycle_sink: Callable[[LongRunKey, LongMediaLifecycleRecord], None] | None = None,
     ) -> None:
         self._prepared_sources = dict(prepared_sources)
@@ -156,9 +257,8 @@ class LongArmExecutor:
         self._checkpoints = checkpoints
         self._retry_delays = retry_delays
         self._lifecycle_sink = lifecycle_sink
-        if not task_instructions.strip():
-            raise ValueError("long-video task instructions must not be empty")
-        self._task_instructions = task_instructions
+        self._task_instructions = long_video_prompt(prompt_version)
+        self._candidate_granularity = _CANDIDATE_GRANULARITY_BY_PROMPT[prompt_version]
 
     async def execute(
         self,
@@ -177,9 +277,7 @@ class LongArmExecutor:
         metrics = _MutableMetrics(
             audit=audit or LongExecutionAudit(),
             lifecycle_sink=(
-                (lambda record: lifecycle_sink(key, record))
-                if lifecycle_sink is not None
-                else None
+                (lambda record: lifecycle_sink(key, record)) if lifecycle_sink is not None else None
             ),
         )
         checkpointed_by_chunk = {
@@ -276,6 +374,8 @@ class LongArmExecutor:
         candidates = deduplicate_chunk_candidates(
             [candidate for chunk_candidates in fused_by_chunk for candidate in chunk_candidates]
         )
+        if self._candidate_granularity == "unique_action":
+            candidates = consolidate_unique_action_candidates(candidates)
         return LongArmResult(
             key=key,
             candidates=tuple(candidates),
@@ -294,9 +394,7 @@ class LongArmExecutor:
             cleanup_failed=metrics.audit.cleanup_failed,
             resumed_from_checkpoint=metrics.resumed_from_checkpoint,
             token_usage_by_provider=dict(metrics.token_usage_by_provider),
-            token_usage_known=(
-                metrics.token_usage_known and metrics.token_usage_complete
-            ),
+            token_usage_known=(metrics.token_usage_known and metrics.token_usage_complete),
             weight_violation_count=metrics.weight_violation_count,
         )
 
@@ -393,7 +491,12 @@ class LongArmExecutor:
     ) -> ProviderInference:
         async with permits.acquire("qwen") as waited:
             queue_wait_seconds["qwen"] += waited
+            lifecycle = LongQwenExpiryLifecycle(
+                model_id=self._qwen_model_id,
+                persist=metrics.lifecycle_sink,
+            )
             upload_started = perf_counter()
+
             # A multipart transport failure is ambiguous: OSS may have stored
             # the object even though the client never received a handle. Do not
             # replay it and risk an untracked object; the provider retries only
@@ -403,39 +506,25 @@ class LongArmExecutor:
                     self._qwen_model_id,
                     item.silent_video_path,
                     "video",
+                    on_expiry=lifecycle.record_before_upload,
                 )
             except BaseException as error:
                 upload_seconds = perf_counter() - upload_started
                 metrics.upload_seconds += upload_seconds
-                expires_at = _safe_expiry_from_error(error)
-                if expires_at is not None:
-                    metrics.record_lifecycle(
-                        LongMediaLifecycleRecord(
-                            provider="qwen",
-                            model_id=self._qwen_model_id,
-                            media_kind="video",
-                            upload_seconds=upload_seconds,
-                            cleanup_outcome=CleanupOutcome.EXPIRY_RECORDED,
-                            expires_at=expires_at,
-                        )
-                    )
+                try:
+                    record = lifecycle.persist_upload_failure(error)
+                except BaseException:
+                    if isinstance(error, asyncio.CancelledError):
+                        raise error from None
+                    raise
+                if record is not None:
+                    metrics.audit.cleanup_failed = True
+                    metrics.record_lifecycle(record, persist=False)
                 raise
             upload_seconds = perf_counter() - upload_started
             metrics.upload_seconds += upload_seconds
-            expires_at = _safe_expiry_value(handle.expires_at)
             try:
-                if expires_at is None:
-                    raise LongExecutionError("qwen_expiry_missing")
-                metrics.persist_lifecycle(
-                    LongMediaLifecycleRecord(
-                        provider="qwen",
-                        model_id=self._qwen_model_id,
-                        media_kind="video",
-                        upload_seconds=upload_seconds,
-                        cleanup_outcome=CleanupOutcome.EXPIRY_RECORDED,
-                        expires_at=expires_at,
-                    )
-                )
+                lifecycle.bind_handle(handle.expires_at)
                 metadata = {
                     "analysis_scope": "long_video_chunk",
                     "window": item.chunk.model_dump(
@@ -465,8 +554,8 @@ class LongArmExecutor:
                     media_kind="video",
                     upload_seconds=upload_seconds,
                     metrics=metrics,
-                    expires_at=expires_at,
-                    force_failure=expires_at is None,
+                    expires_at=lifecycle.handle_expiry,
+                    force_failure=lifecycle.invalid,
                 )
 
     def _read_checkpoint(

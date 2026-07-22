@@ -27,6 +27,42 @@ class LongExperimentModels(StrictModel):
     qwen_visual_model: str = Field(min_length=1)
 
 
+class LongGoldActionContract(StrictModel):
+    """Offline-only action identity contract for one reviewed source."""
+
+    canonical_name: str = Field(min_length=1)
+    accepted_aliases: list[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_aliases(self) -> "LongGoldActionContract":
+        normalized = [value.strip().casefold() for value in self.accepted_aliases]
+        if any(not value for value in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("long-video action aliases must be non-blank and unique")
+        return self
+
+
+class LongGoldSourceContract(StrictModel):
+    """Frozen expected unique actions; never passed to a model or executor."""
+
+    version: Literal["long-video-unique-actions-v1"]
+    actions: list[LongGoldActionContract] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_action_identities(self) -> "LongGoldSourceContract":
+        canonical_names = [action.canonical_name.strip().casefold() for action in self.actions]
+        if len(set(canonical_names)) != len(canonical_names):
+            raise ValueError("long-video source action contracts must be unique")
+        alias_owners: dict[str, str] = {}
+        for action in self.actions:
+            owner_name = action.canonical_name.strip().casefold()
+            for alias in (action.canonical_name, *action.accepted_aliases):
+                normalized_alias = alias.strip().casefold()
+                owner = alias_owners.setdefault(normalized_alias, owner_name)
+                if owner != owner_name:
+                    raise ValueError("long-video aliases cannot cross canonical actions")
+        return self
+
+
 class LongVideoChunkPolicy(StrictModel):
     version: str = Field(min_length=1)
     duration_seconds: float = Field(gt=0)
@@ -88,6 +124,7 @@ class LongExperimentSource(StrictModel):
     representative_start_seconds: float = Field(default=0, ge=0)
     gold_path: Path
     gold_version: str = Field(min_length=1)
+    gold_contract: LongGoldSourceContract
 
     @model_validator(mode="after")
     def validate_representative_window(self) -> "LongExperimentSource":
@@ -132,7 +169,11 @@ class LongExperimentManifest(StrictModel):
             raise ValueError("long experiment model IDs must exactly match the frozen protocol")
         if self.repetitions != 3:
             raise ValueError("long experiment requires exactly three repetitions")
+        if self.prompt_version != "long-video-ab-v2":
+            raise ValueError("long experiment requires long-video-ab-v2")
         long_video_prompt(self.prompt_version)
+        if any(source.gold_version != "long-video-gold-v2" for source in self.sources):
+            raise ValueError("long experiment requires long-video-gold-v2")
         if len({source.source_id for source in self.sources}) != len(self.sources):
             raise ValueError("long experiment source IDs must be unique")
         return self
