@@ -104,7 +104,7 @@ from hakimi_analysis.benchmark.models import (
     CleanupOutcome,
     StrictModel,
 )
-from hakimi_analysis.media import AnalysisWindow, LocalMediaProcessor
+from hakimi_analysis.media import LocalMediaProcessor
 
 PROJECT_ROOT = Path(__file__).resolve().parents[5]
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env.benchmark.local"
@@ -643,6 +643,7 @@ async def _run_preflight(
                         synthetic=synthetic,
                         root=source_root,
                         start_seconds=start_seconds,
+                        qwen_video_projection_version=manifest.qwen_video_projection_version,
                     )
 
                 probe_ready, probe = await _capture_preflight_result(
@@ -866,11 +867,6 @@ async def _preflight_probe_stage(
         max_source_duration_seconds=60,
         command_timeout_seconds=180,
     )
-    window = AnalysisWindow(
-        start_seconds=0,
-        end_seconds=duration_seconds,
-        expanded=False,
-    )
     async with AsyncExitStack() as contexts:
         prepared: Any | None = None
         if availability.get("seed_visual", False) or availability.get("asr", False):
@@ -987,31 +983,24 @@ async def _preflight_probe_stage(
             )
 
         if availability.get("qwen_visual", False):
-            qwen_media_ok, qwen_media = await _capture_preflight_result(
+            # ProbeMedia.silent_video_path is the frozen Qwen projection.
+            # Do not route it through LocalMediaProcessor.prepare(), whose
+            # general-purpose MPEG-4 window would silently bypass that profile.
+            qwen_ok, _ = await _capture_preflight_result(
                 checks,
                 "qwen_visual",
                 stage,
-                lambda: contexts.enter_async_context(processor.prepare(probe.av_path, window)),
+                lambda: _qwen_visual_probe(
+                    runtime.qwen,
+                    probe.silent_video_path,
+                    task_instructions,
+                    source_id=source_id,
+                    stage=stage,
+                    journal=journal,
+                ),
                 source_id=source_id,
             )
-            if qwen_media_ok and qwen_media is not None:
-                qwen_ok, _ = await _capture_preflight_result(
-                    checks,
-                    "qwen_visual",
-                    stage,
-                    lambda: _qwen_visual_probe(
-                        runtime.qwen,
-                        qwen_media.video_path,
-                        task_instructions,
-                        source_id=source_id,
-                        stage=stage,
-                        journal=journal,
-                    ),
-                    source_id=source_id,
-                )
-                if not qwen_ok:
-                    availability["qwen_visual"] = False
-            else:
+            if not qwen_ok:
                 availability["qwen_visual"] = False
         else:
             _record_preflight_skip(
@@ -1361,6 +1350,7 @@ async def _representative_sources(
                 synthetic=False,
                 root=root / "source-0",
                 start_seconds=manifest.sources[0].representative_start_seconds,
+                qwen_video_projection_version=manifest.qwen_video_projection_version,
             ),
             create_long_probe_media(
                 manifest.sources[1].source_path,
@@ -1368,6 +1358,7 @@ async def _representative_sources(
                 synthetic=False,
                 root=root / "source-1",
                 start_seconds=manifest.sources[1].representative_start_seconds,
+                qwen_video_projection_version=manifest.qwen_video_projection_version,
             ),
         )
         processor = LocalMediaProcessor(
@@ -1437,7 +1428,10 @@ async def _run_experiment(
         raise LongExecutionError("qwen_lifecycle_sink_missing")
     prepared_sources: dict[str, LongPreparedSource] = {}
     preprocessing_seconds: dict[str, float] = {}
-    preparer = LongMediaPreparer(temp_root=manifest.output.temporary_root)
+    preparer = LongMediaPreparer(
+        temp_root=manifest.output.temporary_root,
+        qwen_video_projection_version=manifest.qwen_video_projection_version,
+    )
     first_started = perf_counter()
     async with preparer.prepare_source(manifest.sources[0], manifest.chunk) as first:
         prepared_sources[first.source_id] = first

@@ -25,6 +25,7 @@ from hakimi_analysis.benchmark.long_cli import (
     _write_long_gold_templates,
     calibrate_provider_concurrency,
 )
+from hakimi_analysis.benchmark.long_contract import QWEN_VIDEO_PROJECTION_VERSION
 from hakimi_analysis.benchmark.long_execution import LongExecutionError
 from hakimi_analysis.benchmark.long_models import (
     EXPECTED_LONG_EXPERIMENT_MODELS,
@@ -58,6 +59,7 @@ def _manifest(tmp_path: Path) -> LongExperimentManifest:
             "version": 1,
             "models": EXPECTED_LONG_EXPERIMENT_MODELS,
             "prompt_version": "long-video-ab-v2",
+            "qwen_video_projection_version": QWEN_VIDEO_PROJECTION_VERSION,
             "chunk": {
                 "version": "long-video-chunks-v1",
                 "duration_seconds": 60,
@@ -777,7 +779,13 @@ async def test_preflight_probe_failure_does_not_block_independent_providers(
         calls.append("asr")
         return SimpleNamespace(model_dump=lambda **_kwargs: {"words": []})
 
-    async def succeeding_qwen(*_args: object, **_kwargs: object) -> None:
+    async def succeeding_qwen(
+        _provider: object,
+        video_path: Path,
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        assert video_path == Path("qwen-projection.mp4")
         calls.append("qwen_visual")
 
     monkeypatch.setattr(long_cli, "LocalMediaProcessor", FakeProcessor)
@@ -798,7 +806,7 @@ async def test_preflight_probe_failure_does_not_block_independent_providers(
             qwen=cast(Any, object()),
             asr=cast(Any, object()),
         ),
-        ProbeMedia(Path("probe.mp4"), Path("silent.mp4"), Path("audio.wav")),
+        ProbeMedia(Path("probe.mp4"), Path("qwen-projection.mp4"), Path("audio.wav")),
         8,
         "real_8_seconds",
         Path("preflight"),
@@ -843,7 +851,13 @@ async def test_preflight_probe_media_failure_does_not_block_qwen(
         async def prepare(self, *_args: object) -> AsyncIterator[object]:
             yield SimpleNamespace(video_path=Path("silent.mp4"))
 
-    async def succeeding_qwen(*_args: object, **_kwargs: object) -> None:
+    async def succeeding_qwen(
+        _provider: object,
+        video_path: Path,
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        assert video_path == Path("qwen-projection.mp4")
         calls.append("qwen_visual")
 
     monkeypatch.setattr(long_cli, "LocalMediaProcessor", FakeProcessor)
@@ -862,7 +876,7 @@ async def test_preflight_probe_media_failure_does_not_block_qwen(
             qwen=cast(Any, object()),
             asr=cast(Any, object()),
         ),
-        ProbeMedia(Path("probe.mp4"), Path("silent.mp4"), Path("audio.wav")),
+        ProbeMedia(Path("probe.mp4"), Path("qwen-projection.mp4"), Path("audio.wav")),
         8,
         "real_8_seconds",
         Path("preflight"),

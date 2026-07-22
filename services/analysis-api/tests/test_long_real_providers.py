@@ -369,3 +369,23 @@ def test_long_qwen_sse_accepts_delta_or_cumulative_message_shapes_once() -> None
 
     assert delta_text == '{"actions": []}'
     assert cumulative_text == '{"actions": []}'
+
+
+def test_long_qwen_sse_text_missing_keeps_only_a_structural_diagnostic() -> None:
+    with pytest.raises(LongProviderContractError, match="qwen_sse_text_missing") as caught:
+        _parse_qwen_native_sse(
+            'data: {"output":{"choices":[{"message":{"content":[]}}]}}\n'
+            "data: [DONE]\n"
+        )
+
+    assert caught.value.diagnostic == (
+        "choices=1;content_lists=1;content_strings=0;done=1;error_events=0;events=1;"
+        "messages=1;outputs=1;reasoning_parts=0;text_parts=0"
+    )
+
+
+def test_long_qwen_sse_provider_event_keeps_only_a_normalized_code() -> None:
+    with pytest.raises(LongProviderContractError, match="qwen_sse_provider_event") as caught:
+        _parse_qwen_native_sse('data: {"code":"Data-Inspection Failed!"}\n')
+
+    assert caught.value.diagnostic == "data_inspection_failed"

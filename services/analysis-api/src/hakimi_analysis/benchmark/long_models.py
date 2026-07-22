@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import Field, model_validator
 
+from hakimi_analysis.benchmark.long_contract import QWEN_VIDEO_PROJECTION_VERSION
 from hakimi_analysis.benchmark.long_prompts import long_video_prompt, long_video_prompt_sha256
 from hakimi_analysis.benchmark.models import StrictModel
 
@@ -153,6 +154,7 @@ class LongExperimentManifest(StrictModel):
     version: Literal[1]
     models: LongExperimentModels
     prompt_version: str = Field(min_length=1)
+    qwen_video_projection_version: str = Field(min_length=1)
     chunk: LongVideoChunkPolicy
     retry: LongExperimentRetryPolicy
     repetitions: int = Field(ge=1)
@@ -171,6 +173,8 @@ class LongExperimentManifest(StrictModel):
             raise ValueError("long experiment requires exactly three repetitions")
         if self.prompt_version != "long-video-ab-v2":
             raise ValueError("long experiment requires long-video-ab-v2")
+        if self.qwen_video_projection_version != QWEN_VIDEO_PROJECTION_VERSION:
+            raise ValueError("long experiment requires the frozen Qwen video projection")
         long_video_prompt(self.prompt_version)
         if any(source.gold_version != "long-video-gold-v2" for source in self.sources):
             raise ValueError("long experiment requires long-video-gold-v2")

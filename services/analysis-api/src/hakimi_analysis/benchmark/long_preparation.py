@@ -7,6 +7,12 @@ from pathlib import Path
 
 import imageio_ffmpeg
 
+from hakimi_analysis.benchmark.long_contract import (
+    QWEN_VIDEO_PROJECTION_CRF,
+    QWEN_VIDEO_PROJECTION_FPS,
+    QWEN_VIDEO_PROJECTION_MIN_SHORT_EDGE,
+    QWEN_VIDEO_PROJECTION_VERSION,
+)
 from hakimi_analysis.benchmark.long_media import build_complete_source_chunks
 from hakimi_analysis.benchmark.long_models import (
     LongExperimentSource,
@@ -32,6 +38,60 @@ class LongMediaPreparationError(RuntimeError):
     pass
 
 
+def qwen_video_projection_arguments(
+    source_path: Path,
+    output_path: Path,
+    *,
+    duration_seconds: float,
+    start_seconds: float | None = None,
+    overwrite: bool = False,
+) -> tuple[str, ...]:
+    """Return the frozen, source-clock-preserving Qwen visual projection."""
+
+    if duration_seconds <= 0:
+        raise ValueError("Qwen video projection duration must be positive")
+    if start_seconds is not None and start_seconds < 0:
+        raise ValueError("Qwen video projection start must not be negative")
+
+    arguments: list[str] = []
+    if start_seconds is not None:
+        arguments.extend(("-ss", f"{start_seconds:.3f}"))
+    arguments.extend(
+        (
+            "-i",
+            str(source_path),
+            "-t",
+            f"{duration_seconds:.3f}",
+            "-an",
+            "-vf",
+            (
+                rf"fps={QWEN_VIDEO_PROJECTION_FPS},"
+                rf"scale=if(gte(iw\,ih)\,-2\,{QWEN_VIDEO_PROJECTION_MIN_SHORT_EDGE})"
+                rf":if(gte(iw\,ih)\,{QWEN_VIDEO_PROJECTION_MIN_SHORT_EDGE}\,-2)"
+            ),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            str(QWEN_VIDEO_PROJECTION_CRF),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+        )
+    )
+    if overwrite:
+        arguments.append("-y")
+    arguments.append(str(output_path))
+    return tuple(arguments)
+
+
+def _require_qwen_video_projection_version(version: str) -> None:
+    if version != QWEN_VIDEO_PROJECTION_VERSION:
+        raise LongMediaPreparationError("Qwen video projection is not frozen")
+
+
 class LongMediaPreparer:
     """Creates ephemeral full-audio and per-chunk visual inputs for one source."""
 
@@ -42,9 +102,11 @@ class LongMediaPreparer:
         command_timeout_seconds: float = 180,
         max_parallel_ffmpeg: int = 2,
         media_probe: Callable[[Path], tuple[int, float]] | None = None,
+        qwen_video_projection_version: str = QWEN_VIDEO_PROJECTION_VERSION,
     ) -> None:
         if command_timeout_seconds <= 0 or max_parallel_ffmpeg <= 0:
             raise ValueError("long media preparation limits must be positive")
+        _require_qwen_video_projection_version(qwen_video_projection_version)
         self._temp_root = temp_root
         self._command_timeout_seconds = command_timeout_seconds
         self._ffmpeg_permits = asyncio.Semaphore(max_parallel_ffmpeg)
@@ -176,22 +238,12 @@ class LongMediaPreparer:
     ) -> None:
         await self._run_ffmpeg(
             "silent video",
-            "-ss",
-            f"{chunk.start_seconds:.3f}",
-            "-i",
-            str(source.source_path),
-            "-t",
-            f"{chunk.duration_seconds:.3f}",
-            "-an",
-            "-c:v",
-            "mpeg4",
-            "-q:v",
-            "4",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            str(output_path),
+            *qwen_video_projection_arguments(
+                source.source_path,
+                output_path,
+                start_seconds=chunk.start_seconds,
+                duration_seconds=chunk.duration_seconds,
+            ),
         )
 
     async def _extract_contact_sheet(
@@ -277,6 +329,7 @@ async def create_long_probe_media(
     synthetic: bool,
     root: Path,
     start_seconds: float = 0,
+    qwen_video_projection_version: str = QWEN_VIDEO_PROJECTION_VERSION,
 ) -> ProbeMedia:
     """Make a preflight probe without changing frozen native-AV media helpers."""
 
@@ -284,14 +337,27 @@ async def create_long_probe_media(
         raise ValueError("long probe start time must not be negative")
     if synthetic and start_seconds != 0:
         raise ValueError("synthetic long probe must start at zero")
+    _require_qwen_video_projection_version(qwen_video_projection_version)
     root.mkdir(parents=True, exist_ok=True)
     if synthetic:
-        return await create_probe_media(
+        media = await create_probe_media(
             source_av,
             duration_seconds=duration_seconds,
             synthetic=True,
             root=root,
         )
+        qwen_silent_path = root / f"synthetic-{duration_seconds}s-qwen-silent.mp4"
+        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+        await _run_ffmpeg(
+            ffmpeg,
+            *qwen_video_projection_arguments(
+                media.av_path,
+                qwen_silent_path,
+                duration_seconds=duration_seconds,
+                overwrite=True,
+            ),
+        )
+        return ProbeMedia(media.av_path, qwen_silent_path, media.audio_path)
 
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     prefix = f"real-{start_seconds:.3f}-{duration_seconds}s"
@@ -313,15 +379,12 @@ async def create_long_probe_media(
     )
     await _run_ffmpeg(
         ffmpeg,
-        "-i",
-        str(av_path),
-        "-map",
-        "0:v:0",
-        "-c:v",
-        "copy",
-        "-an",
-        "-y",
-        str(silent_path),
+        *qwen_video_projection_arguments(
+            av_path,
+            silent_path,
+            duration_seconds=duration_seconds,
+            overwrite=True,
+        ),
     )
     if await _has_audio_stream(ffmpeg, av_path):
         await _run_ffmpeg(

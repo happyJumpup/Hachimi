@@ -60,6 +60,7 @@ _RAW_JSON_SUFFIX = (
     "else. Do not use Markdown code fences."
 )
 _CONNECT_ID = re.compile(r"^[A-Za-z0-9_-]{1,56}$")
+_SAFE_QWEN_EVENT_CODE = re.compile(r"^[a-z0-9_]{1,64}$")
 
 
 class LongProviderContractError(RuntimeError):
@@ -737,11 +738,24 @@ def _parse_qwen_native_sse(
     request_id: str | None = None
     input_tokens: int | None = None
     output_tokens: int | None = None
+    shape = {
+        "choices": 0,
+        "content_lists": 0,
+        "content_strings": 0,
+        "done": 0,
+        "error_events": 0,
+        "events": 0,
+        "messages": 0,
+        "outputs": 0,
+        "reasoning_parts": 0,
+        "text_parts": 0,
+    }
     for line in body.splitlines():
         if not line.startswith("data:"):
             continue
         data = line.removeprefix("data:").strip()
         if data == "[DONE]":
+            shape["done"] = 1
             break
         try:
             event = json.loads(data)
@@ -749,13 +763,24 @@ def _parse_qwen_native_sse(
             raise LongProviderContractError("qwen_sse_schema_error") from error
         if not isinstance(event, dict):
             raise LongProviderContractError("qwen_sse_schema_error")
+        shape["events"] += 1
+        if "code" in event:
+            shape["error_events"] += 1
+            raise LongProviderContractError(
+                "qwen_sse_provider_event",
+                diagnostic=_safe_qwen_event_code(event.get("code")),
+            )
         if event.get("request_id"):
             request_id = str(event["request_id"])
         output = event.get("output")
+        if isinstance(output, dict):
+            shape["outputs"] += 1
         choices = output.get("choices", []) if isinstance(output, dict) else []
         if isinstance(choices, list) and choices:
+            shape["choices"] += len(choices)
             first_choice = choices[0]
             message = first_choice.get("message") if isinstance(first_choice, dict) else None
+            _record_qwen_message_shape(shape, message)
             for text in _qwen_message_text_parts(message):
                 # DashScope streaming variants can emit deltas or a cumulative
                 # message.  Normalize only the transport representation: never
@@ -769,7 +794,10 @@ def _parse_qwen_native_sse(
             input_tokens = _optional_int(usage.get("input_tokens"))
             output_tokens = _optional_int(usage.get("output_tokens"))
     if not chunks:
-        raise LongProviderContractError("qwen_sse_text_missing")
+        raise LongProviderContractError(
+            "qwen_sse_text_missing",
+            diagnostic=";".join(f"{key}={shape[key]}" for key in sorted(shape)),
+        )
     return "".join(chunks), request_id, input_tokens, output_tokens
 
 
@@ -786,6 +814,40 @@ def _qwen_message_text_parts(message: object) -> list[str]:
         for part in content
         if isinstance(part, dict) and isinstance((text := part.get("text")), str)
     ]
+
+
+def _record_qwen_message_shape(shape: dict[str, int], message: object) -> None:
+    """Count response structure without retaining provider text or error details."""
+
+    if not isinstance(message, dict):
+        return
+    shape["messages"] += 1
+    if isinstance(message.get("reasoning_content"), str):
+        shape["reasoning_parts"] += 1
+    content = message.get("content", [])
+    if isinstance(content, str):
+        shape["content_strings"] += 1
+        shape["text_parts"] += 1
+        return
+    if not isinstance(content, list):
+        return
+    shape["content_lists"] += 1
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if isinstance(part.get("text"), str):
+            shape["text_parts"] += 1
+        if isinstance(part.get("reasoning_content"), str):
+            shape["reasoning_parts"] += 1
+
+
+def _safe_qwen_event_code(value: object) -> str:
+    """Expose a normalized provider code, never its message or response body."""
+
+    if not isinstance(value, str):
+        return "unknown"
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+    return normalized if _SAFE_QWEN_EVENT_CODE.fullmatch(normalized) else "unknown"
 
 
 def _optional_int(value: object) -> int | None:

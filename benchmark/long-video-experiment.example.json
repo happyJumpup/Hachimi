@@ -7,6 +7,7 @@
     "qwen_visual_model": "qwen3-vl-flash-2026-01-22"
   },
   "prompt_version": "long-video-ab-v2",
+  "qwen_video_projection_version": "qwen-h264-short-edge-160-2fps-crf35-v3",
   "chunk": {
     "version": "60s-10s-overlap-v1",
     "duration_seconds": 60,

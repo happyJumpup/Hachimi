@@ -2,6 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from hakimi_analysis.benchmark.long_contract import (
+    QWEN_VIDEO_PROJECTION_CRF,
+    QWEN_VIDEO_PROJECTION_FPS,
+    QWEN_VIDEO_PROJECTION_MIN_SHORT_EDGE,
+)
 from hakimi_analysis.benchmark.long_models import LongExperimentSource, LongVideoChunkPolicy
 from hakimi_analysis.benchmark.long_preparation import (
     LongMediaPreparationError,
@@ -67,6 +72,16 @@ async def test_preparer_creates_full_audio_and_complete_silent_chunk_contact_pai
     assert [operation for operation, _ in calls].count("audio") == 1
     assert [operation for operation, _ in calls].count("silent video") == 3
     assert [operation for operation, _ in calls].count("contact sheet") == 3
+    silent_arguments = next(
+        arguments for operation, arguments in calls if operation == "silent video"
+    )
+    assert silent_arguments[silent_arguments.index("-vf") + 1] == (
+        rf"fps={QWEN_VIDEO_PROJECTION_FPS},"
+        rf"scale=if(gte(iw\,ih)\,-2\,{QWEN_VIDEO_PROJECTION_MIN_SHORT_EDGE})"
+        rf":if(gte(iw\,ih)\,{QWEN_VIDEO_PROJECTION_MIN_SHORT_EDGE}\,-2)"
+    )
+    assert silent_arguments[silent_arguments.index("-c:v") + 1] == "libx264"
+    assert silent_arguments[silent_arguments.index("-crf") + 1] == str(QWEN_VIDEO_PROJECTION_CRF)
 
 
 @pytest.mark.asyncio

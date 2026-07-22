@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from hakimi_analysis.benchmark.long_contract import QWEN_VIDEO_PROJECTION_VERSION
 from hakimi_analysis.benchmark.long_manifest import (
     EXPECTED_LONG_EXPERIMENT_MODELS,
     LongExperimentManifest,
@@ -28,6 +29,7 @@ def valid_manifest_payload(tmp_path: Path) -> dict[str, object]:
         "version": 1,
         "models": dict(EXPECTED_LONG_EXPERIMENT_MODELS),
         "prompt_version": "long-video-ab-v2",
+        "qwen_video_projection_version": QWEN_VIDEO_PROJECTION_VERSION,
         "chunk": {
             "version": "long-video-chunks-v1",
             "duration_seconds": 60,
@@ -85,6 +87,7 @@ def test_manifest_locks_two_full_sources_and_long_video_protocol(tmp_path: Path)
 
     assert manifest.models.model_dump() == EXPECTED_LONG_EXPERIMENT_MODELS
     assert manifest.repetitions == 3
+    assert manifest.qwen_video_projection_version == QWEN_VIDEO_PROJECTION_VERSION
     assert manifest.chunk.duration_seconds == 60
     assert manifest.chunk.overlap_seconds == 10
     assert [source.source_id for source in manifest.sources] == [
@@ -122,6 +125,12 @@ def test_manifest_rejects_non_frozen_protocol_or_duplicate_sources(tmp_path: Pat
     payload["prompt_version"] = "unfrozen-prompt-v1"
 
     with pytest.raises(ValidationError, match="long-video-ab-v2"):
+        LongExperimentManifest.model_validate(payload)
+
+    payload = valid_manifest_payload(tmp_path)
+    payload["qwen_video_projection_version"] = "unfrozen-qwen-input"
+
+    with pytest.raises(ValidationError, match="frozen Qwen video projection"):
         LongExperimentManifest.model_validate(payload)
 
 
