@@ -54,6 +54,8 @@ pnpm api:generate
 - [首个动作分析纵切片技术设计与开发准入](docs/technical/action-analysis-vertical-slice.md)
 - [竞赛版产品规格](docs/specs/competition-web-mvp.md)
 - [整段视频分析与延迟预算 ADR](docs/adr/0012-explicit-full-source-analysis-with-latency-budget.md)
+- [7/19 分钟 Seed/Qwen 长视频 A/B 验证协议](docs/research/long-video-ab-validation.md)
+- [长视频基准中的 Qwen 临时对象自动失效边界 ADR](docs/adr/0013-isolated-long-video-qwen-expiry.md)
 - [Web 体验规范](docs/design/web-experience-guidelines.md)
 - [完整 Web 架构](docs/technical/web-mvp-architecture.md)
 - [训练场次合同](docs/technical/training-session-contract.md)

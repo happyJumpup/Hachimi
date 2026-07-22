@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "models": {
+    "asr_resource": "volc.seedasr.sauc.duration",
+    "seed_visual_model": "doubao-seed-2-0-mini-260428",
+    "seed_fusion_model": "doubao-seed-2-0-mini-260428",
+    "qwen_visual_model": "qwen3-vl-flash-2026-01-22"
+  },
+  "prompt_version": "long-video-ab-v1",
+  "chunk": {
+    "version": "60s-10s-overlap-v1",
+    "duration_seconds": 60,
+    "overlap_seconds": 10
+  },
+  "retry": {
+    "version": "network-retry-2-v1",
+    "max_retries": 2,
+    "retry_network_errors": true,
+    "retry_http_408": true,
+    "retry_http_429": true,
+    "retry_http_5xx": true,
+    "respect_retry_after": true
+  },
+  "repetitions": 3,
+  "sources": [
+    {
+      "source_id": "romanian-deadlift-7m",
+      "source_path": "C:/replace-with-authorized-media/romanian-deadlift-7m.mp4",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "duration_seconds": 424.31,
+      "representative_start_seconds": 0,
+      "gold_path": ".benchmark-work/long-video/gold/romanian-deadlift-7m.json",
+      "gold_version": "long-video-gold-v1"
+    },
+    {
+      "source_id": "beginner-full-workout-19m",
+      "source_path": "C:/replace-with-authorized-media/beginner-full-workout-19m.mp4",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "duration_seconds": 1157.46,
+      "representative_start_seconds": 0,
+      "gold_path": ".benchmark-work/long-video/gold/beginner-full-workout-19m.json",
+      "gold_version": "long-video-gold-v1"
+    }
+  ],
+  "output": {
+    "working_root": ".benchmark-work/long-video/work",
+    "temporary_root": ".benchmark-work/long-video/tmp",
+    "raw_results_root": "benchmark-results/long-video/runs",
+    "summary_path": "benchmark-results/long-video/summary.json"
+  }
+}
