@@ -113,4 +113,8 @@ secrets in memory, enforces the five-minute runtime profile, and submits an
 OA-only gray source release. Its optional receipt contains names and hashes,
 never environment values.
 
+`private-canary.py` signs the private CloudBase HTTP API, reads the judge code
+from Windows Credential Manager, verifies anonymous denial, uploads one local
+video, consumes SSE, and emits only aggregate result counts and coverage state.
+
 回执放在团队受控位置，不提交 Git。原视频、密钥、账户标识和可搜索的真实分析内容同样不得提交。
