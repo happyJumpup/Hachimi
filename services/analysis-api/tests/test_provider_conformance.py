@@ -131,6 +131,9 @@ def test_sanitized_report_contains_metrics_but_no_local_paths(tmp_path: Path) ->
     report = build_sanitized_report(manifest, runs)
 
     assert report["selection"] == "qualified-routes-require-cost-review"
+    assert report["seed_primary_selection"] == "qualified-routes-require-cost-review"
+    assert report["qwen_fallback_qualified"] is True
+    assert report["version_c_decision"] == "blocked-requires-cost-review"
     routes = report["routes"]
     assert isinstance(routes, list)
     assert all(route["passes_quality_gate"] for route in routes)

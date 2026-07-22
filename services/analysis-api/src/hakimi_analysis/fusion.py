@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 from hakimi_analysis.models import (
     ActionMode,
     AnalysisCandidate,
@@ -32,27 +30,6 @@ def _same_action(speech_name: str, visual_name: str | None) -> bool:
     return bool(speech and visual) and speech == visual
 
 
-@dataclass(frozen=True, slots=True)
-class CandidateFusionSkill:
-    instructions: str
-    version: str
-
-    def run(
-        self,
-        *,
-        source_id: str,
-        speech_signals: list[SpeechSignal],
-        visual_segments: list[VisualSegment],
-    ) -> list[AnalysisCandidate]:
-        if not self.instructions.strip() or not self.version.strip():
-            raise ValueError("candidate fusion Skill must be versioned")
-        return fuse_candidates(
-            source_id=source_id,
-            speech_signals=speech_signals,
-            visual_segments=visual_segments,
-        )
-
-
 def _overlap_seconds(
     left_start: float,
     left_end: float,
@@ -69,6 +46,17 @@ def _gap_seconds(
     right_end: float,
 ) -> float:
     return max(0.0, max(left_start, right_start) - min(left_end, right_end))
+
+
+def _overlap_fraction_of_shorter(
+    left_start: float,
+    left_end: float,
+    right_start: float,
+    right_end: float,
+) -> float:
+    overlap = _overlap_seconds(left_start, left_end, right_start, right_end)
+    shorter = min(left_end - left_start, right_end - right_start)
+    return overlap / shorter if shorter > 0 else 0.0
 
 
 def _parameters(signal: SpeechSignal | None) -> CandidateParameters:
@@ -145,6 +133,21 @@ def _deduplicate_speech_signals(signals: list[SpeechSignal]) -> list[SpeechSigna
     ):
         action_key = _normalized_action_name(signal.action_name)
         action_signals = grouped.setdefault(action_key, [])
+        if signal.segment_role == SegmentRole.TEACHING_DEMO:
+            teaching_index = next(
+                (
+                    index
+                    for index, existing in enumerate(action_signals)
+                    if existing.segment_role == SegmentRole.TEACHING_DEMO
+                ),
+                None,
+            )
+            if teaching_index is not None:
+                action_signals[teaching_index] = max(
+                    (action_signals[teaching_index], signal),
+                    key=_speech_signal_quality,
+                )
+                continue
         if action_signals and signal.start_seconds <= action_signals[-1].end_seconds:
             previous = action_signals[-1]
             preferred = max((previous, signal), key=_speech_signal_quality)
@@ -210,6 +213,30 @@ def fuse_candidates(
             default=(-1, 0.0, float("inf")),
         )
         visual = visual_segments[matched_index] if overlap > 0 or gap <= 6 else None
+        name_conflict = False
+        if visual is None:
+            conflicting_matches = [
+                (
+                    index,
+                    _overlap_fraction_of_shorter(
+                        speech.start_seconds,
+                        speech.end_seconds,
+                        candidate.start_seconds,
+                        candidate.end_seconds,
+                    ),
+                )
+                for index, candidate in enumerate(visual_segments)
+                if index not in matched_visual_indexes
+            ]
+            conflict_index, conflict_overlap = max(
+                conflicting_matches,
+                key=lambda item: item[1],
+                default=(-1, 0.0),
+            )
+            if conflict_overlap >= 0.5:
+                visual = visual_segments[conflict_index]
+                matched_index = conflict_index
+                name_conflict = True
         if visual is not None:
             matched_visual_indexes.add(matched_index)
 
@@ -248,6 +275,7 @@ def fuse_candidates(
                 needs_confirmation=(
                     visual is None
                     or visual.action_name is None
+                    or name_conflict
                     or segment_role == SegmentRole.UNKNOWN
                 ),
             )

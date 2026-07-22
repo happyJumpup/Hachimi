@@ -8,7 +8,11 @@ import httpx
 from pydantic import ValidationError
 
 from hakimi_analysis.models import Segment, VisualLocalizationResult
-from hakimi_analysis.providers.base import ProviderError, ProviderSchemaError
+from hakimi_analysis.providers.base import (
+    ProviderError,
+    ProviderSchemaError,
+    parse_retry_after_seconds,
+)
 from hakimi_analysis.temporary_cos import TencentCosTemporaryStore
 
 
@@ -136,6 +140,7 @@ def _raise_qwen_status(response: httpx.Response) -> None:
         "Qwen visual service is unavailable",
         retryable=response.status_code in {408, 429} or response.status_code >= 500,
         request_id=request_id,
+        retry_after_seconds=parse_retry_after_seconds(response),
     )
 
 
@@ -147,8 +152,8 @@ def _validate_chunk_clock(
 ) -> None:
     for segment in result.segments:
         if (
-            segment.start_seconds < window.start_seconds - 0.5
-            or segment.end_seconds > window.end_seconds + 0.5
+            segment.start_seconds < window.start_seconds
+            or segment.end_seconds > window.end_seconds
         ):
             raise ProviderSchemaError(
                 "Qwen visual timestamps exceed the chunk-relative clock",

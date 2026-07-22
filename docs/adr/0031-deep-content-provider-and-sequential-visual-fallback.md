@@ -16,7 +16,7 @@
 4. 媒体只生成一份完整 16 kHz 单声道音频和连续静音 MP4 视觉块。视觉模型只返回块内 `0..chunk_duration` 时间，代码恰好做一次块偏移和一次来源范围偏移；Run Manager 不再偏移。
 5. 旧“分析 Skill”改为 Provider 内部 Prompt Contract。每份合同固定输入媒体、时间坐标、输出 Schema、兼容模型族、版本和内容哈希。根 `skills/` 只保留训练编译、个性化调整和动作要点补充等领域 Skill。
 6. ASR 首版继续使用豆包流式语音识别 2.0，并通过版本化、带哈希的健身热词合同向 `request.context` 注入请求级热词。录音文件极速版另行评测，不进入运行时降级。
-7. 视觉候选固定为 Seed Mini、Seed Lite 和 Qwen3-VL Flash。生产同构评测通过硬门槛后，第一名成为主路线，最高排名的另一厂商路线才可成为备用。未通过评测时，备用功能必须关闭。
+7. 视觉候选固定为 Seed Mini、Seed Lite 和 Qwen3-VL Flash。首个实现因私有 COS 只允许中转主路线失败块，必须由一条合格 Seed 路线担任主路线，并由合格 Qwen 路线担任跨厂商备用；若总体质量结论只支持 Qwen 作为主路线或没有 Seed 路线合格，则阻断版本 C，而不是降低质量门槛或把全部用户块上传 COS。未通过评测时，备用功能必须关闭。
 8. 自动降级按块顺序执行。可降级错误仅包括配置、网络／408／429／5xx、超时和 Schema 错误；有效空结果不降级，内容安全拒绝、取消、媒体错误和预算不足不降级。主路线最终失败后，当前块及剩余块直接使用备用，已经成功的块不重跑。
 9. 主路线配置错误立即永久熔断至进程重启；瞬时错误在 60 秒内连续 3 次后熔断 60 秒，随后只允许一次半开探测。
 10. Qwen 只接收静音块，使用 Chat Completions 的 `video_url` 与 JSON Object 模式，关闭思考并只做一次本地 Pydantic 校验，不调用模型修复 JSON。
@@ -33,4 +33,3 @@
 
 - 取代 [ADR-0012](0012-explicit-full-source-analysis-with-latency-budget.md) 中联系表、11.5 秒预算、局部触发窗口、Run Manager 二次偏移和 SSE 断开即取消的实现描述。
 - 细化 [ADR-0030](0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 中 Provider 内部结构、视觉选型、发布能力与 Canary 门禁；其五分钟范围和签名 FFmpeg 决策继续有效。
-

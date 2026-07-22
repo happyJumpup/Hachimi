@@ -76,9 +76,6 @@
           "segment": {
             "$ref": "#/components/schemas/Segment"
           },
-          "segment_role": {
-            "$ref": "#/components/schemas/SegmentRole"
-          },
           "source_id": {
             "title": "Source Id",
             "type": "string"
@@ -91,7 +88,6 @@
           "segment",
           "parameters",
           "evidence",
-          "segment_role",
           "needs_confirmation"
         ],
         "title": "AnalysisCandidate",
@@ -154,7 +150,7 @@
           },
           "discovered_candidate_count": {
             "default": 0,
-            "description": "While running, the conservative maximum evidence count from completed branches; at terminal completion, the exact fused candidate count.",
+            "description": "While running, the conservative maximum evidence count from completed evidence; at terminal completion, the exact fused candidate count.",
             "minimum": 0.0,
             "title": "Discovered Candidate Count",
             "type": "integer"
@@ -162,7 +158,10 @@
           "empty_reason": {
             "anyOf": [
               {
-                "const": "no_evidence",
+                "enum": [
+                  "no_evidence",
+                  "insufficient_evidence"
+                ],
                 "type": "string"
               },
               {
@@ -391,7 +390,7 @@
         "properties": {
           "local_analysis_max_seconds": {
             "exclusiveMinimum": 0.0,
-            "maximum": 600.0,
+            "maximum": 300.0,
             "title": "Local Analysis Max Seconds",
             "type": "number"
           },
@@ -457,7 +456,8 @@
       "CoverageStatus": {
         "enum": [
           "complete",
-          "partial"
+          "partial",
+          "insufficient"
         ],
         "title": "CoverageStatus",
         "type": "string"
@@ -631,15 +631,6 @@
         ],
         "title": "Segment",
         "type": "object"
-      },
-      "SegmentRole": {
-        "enum": [
-          "follow_along",
-          "teaching_demo",
-          "unknown"
-        ],
-        "title": "SegmentRole",
-        "type": "string"
       },
       "SourceSummary": {
         "additionalProperties": false,

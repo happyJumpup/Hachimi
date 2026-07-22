@@ -1,5 +1,11 @@
 from hakimi_analysis.fusion import fuse_candidates
-from hakimi_analysis.models import Segment, SegmentRole, SpeechSignal, VisualSegment
+from hakimi_analysis.models import (
+    EvidenceType,
+    Segment,
+    SegmentRole,
+    SpeechSignal,
+    VisualSegment,
+)
 
 
 def test_overlapping_speech_and_visual_evidence_become_one_candidate() -> None:
@@ -97,7 +103,7 @@ def test_single_branch_evidence_is_returned_as_needing_confirmation() -> None:
     assert [item.type for item in candidates[0].evidence] == ["speech"]
 
 
-def test_overlapping_different_actions_remain_separate_candidates() -> None:
+def test_overlapping_different_actions_form_one_candidate_needing_confirmation() -> None:
     candidates = fuse_candidates(
         source_id="source-a",
         speech_signals=[
@@ -122,10 +128,10 @@ def test_overlapping_different_actions_remain_separate_candidates() -> None:
         ],
     )
 
-    assert len(candidates) == 2
-    assert [candidate.name for candidate in candidates] == ["Drag Curl", "锤式弯举"]
-    assert all(candidate.needs_confirmation for candidate in candidates)
-    assert all(len(candidate.evidence) == 1 for candidate in candidates)
+    assert len(candidates) == 1
+    assert candidates[0].name == "锤式弯举"
+    assert candidates[0].needs_confirmation is True
+    assert len(candidates[0].evidence) == 2
 
 
 def test_no_evidence_produces_no_candidates() -> None:
@@ -277,3 +283,63 @@ def test_visual_only_internal_segment_role_still_needs_confirmation() -> None:
 
     assert candidates[0].needs_confirmation is True
     assert "segment_role" not in candidates[0].model_dump()
+
+
+def test_overlapping_conflicting_names_form_one_candidate_for_confirmation() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="罗马尼亚硬拉",
+                start_seconds=10,
+                end_seconds=20,
+                evidence_text="下面做罗马尼亚硬拉",
+            )
+        ],
+        visual_segments=[
+            VisualSegment(
+                action_name="直腿硬拉",
+                start_seconds=11,
+                end_seconds=19,
+                visual_cue="髋部后移并下放哑铃",
+            )
+        ],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].name == "罗马尼亚硬拉"
+    assert candidates[0].needs_confirmation is True
+    assert {evidence.type for evidence in candidates[0].evidence} == {
+        EvidenceType.SPEECH,
+        EvidenceType.VISUAL,
+    }
+
+
+def test_separate_teaching_demos_of_same_action_keep_one_best_reference() -> None:
+    candidates = fuse_candidates(
+        source_id="source-a",
+        speech_signals=[
+            SpeechSignal(
+                action_name="深蹲",
+                start_seconds=5,
+                end_seconds=10,
+                evidence_text="示范深蹲",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+            SpeechSignal(
+                action_name="深蹲",
+                sets=4,
+                reps=12,
+                start_seconds=30,
+                end_seconds=40,
+                evidence_text="深蹲四组每组十二次",
+                segment_role=SegmentRole.TEACHING_DEMO,
+            ),
+        ],
+        visual_segments=[],
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].segment == Segment(start_seconds=30, end_seconds=40)
+    assert candidates[0].parameters.sets == 4
+    assert candidates[0].parameters.reps == 12

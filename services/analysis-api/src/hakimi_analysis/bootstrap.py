@@ -20,6 +20,7 @@ from hakimi_analysis.models import (
 )
 from hakimi_analysis.pipeline import AnalysisPipeline, EmitCallback, PipelineFailure, PipelineOutput
 from hakimi_analysis.provider_contracts import PromptContractError, PromptContractRegistry
+from hakimi_analysis.provider_profile import ProviderProfile
 from hakimi_analysis.providers.ark import ArkResponsesClient
 from hakimi_analysis.providers.asr import VolcAsrClient
 from hakimi_analysis.providers.qwen import QwenVisualClient
@@ -138,6 +139,7 @@ def build_pipeline(
     *,
     temp_root: Path | None = None,
     fallback_store: TencentCosTemporaryStore | None = None,
+    profile: ProviderProfile | None = None,
 ) -> AnalysisPipeline:
     if settings.analysis_provider == "test":
         return DeterministicTestPipeline()
@@ -145,6 +147,7 @@ def build_pipeline(
         return UnconfiguredPipeline()
 
     try:
+        resolved_profile = profile or ProviderProfile.from_settings(settings)
         visual_model_ids: tuple[str, ...] = (settings.ark_visual_model_id,)
         if settings.visual_fallback_enabled:
             visual_model_ids += (settings.qwen_visual_model_id,)
@@ -153,12 +156,12 @@ def build_pipeline(
             speech_model_id=settings.ark_model_id,
             visual_model_ids=visual_model_ids,
         )
-    except (OSError, PromptContractError):
+    except (OSError, PromptContractError, ValueError):
         return UnconfiguredPipeline()
 
     media = LocalMediaProcessor(
         temp_root=temp_root or PROJECT_ROOT / "tmp" / "analysis-runs",
-        max_source_duration_seconds=settings.local_analysis_max_seconds,
+        max_source_duration_seconds=resolved_profile.max_source_seconds,
     )
     asr = VolcAsrClient(
         api_key=settings.volc_asr_api_key.get_secret_value(),
@@ -167,12 +170,21 @@ def build_pipeline(
         pace_audio=False,
         hotwords=contracts.asr_context.hotwords,
     )
-    ark = ArkResponsesClient(
+    speech_interpreter = ArkResponsesClient(
         api_key=settings.ark_api_key.get_secret_value(),
         model_id=settings.ark_model_id,
         visual_model_id=settings.ark_visual_model_id,
         base_url=settings.ark_base_url,
         http_client=http_client,
+    )
+    visual_locator = ArkResponsesClient(
+        api_key=settings.ark_api_key.get_secret_value(),
+        model_id=settings.ark_model_id,
+        visual_model_id=settings.ark_visual_model_id,
+        base_url=settings.ark_base_url,
+        http_client=http_client,
+        # The visual router owns the exact per-chunk attempt and call budget.
+        retry_delays=(),
     )
     visual_router: SequentialVisualRouter | None = None
     if settings.visual_fallback_enabled:
@@ -187,28 +199,28 @@ def build_pipeline(
             object_store=resolved_store,
         )
         visual_router = SequentialVisualRouter(
-            primary=DirectVisualProvider(ark),
+            primary=DirectVisualProvider(visual_locator),
             fallback=qwen,
-            attempt_timeout_seconds=settings.analysis_chunk_timeout_seconds,
-            max_attempts_per_provider=settings.analysis_max_attempts_per_visual_provider,
-            max_visual_calls=settings.analysis_max_visual_calls,
+            attempt_timeout_seconds=resolved_profile.visual_attempt_timeout_seconds,
+            max_attempts_per_provider=resolved_profile.max_attempts_per_visual_provider,
+            max_visual_calls=resolved_profile.max_visual_calls,
         )
     provider = ContentUnderstandingProvider(
         media=media,
         transcriber=asr,
-        interpreter=ark,
-        visual_locator=ark,
+        interpreter=speech_interpreter,
+        visual_locator=visual_locator,
         visual_router=visual_router,
         contracts=contracts,
-        speech_timeout_seconds=settings.analysis_speech_timeout_seconds,
-        visual_chunk_timeout_seconds=settings.analysis_chunk_timeout_seconds,
-        visual_chunk_seconds=settings.analysis_visual_chunk_seconds,
-        visual_overlap_seconds=settings.analysis_visual_overlap_seconds,
-        evidence_deadline_seconds=settings.analysis_evidence_deadline_seconds,
-        run_timeout_seconds=settings.run_timeout_seconds,
-        cleanup_reserve_seconds=settings.analysis_cleanup_reserve_seconds,
-        max_attempts_per_visual_provider=settings.analysis_max_attempts_per_visual_provider,
-        max_visual_calls=settings.analysis_max_visual_calls,
+        speech_timeout_seconds=resolved_profile.speech_timeout_seconds,
+        visual_chunk_timeout_seconds=resolved_profile.visual_attempt_timeout_seconds,
+        visual_chunk_seconds=resolved_profile.visual_chunk_seconds,
+        visual_overlap_seconds=resolved_profile.visual_overlap_seconds,
+        evidence_deadline_seconds=resolved_profile.evidence_deadline_seconds,
+        run_timeout_seconds=resolved_profile.run_timeout_seconds,
+        cleanup_reserve_seconds=resolved_profile.cleanup_reserve_seconds,
+        max_attempts_per_visual_provider=resolved_profile.max_attempts_per_visual_provider,
+        max_visual_calls=resolved_profile.max_visual_calls,
     )
     return ContentUnderstandingPipeline(provider)
 
@@ -217,6 +229,7 @@ def build_default_app() -> FastAPI:
     from hakimi_analysis.app import create_app
 
     settings = Settings()
+    profile = ProviderProfile.from_settings(settings)
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(settings.run_timeout_seconds, connect=15),
         follow_redirects=False,
@@ -275,8 +288,9 @@ def build_default_app() -> FastAPI:
             http_client,
             temp_root=temp_root,
             fallback_store=fallback_store,
+            profile=profile,
         ),
-        timeout_seconds=settings.run_timeout_seconds,
+        timeout_seconds=profile.run_timeout_seconds,
         ttl_seconds=settings.run_ttl_seconds,
         cors_origins=settings.cors_origin_list,
         close_callbacks=[http_client.aclose],
@@ -287,8 +301,8 @@ def build_default_app() -> FastAPI:
         trusted_proxy_cidrs=settings.trusted_proxy_cidr_list,
         local_upload_enabled=settings.local_upload_enabled,
         local_analysis_max_seconds=settings.published_analysis_max_seconds,
-        accepted_local_analysis_max_seconds=settings.local_analysis_max_seconds,
-        local_upload_max_bytes=settings.local_upload_max_bytes,
+        accepted_local_analysis_max_seconds=profile.max_source_seconds,
+        local_upload_max_bytes=profile.max_source_bytes,
         local_upload_temp_root=temp_root,
     )
 

@@ -17,6 +17,7 @@ from hakimi_analysis.provider_profile import ProviderProfile
 from hakimi_analysis.release_gates import (
     validate_five_minute_canary_receipt,
     validate_five_minute_canary_receipt_json,
+    validate_provider_conformance_report_json,
 )
 from hakimi_analysis.settings import Settings
 from hakimi_analysis.sources import SourceCatalog
@@ -38,6 +39,12 @@ FFMPEG_RECEIPT_KEYS = {
     "configuration_line",
     "configuration_sha256",
 }
+PRODUCTION_SPEECH_MODEL_ID = "doubao-seed-2-0-mini-260428"
+PRODUCTION_VISUAL_MODEL_IDS = {
+    "doubao-seed-2-0-mini-260428",
+    "doubao-seed-2-0-lite-260428",
+}
+PRODUCTION_FALLBACK_MODEL_ID = "qwen3-vl-flash-2026-01-22"
 
 
 def validate_ffmpeg_runtime(
@@ -190,11 +197,17 @@ class ProductionReadiness:
             return "provider_configuration_invalid"
         if asr_url.scheme != "wss" or not asr_url.netloc:
             return "provider_configuration_invalid"
+        if (
+            self._settings.ark_model_id != PRODUCTION_SPEECH_MODEL_ID
+            or self._settings.ark_visual_model_id not in PRODUCTION_VISUAL_MODEL_IDS
+        ):
+            return "provider_configuration_invalid"
         if self._settings.visual_fallback_enabled:
             qwen_url = urlparse(self._settings.qwen_base_url)
             if (
                 qwen_url.scheme != "https"
                 or not qwen_url.netloc
+                or self._settings.qwen_visual_model_id != PRODUCTION_FALLBACK_MODEL_ID
                 or self._fallback_probe is None
                 or not self._fallback_probe()
             ):
@@ -234,7 +247,7 @@ class ProductionReadiness:
             visual_model_ids: tuple[str, ...] = (self._settings.ark_visual_model_id,)
             if self._settings.visual_fallback_enabled:
                 visual_model_ids += (self._settings.qwen_visual_model_id,)
-            PromptContractRegistry.load(
+            contracts = PromptContractRegistry.load(
                 self._contracts_root,
                 speech_model_id=self._settings.ark_model_id,
                 visual_model_ids=visual_model_ids,
@@ -257,11 +270,13 @@ class ProductionReadiness:
             return "web_static_unavailable"
         if not self._temp_storage_available():
             return "temp_storage_unavailable"
-        if not self._competition_profile_valid():
+        if not self._competition_profile_valid(
+            visual_prompt_sha256=contracts.visual.prompt_sha256
+        ):
             return "competition_configuration_invalid"
         return None
 
-    def _competition_profile_valid(self) -> bool:
+    def _competition_profile_valid(self, *, visual_prompt_sha256: str) -> bool:
         try:
             profile = ProviderProfile.from_settings(self._settings)
         except ValueError:
@@ -283,25 +298,42 @@ class ProductionReadiness:
             and profile.judge_concurrency == 3
             and profile.public_concurrency == 0
             and not self._settings.trusted_proxy_cidr_list
-            and self._published_capability_valid()
+            and self._published_capability_valid(
+                visual_prompt_sha256=visual_prompt_sha256
+            )
         )
 
-    def _published_capability_valid(self) -> bool:
+    def _published_capability_valid(self, *, visual_prompt_sha256: str) -> bool:
         published = self._settings.published_analysis_max_seconds
         if published == 60:
             return True
         if published != 300 or not self._settings.visual_fallback_enabled:
+            return False
+        conformance_report = self._settings.provider_conformance_report_json.strip()
+        conformance_sha256 = validate_provider_conformance_report_json(
+            conformance_report,
+            expected_prompt_sha256=visual_prompt_sha256,
+            expected_primary_model_id=self._settings.ark_visual_model_id,
+            expected_fallback_model_id=self._settings.qwen_visual_model_id,
+        )
+        if conformance_sha256 is None:
             return False
         receipt_json = self._settings.provider_canary_receipt_json.strip()
         return (
             validate_five_minute_canary_receipt_json(
                 receipt_json,
                 expected_commit_sha=self._settings.deployment_commit_sha,
+                expected_primary_model_id=self._settings.ark_visual_model_id,
+                expected_fallback_model_id=self._settings.qwen_visual_model_id,
+                expected_conformance_report_sha256=conformance_sha256,
             )
             if receipt_json
             else validate_five_minute_canary_receipt(
                 self._settings.provider_canary_receipt_path,
                 expected_commit_sha=self._settings.deployment_commit_sha,
+                expected_primary_model_id=self._settings.ark_visual_model_id,
+                expected_fallback_model_id=self._settings.qwen_visual_model_id,
+                expected_conformance_report_sha256=conformance_sha256,
             )
         )
 

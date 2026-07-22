@@ -218,10 +218,11 @@ class SequentialVisualRouter:
                 chunk_index=chunk_index,
             )
         except ProviderError as error:
-            if not _may_fallback(error) or self._fallback is None:
-                self._primary_breaker.record_failure(error)
+            if not _may_fallback(error):
                 raise
             self._primary_breaker.record_failure(error)
+            if self._fallback is None:
+                raise
             state.fallback_active = True
             return await self._call_provider(
                 self._fallback,
@@ -302,6 +303,15 @@ class SequentialVisualRouter:
                 )
                 if not last_error.retryable or isinstance(last_error, ProviderSchemaError):
                     raise last_error
+                retry_after = last_error.retry_after_seconds or 0
+                if retry_after > 0 and attempt < self._max_attempts_per_provider:
+                    if retry_after >= deadline - self._clock():
+                        raise ProviderError(
+                            "budget_exhausted",
+                            "Retry-After exceeds the visual evidence deadline",
+                            retryable=False,
+                        )
+                    await asyncio.sleep(retry_after)
             if last_error is not None:
                 raise last_error
         raise AssertionError("visual provider attempts were not executed")
@@ -338,12 +348,9 @@ class SequentialVisualRouter:
 
 
 def _may_fallback(error: ProviderError) -> bool:
-    return error.code in {
-        "configuration_error",
-        "provider_error",
-        "schema_error",
-        "timeout",
-    }
+    return error.code in {"configuration_error", "schema_error", "timeout"} or (
+        error.code == "provider_error" and error.retryable
+    )
 
 
 __all__ = [

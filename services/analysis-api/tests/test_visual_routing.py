@@ -151,6 +151,65 @@ async def test_content_safety_and_media_errors_do_not_fallback(
 
 
 @pytest.mark.asyncio
+async def test_non_fallback_errors_do_not_poison_the_process_circuit(tmp_path: Path) -> None:
+    primary = FakePreparedProvider(
+        "ark",
+        [
+            ProviderError("media_error", "bad source", retryable=False),
+            ProviderError("media_error", "bad source", retryable=False),
+            ProviderError("media_error", "bad source", retryable=False),
+            visual_result(),
+        ],
+    )
+    fallback = FakePreparedProvider("qwen", [visual_result()])
+    router = SequentialVisualRouter(primary=primary, fallback=fallback)
+
+    for index in range(3):
+        with pytest.raises(ProviderError, match="bad source"):
+            await router.locate_visual(
+                video_path=tmp_path / f"bad-{index}.mp4",
+                window=Segment(start_seconds=0, end_seconds=60),
+                instructions="Return JSON.",
+                state=router.new_run_state(),
+                deadline=float("inf"),
+                chunk_index=1,
+            )
+
+    recovered = await router.locate_visual(
+        video_path=tmp_path / "good.mp4",
+        window=Segment(start_seconds=0, end_seconds=60),
+        instructions="Return JSON.",
+        state=router.new_run_state(),
+        deadline=float("inf"),
+        chunk_index=1,
+    )
+
+    assert recovered.segments
+    assert fallback.locate_count == 0
+
+
+@pytest.mark.asyncio
+async def test_non_retryable_provider_error_does_not_fallback(tmp_path: Path) -> None:
+    primary = FakePreparedProvider(
+        "ark", [ProviderError("provider_error", "bad request", retryable=False)]
+    )
+    fallback = FakePreparedProvider("qwen", [visual_result()])
+    router = SequentialVisualRouter(primary=primary, fallback=fallback)
+
+    with pytest.raises(ProviderError, match="bad request"):
+        await router.locate_visual(
+            video_path=tmp_path / "chunk.mp4",
+            window=Segment(start_seconds=0, end_seconds=60),
+            instructions="Return JSON.",
+            state=router.new_run_state(),
+            deadline=float("inf"),
+            chunk_index=1,
+        )
+
+    assert fallback.locate_count == 0
+
+
+@pytest.mark.asyncio
 async def test_visual_call_budget_counts_provider_attempts(tmp_path: Path) -> None:
     primary = FakePreparedProvider(
         "ark",
@@ -180,6 +239,44 @@ async def test_visual_call_budget_counts_provider_attempts(tmp_path: Path) -> No
     assert raised.value.code == "budget_exhausted"
     assert state.visual_calls == 2
     assert fallback.locate_count == 0
+
+
+@pytest.mark.asyncio
+async def test_visual_retry_obeys_numeric_retry_after(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+
+    async def capture_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    monkeypatch.setattr("hakimi_analysis.visual_routing.asyncio.sleep", capture_sleep)
+    primary = FakePreparedProvider(
+        "ark",
+        [
+            ProviderError(
+                "provider_error",
+                "rate limited",
+                retryable=True,
+                retry_after_seconds=2,
+            ),
+            visual_result(),
+        ],
+    )
+    router = SequentialVisualRouter(primary=primary)
+
+    result = await router.locate_visual(
+        video_path=tmp_path / "chunk.mp4",
+        window=Segment(start_seconds=0, end_seconds=60),
+        instructions="Return JSON.",
+        state=router.new_run_state(),
+        deadline=float("inf"),
+        chunk_index=1,
+    )
+
+    assert result.segments
+    assert delays == [2]
 
 
 def test_circuit_breaker_opens_after_three_transient_failures_and_half_opens() -> None:

@@ -31,4 +31,6 @@ pnpm benchmark:provider-conformance -- score
 
 若合格路线 F1 相差超过 3 个百分点，选择质量更高者；否则依次比较成功率和每视频分钟完整覆盖中位时间。当前 Adapter 尚未提供可审计 Token 成本，报告会明确输出 `cost_status=not-measured`；前两项仍打平时返回 `qualified-routes-require-cost-review`，禁止凭路线顺序宣布冠军。
 
+报告同时给出总体研究冠军、Seed 主路线候选、Qwen 备用资格和版本 C 决策。由于本轮只允许私有 COS 中转主路线失败块，总体冠军若是 Qwen，或没有合格 Seed 主路线，版本 C 必须阻断；不能把全部用户视频块上传 COS 来迁就评测结果。
+
 脱敏报告只包含路线、冻结模型、聚合质量、成功率、延迟和明确的证据状态，不包含本地路径、对象 key、签名 URL、动作明细、Prompt 或模型原文。真实评测未完成时，生产默认继续使用既有 Ark 主路线并关闭跨厂商降级。

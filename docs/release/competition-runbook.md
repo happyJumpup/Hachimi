@@ -8,9 +8,11 @@
 
 本手册禁止把计划值、占位项或本地通过记录表述为公网已上线事实。操作源以 [`deploy/cloudbase/foundation-plan.json`](../../deploy/cloudbase/foundation-plan.json)、[`deploy/cloudbase/README.md`](../../deploy/cloudbase/README.md) 和 [ADR-0029](../adr/0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md) 为准。
 
+五分钟发布收据从 [`provider-canary-receipt.template.json`](provider-canary-receipt.template.json) 复制到团队私有位置填写。模板中的占位文本和 `false` 不能通过 readiness；不要在仓库中提交实际收据或聚合报告。
+
 ## 1. 当前发布结论
 
-截至 2026-07-22，仓库已经完成：
+截至 2026-07-23，仓库已经完成：
 
 - CloudBase Run 非秘密基础计划、预算上限、单实例安全边界和校验脚本；
 - 同源 SPA + FastAPI 镜像、健康／就绪、访问分级和测试 Provider 隔离的工程基线；
@@ -36,7 +38,7 @@
 - Provider-backed 分析必须使用评委体验码；`PUBLIC_ANALYSIS_CONCURRENCY=0`，匿名访客不能消耗付费分析额度。
 - 测试 Provider 只允许 `APP_ENV=test`；生产环境配置测试 Provider 必须拒绝启动。
 - 快速体验方案必须明确标注为示例，不能伪装成真实 AI 结果、缓存回退或用户记录。
-- 当前生产候选由豆包流式语音识别 2.0、Ark Seed 主视觉和确定性 EvidenceReconciler 组成；Seed Mini、Seed Lite 与 Qwen3-VL 的同构评测未完成前，主模型不视为冻结，跨厂商备用保持关闭。
+- 当前生产候选由豆包流式语音识别 2.0、待评测选择的 Ark Seed 主视觉和确定性 EvidenceReconciler 组成；Seed Mini、Seed Lite 与 Qwen3-VL 的同构评测未完成前，Seed 主模型不视为冻结，Qwen 跨厂商备用保持关闭。若只有 Qwen 适合成为主路线，本轮因临时 COS 只中转失败块而阻断发布。
 - 仓库名、镜像路径或兼容字段中的历史工程标识不构成产品品牌；用户界面和答辩统一使用 TrainPal。
 
 ## 3. CloudBase Run 拓扑
@@ -108,7 +110,8 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `LOCAL_UPLOAD_ENABLED` | `true`，但就绪和能力接口仍可失败关闭 |
 | `LOCAL_ANALYSIS_MAX_SECONDS` | 代码和私有验收上限 `300`，不直接对用户公布 |
 | `PUBLISHED_ANALYSIS_MAX_SECONDS` | 默认 `60`；五分钟 Canary 收据与当前部署 commit 匹配后才设为 `300` |
-| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入脱敏收据 JSON 并绑定完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH`，60 秒时收据可为空 |
+| `PROVIDER_CONFORMANCE_REPORT_JSON` | 发布 300 秒时注入真实 runner 的脱敏聚合报告；Prompt 哈希、主备模型、24 个计分单元和质量门槛必须与部署配置一致 |
+| `PROVIDER_CANARY_RECEIPT_JSON` / `DEPLOYMENT_COMMIT_SHA` | CloudBase 发布 300 秒时必须注入绑定 conformance 报告哈希、主备模型和 Canary 结果的脱敏收据，并绑定完整 40 位部署 commit；文件型部署也可改用 `PROVIDER_CANARY_RECEIPT_PATH` |
 | `LOCAL_UPLOAD_MAX_BYTES` | 与 CloudBase 和应用请求体上限协调，不能无界 |
 | `RUN_TIMEOUT_SECONDS` | `180` |
 | `RUN_TTL_SECONDS` | `600` |
@@ -215,7 +218,7 @@ CloudBase CLI 具体命令只从 [`deploy/cloudbase/README.md`](../../deploy/clo
 - 多动作或重复节奏视频；
 - 应合法返回证据不足的困难视频。
 
-每个样本记录人工认可的动作别名和期望时间交集。通过要求：语义与人工标注相符、范围相交、不产生重量、分支／警告一致、覆盖状态诚实、临时目录恢复、云端临时文件删除。成功输出只保留 PASS、来源 ID、标注序号、阶段耗时、总耗时、模型／Skill 版本和脱敏请求 ID；不保存动作原文、转录、帧、提示、响应或 Trace。
+每个样本记录人工认可的动作别名和期望时间交集。通过要求：语义与人工标注相符、范围相交、不产生重量、分支／警告一致、覆盖状态诚实、临时目录恢复、云端临时文件删除。成功输出只保留 PASS、来源 ID、标注序号、阶段耗时、总耗时、模型／Adapter／Prompt Contract 版本和脱敏请求 ID；不保存动作原文、转录、帧、提示、响应或 Trace。
 
 当前短样本真实 smoke 只能证明既有路线的局部基线。它不能证明静音纯动作、多分钟视频、可定位覆盖缺口或生产准确率；这些未通过项必须继续作为已知限制。
 

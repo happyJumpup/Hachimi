@@ -210,7 +210,6 @@ export interface components {
             needs_confirmation: boolean;
             parameters: components["schemas"]["CandidateParameters"];
             segment: components["schemas"]["Segment"];
-            segment_role: components["schemas"]["SegmentRole"];
             /** Source Id */
             source_id: string;
         };
@@ -236,12 +235,12 @@ export interface components {
             created_at?: string;
             /**
              * Discovered Candidate Count
-             * @description While running, the conservative maximum evidence count from completed branches; at terminal completion, the exact fused candidate count.
+             * @description While running, the conservative maximum evidence count from completed evidence; at terminal completion, the exact fused candidate count.
              * @default 0
              */
             discovered_candidate_count: number;
             /** Empty Reason */
-            empty_reason?: "no_evidence" | null;
+            empty_reason?: ("no_evidence" | "insufficient_evidence") | null;
             error?: components["schemas"]["AnalysisError"] | null;
             /** Id */
             id: string;
@@ -335,7 +334,7 @@ export interface components {
          * CoverageStatus
          * @enum {string}
          */
-        CoverageStatus: "complete" | "partial";
+        CoverageStatus: "complete" | "partial" | "insufficient";
         /** CreateAnalysisRunRequest */
         CreateAnalysisRunRequest: {
             /** Source Id */
@@ -405,11 +404,6 @@ export interface components {
             /** Start Seconds */
             start_seconds: number;
         };
-        /**
-         * SegmentRole
-         * @enum {string}
-         */
-        SegmentRole: "follow_along" | "teaching_demo" | "unknown";
         /** SourceSummary */
         SourceSummary: {
             /** Duration Seconds */

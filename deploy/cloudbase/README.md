@@ -26,8 +26,7 @@
 
 - `ARK_API_KEY`
 - `VOLC_ASR_API_KEY`
-- `QWEN_API_KEY`
-- 私有 COS 的 `COS_SECRET_ID` 与 `COS_SECRET_KEY`
+- 只有版本 C 启用备用路线时才注入 `QWEN_API_KEY` 和私有 COS 的 `COS_SECRET_ID`、`COS_SECRET_KEY`
 - 新生成且彼此独立的 `JUDGE_ACCESS_CODE`
 - 新生成的 `ACCESS_COOKIE_SECRET`
 
@@ -49,7 +48,7 @@ ANALYSIS_CHUNK_TIMEOUT_SECONDS=20
 ANALYSIS_MAX_VISUAL_CHUNKS=6
 ANALYSIS_MAX_ATTEMPTS_PER_VISUAL_PROVIDER=2
 ANALYSIS_MAX_VISUAL_CALLS=12
-VISUAL_FALLBACK_ENABLED=true
+VISUAL_FALLBACK_ENABLED=false
 QWEN_VISUAL_MODEL_ID=qwen3-vl-flash-2026-01-22
 COS_SIGNED_URL_TTL_SECONDS=600
 COS_LIFECYCLE_DAYS=1
@@ -81,9 +80,11 @@ docker build --tag trainpal-five-minute:local .
 
 随后在 Bash 环境执行 `deploy/verify-competition-image.sh trainpal-five-minute:local`。通过项包括逐层无秘密/媒体扫描、唯一 FFmpeg 与收据、非 root 用户、容器启动、`/health`、SPA 根路由和 history fallback。
 
-`LOCAL_ANALYSIS_MAX_SECONDS` 是代码和私有验收上限；`GET /api/v1/capabilities` 只返回 `PUBLISHED_ANALYSIS_MAX_SECONDS`。私有评委会话可以在公开值保持 60 秒时验收五分钟，避免“必须先公开 300 才能验证 300”的循环依赖。最终发布 300 秒时，向 `PROVIDER_CANARY_RECEIPT_JSON` 注入严格脱敏收据，并让 `DEPLOYMENT_COMMIT_SHA` 等于被验收镜像的完整提交 SHA；收据与 commit 不匹配时 `/ready` 失败关闭。
+`LOCAL_ANALYSIS_MAX_SECONDS` 是代码和私有验收上限；`GET /api/v1/capabilities` 只返回 `PUBLISHED_ANALYSIS_MAX_SECONDS`。私有评委会话可以在公开值保持 60 秒时验收五分钟，避免“必须先公开 300 才能验证 300”的循环依赖。最终发布 300 秒时，向 `PROVIDER_CONFORMANCE_REPORT_JSON` 注入 runner 生成的脱敏聚合报告，向 `PROVIDER_CANARY_RECEIPT_JSON` 注入绑定该报告 SHA-256、主备模型和 Canary 结果的收据，并让 `DEPLOYMENT_COMMIT_SHA` 等于被验收镜像的完整提交 SHA；任一项不匹配时 `/ready` 失败关闭。
 
-Qwen 备用路线要求 Bucket 私有、服务端加密、1 天生命周期和 10 分钟只读签名 URL。应用只为失败视觉块创建随机对象，重试复用同一对象，所有终态主动删除；清理失败后停止开放新的备用分析。
+基础计划代表尚未选型的版本 B，因此备用路线和三个条件秘密保持关闭。生产同构评测必须先选出一个通过门槛的 Seed 主路线，并证明 Qwen 通过跨厂商备用门槛；若 Qwen 只适合成为主路线或没有 Seed 路线合格，本架构不得发布版本 C，需另立传输决策。版本 C 才把 `VISUAL_FALLBACK_ENABLED` 改为 `true` 并注入条件秘密。
+
+Qwen 备用路线要求 Bucket 私有、服务端加密、1 天生命周期和 10 分钟只读签名 URL。应用只为主路线失败的视觉块创建随机对象，重试复用同一对象，所有终态主动删除；清理失败后停止开放新的备用分析。
 
 ## B / C 发布顺序
 
@@ -107,7 +108,7 @@ Qwen 备用路线要求 Bucket 私有、服务端加密、1 天生命周期和 1
 
    不使用 `--force`。交互页必须再次核对目标服务、访问方式和价格影响。源码构建日志通过后，先验证容器、签名 FFmpeg、`/health`、`/ready`、SSE、一条真实短视频和一条私有五分钟素材；版本 B 及其兼容环境配置必须保留。
 
-3. Provider conformance 证明主路线和 Qwen 备用路线都越过质量门槛后，部署启用顺序降级的版本 C。验证可降级错误、有效空结果不降级、熔断、取消以及私有 COS 主动删除。公共入口仍保持未宣布状态，`PUBLISHED_ANALYSIS_MAX_SECONDS` 仍为 60。
+3. Provider conformance 证明某条 Seed 路线可作为主路线且 Qwen 可作为跨厂商备用后，部署启用顺序降级的版本 C。若评测只支持 Qwen 作为主路线，本轮因“私有 COS 只中转失败块”的安全边界而阻断发布。版本 C 验证可降级错误、有效空结果不降级、熔断、取消以及私有 COS 主动删除；公共入口仍保持未宣布状态，`PUBLISHED_ANALYSIS_MAX_SECONDS` 仍为 60。
 
 4. 全部私有门槛通过后执行短时未公布 Canary：第二浏览器可浏览；评委码真实五分钟分析成功；三个并发成功、第四个稳定 429；取消、熔断、COS 清理全部通过；实际完成 `B→C→B→C`。任一门槛失败就关闭入口，不发布 300 秒能力。
 

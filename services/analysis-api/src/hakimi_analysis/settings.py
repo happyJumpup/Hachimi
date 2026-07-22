@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     published_analysis_max_seconds: float = Field(default=60, gt=0, le=300)
     provider_canary_receipt_path: Path | None = None
     provider_canary_receipt_json: str = ""
+    provider_conformance_report_json: str = ""
     deployment_commit_sha: str = ""
     local_upload_max_bytes: int = Field(default=256 * 1024 * 1024, ge=1)
     analysis_speech_timeout_seconds: float = Field(default=45.0, gt=0)

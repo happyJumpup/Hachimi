@@ -439,6 +439,47 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
     tmp_path: Path,
 ) -> None:
     commit_sha = "a" * 40
+    primary_model = "doubao-seed-2-0-mini-260428"
+    fallback_model = "qwen3-vl-flash-2026-01-22"
+    visual_prompt_sha256 = hashlib.sha256(
+        b"Inspect the complete continuous silent MP4 chunk."
+    ).hexdigest()
+
+    def route(name: str, model_id: str) -> dict[str, object]:
+        return {
+            "route": name,
+            "model_id": model_id,
+            "units": 24,
+            "complete": True,
+            "success_rate": 1.0,
+            "precision": 0.95,
+            "recall": 0.9,
+            "f1_tiou_05": 0.9,
+            "time_hit_rate": 0.9,
+            "median_seconds_per_video_minute": 10.0,
+            "schema_or_clock_violations": 0,
+            "cost_status": "not-measured",
+            "passes_quality_gate": True,
+        }
+
+    conformance_report = json.dumps(
+        {
+            "schema_version": 1,
+            "manifest_version": "provider-conformance-v1",
+            "prompt_contract_sha256": visual_prompt_sha256,
+            "routes": [
+                route("seed-mini", primary_model),
+                route("seed-lite", "doubao-seed-2-0-lite-260428"),
+                route("qwen-vl", fallback_model),
+            ],
+            "selection": "seed-mini",
+            "seed_primary_selection": "seed-mini",
+            "qwen_fallback_qualified": True,
+            "version_c_decision": "eligible-for-version-c-canary",
+        },
+        separators=(",", ":"),
+    )
+    conformance_sha256 = hashlib.sha256(conformance_report.encode()).hexdigest()
     receipt = tmp_path / "provider-canary.json"
     receipt.write_text(
         json.dumps(
@@ -448,12 +489,19 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
                 "commit_sha": commit_sha,
                 "completed_at": "2026-07-22T01:00:00Z",
                 "private_smoke_passed": True,
+                "qwen_preflight_passed": True,
+                "full_pipeline_quality_passed": True,
+                "parameter_provenance_passed": True,
+                "five_minute_end_coverage_passed": True,
                 "three_way_concurrency_passed": True,
                 "cancellation_cleanup_passed": True,
                 "circuit_breaker_passed": True,
                 "cos_cleanup_passed": True,
                 "rollback_sequence": "B-C-B-C",
                 "published_max_seconds": 300,
+                "primary_model_id": primary_model,
+                "fallback_model_id": fallback_model,
+                "provider_conformance_report_sha256": conformance_sha256,
             }
         ),
         encoding="utf-8",
@@ -467,6 +515,7 @@ def test_production_ready_publishes_300_seconds_only_after_canary_receipt(
         "cos_bucket": "private-bucket-123",
         "published_analysis_max_seconds": 300,
         "deployment_commit_sha": commit_sha,
+        "provider_conformance_report_json": conformance_report,
     }
     blocked, _ = configured_readiness(
         tmp_path / "blocked",

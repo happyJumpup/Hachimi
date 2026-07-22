@@ -27,8 +27,8 @@ VIDEO_SAMPLE_FPS = 1
 def _validate_visual_result(result: VisualLocalizationResult, window: Segment) -> None:
     for segment in result.segments:
         if (
-            segment.start_seconds < window.start_seconds - 0.5
-            or segment.end_seconds > window.end_seconds + 0.5
+            segment.start_seconds < window.start_seconds
+            or segment.end_seconds > window.end_seconds
         ):
             raise ProviderSchemaError("视觉定位时间超出分析窗口")
 

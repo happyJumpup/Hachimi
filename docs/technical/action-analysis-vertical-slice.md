@@ -2,7 +2,7 @@
 
 > 历史技术记录：产品现已更名为 TrainPal。当前产品和页面合同以 [TrainPal 竞赛 Web MVP](../specs/competition-web-mvp.md)、根目录 `CONTEXT.md` 与 ADR-0015～0028 为准；本文中的哈基米、独立候选评审和旧 Pet 计划不再指导新界面。
 
-> 2026-07-21 更新：本文保留首个“时间点局部窗口”纵切片的历史实现记录。当前主管线已由 [ADR-0012](../adr/0012-explicit-full-source-analysis-with-latency-budget.md) 取代为“用户显式点击后分析整段、最多 60 秒受控视频”；`trigger_seconds` 只保留兼容，不再控制范围。
+> 历史记录：本文保留首个“时间点局部窗口”纵切片。该链路先由 [ADR-0012](../adr/0012-explicit-full-source-analysis-with-latency-budget.md) 取代，当前生产合同进一步以 [ADR-0031](../adr/0031-deep-content-provider-and-sequential-visual-fallback.md) 为准：代码与私有验收最多 300 秒，公开能力默认 60 秒并由 Canary 收据解锁；`trigger_seconds` 只保留兼容，不再控制范围。
 >
 > 既有媒体安全与分析运行边界可参考[历史本地视频规格](../specs/local-video-training-prototype.md)和 [ADR-0013](../adr/0013-local-video-import-and-recoverable-analysis.md)；下文的受控来源唯一入口、离页即取消和 60 秒产品边界均为历史实现记录。
 

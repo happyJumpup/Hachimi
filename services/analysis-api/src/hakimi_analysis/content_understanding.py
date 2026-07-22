@@ -9,6 +9,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import Field, model_validator
 
+from hakimi_analysis.fusion import fuse_candidates
 from hakimi_analysis.media import (
     AnalysisWindow,
     PreparedMedia,
@@ -23,10 +24,12 @@ from hakimi_analysis.models import (
     EvidenceSpan,
     EvidenceType,
     Segment,
+    SpeechSignal,
     SpeechUnderstandingResult,
     StrictModel,
     Transcript,
     VisualLocalizationResult,
+    VisualSegment,
 )
 from hakimi_analysis.orchestration import OrchestratedAnalysisPipeline
 from hakimi_analysis.pipeline import EmitCallback, PipelineOutput
@@ -141,10 +144,14 @@ class ContentUnderstandingResult(StrictModel):
             action.source_clip.start_seconds for action in self.actions
         ):
             raise ValueError("content actions must follow source order")
+        result_evidence_ids: set[str] = set()
         for action in self.actions:
             evidence_by_id = {evidence.id: evidence for evidence in action.evidence}
             if len(evidence_by_id) != len(action.evidence):
                 raise ValueError("evidence IDs must be unique within an action")
+            if result_evidence_ids.intersection(evidence_by_id):
+                raise ValueError("evidence IDs must be unique within a result")
+            result_evidence_ids.update(evidence_by_id)
             for evidence in action.evidence:
                 if not _within(evidence.segment, self.analysis_range):
                     raise ValueError("evidence is outside the analysis range")
@@ -206,6 +213,18 @@ class ContentUnderstandingResult(StrictModel):
 
 class EvidenceReconciler:
     version = "deterministic-v1"
+
+    def reconcile_candidates(
+        self,
+        source_id: str,
+        speech_signals: list[SpeechSignal],
+        visual_segments: list[VisualSegment],
+    ) -> list[AnalysisCandidate]:
+        return fuse_candidates(
+            source_id=source_id,
+            speech_signals=speech_signals,
+            visual_segments=visual_segments,
+        )
 
     def reconcile(
         self,
@@ -283,7 +302,10 @@ class EvidenceReconciler:
             type_counts[span.type] += 1
             evidence.append(
                 ContentEvidence(
-                    id=f"{span.type.value}-{type_counts[span.type]:03d}",
+                    id=(
+                        f"{candidate.id}-{span.type.value}-"
+                        f"{type_counts[span.type]:03d}"
+                    ),
                     type=span.type,
                     segment=_offset_segment(span, offset),
                 )
@@ -347,6 +369,7 @@ class ContentUnderstandingProvider:
         max_visual_calls: int = 12,
         clock: Callable[[], float] = monotonic,
     ) -> None:
+        self._reconciler = reconciler or EvidenceReconciler()
         self._pipeline = OrchestratedAnalysisPipeline(
             media=media,
             asr=transcriber,
@@ -362,9 +385,9 @@ class ContentUnderstandingProvider:
             cleanup_reserve_seconds=cleanup_reserve_seconds,
             max_attempts_per_visual_provider=max_attempts_per_visual_provider,
             max_visual_calls=max_visual_calls,
+            candidate_reconciler=self._reconciler.reconcile_candidates,
             clock=clock,
         )
-        self._reconciler = reconciler or EvidenceReconciler()
 
     async def analyze(
         self,

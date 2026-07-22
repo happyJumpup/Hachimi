@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "profile_version": "five-minute-production-v1",
+  "commit_sha": "REPLACE_40_CHAR_LOWERCASE_COMMIT_SHA",
+  "completed_at": "REPLACE_ISO_8601_UTC_TIME",
+  "private_smoke_passed": false,
+  "qwen_preflight_passed": false,
+  "full_pipeline_quality_passed": false,
+  "parameter_provenance_passed": false,
+  "five_minute_end_coverage_passed": false,
+  "three_way_concurrency_passed": false,
+  "cancellation_cleanup_passed": false,
+  "circuit_breaker_passed": false,
+  "cos_cleanup_passed": false,
+  "rollback_sequence": "REPLACE_AFTER_B-C-B-C",
+  "published_max_seconds": 300,
+  "primary_model_id": "REPLACE_SELECTED_SEED_MODEL_ID",
+  "fallback_model_id": "qwen3-vl-flash-2026-01-22",
+  "provider_conformance_report_sha256": "REPLACE_64_CHAR_REPORT_SHA256"
+}

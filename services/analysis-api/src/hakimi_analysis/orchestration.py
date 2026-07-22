@@ -17,6 +17,7 @@ from hakimi_analysis.media import (
     PreparedVisualChunk,
 )
 from hakimi_analysis.models import (
+    AnalysisCandidate,
     AnalysisWarning,
     CoverageGap,
     CoverageGapReason,
@@ -138,6 +139,10 @@ class OrchestratedAnalysisPipeline:
         cleanup_reserve_seconds: float = 10,
         max_attempts_per_visual_provider: int = 2,
         max_visual_calls: int = 12,
+        candidate_reconciler: Callable[
+            [str, list[SpeechSignal], list[VisualSegment]], list[AnalysisCandidate]
+        ]
+        | None = None,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         self._media = media
@@ -175,6 +180,13 @@ class OrchestratedAnalysisPipeline:
         self._run_timeout_seconds = run_timeout_seconds
         self._evidence_deadline_seconds = evidence_deadline_seconds
         self._cleanup_reserve_seconds = cleanup_reserve_seconds
+        self._candidate_reconciler = candidate_reconciler or (
+            lambda source_id, speech, visual: fuse_candidates(
+                source_id=source_id,
+                speech_signals=speech,
+                visual_segments=visual,
+            )
+        )
         self._clock = clock
         build_visual_chunks(
             1,
@@ -262,10 +274,8 @@ class OrchestratedAnalysisPipeline:
                 {"reconciler_version": "deterministic-v1"},
             )
             return PipelineOutput(
-                candidates=fuse_candidates(
-                    source_id=source.id,
-                    speech_signals=speech_signals,
-                    visual_segments=visual_segments,
+                candidates=self._candidate_reconciler(
+                    source.id, speech_signals, visual_segments
                 ),
                 warnings=warnings,
                 coverage_status=(
@@ -554,6 +564,25 @@ def deduplicate_visual_segments(segments: list[VisualSegment]) -> list[VisualSeg
             ungrouped.append(segment)
             continue
         action_segments = grouped.setdefault(action_key, [])
+        if segment.segment_role == SegmentRole.TEACHING_DEMO:
+            teaching_index = next(
+                (
+                    index
+                    for index, existing in enumerate(action_segments)
+                    if existing.segment_role == SegmentRole.TEACHING_DEMO
+                ),
+                None,
+            )
+            if teaching_index is not None:
+                existing = action_segments[teaching_index]
+                action_segments[teaching_index] = max(
+                    (existing, segment),
+                    key=lambda item: (
+                        item.end_seconds - item.start_seconds,
+                        item.visual_cue,
+                    ),
+                )
+                continue
         if action_segments and segment.start_seconds <= action_segments[-1].end_seconds:
             previous = action_segments[-1]
             role = (

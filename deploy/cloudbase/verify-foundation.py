@@ -15,12 +15,10 @@ LATEST_ALLOWED_DEMO_END = datetime.fromisoformat("2026-07-25T00:00:00+08:00")
 EXPECTED_SECRET_KEYS = [
     "ACCESS_COOKIE_SECRET",
     "ARK_API_KEY",
-    "COS_SECRET_ID",
-    "COS_SECRET_KEY",
     "JUDGE_ACCESS_CODE",
-    "QWEN_API_KEY",
     "VOLC_ASR_API_KEY",
 ]
+EXPECTED_FALLBACK_SECRET_KEYS = ["COS_SECRET_ID", "COS_SECRET_KEY", "QWEN_API_KEY"]
 EXPECTED_NONSECRET_KEYS = [
     "ANALYSIS_CHUNK_TIMEOUT_SECONDS",
     "ANALYSIS_CLEANUP_RESERVE_SECONDS",
@@ -50,6 +48,7 @@ EXPECTED_NONSECRET_KEYS = [
     "LOCAL_UPLOAD_ENABLED",
     "LOCAL_UPLOAD_MAX_BYTES",
     "PROVIDER_CANARY_RECEIPT_JSON",
+    "PROVIDER_CONFORMANCE_REPORT_JSON",
     "PUBLISHED_ANALYSIS_MAX_SECONDS",
     "PUBLIC_ANALYSIS_CONCURRENCY",
     "QWEN_BASE_URL",
@@ -113,6 +112,7 @@ def validate(plan: dict[str, Any]) -> None:
             "release_gates",
             "rollback",
             "required_secret_environment_keys",
+            "conditional_fallback_secret_environment_keys",
             "required_nonsecret_environment_keys",
             "budget",
             "submission_deadline",
@@ -346,8 +346,8 @@ def validate(plan: dict[str, Any]) -> None:
         fail("visual provider attempts must remain capped at two")
     if runtime.get("analysis_max_visual_calls") != 12:
         fail("visual calls must remain capped at twelve")
-    if runtime.get("visual_fallback_enabled") is not True:
-        fail("deployment C must enable the verified cross-provider fallback")
+    if runtime.get("visual_fallback_enabled") is not False:
+        fail("the foundation must keep unverified visual fallback disabled")
     if runtime.get("active_run_state") != "single-process-memory":
         fail("run-state contract changed without an architecture decision")
     if runtime.get("raw_media_persistence") != "forbidden":
@@ -403,9 +403,12 @@ def validate(plan: dict[str, Any]) -> None:
         fail("rollback contract changed without an architecture decision")
 
     secret_keys = plan.get("required_secret_environment_keys")
+    fallback_secret_keys = plan.get("conditional_fallback_secret_environment_keys")
     nonsecret_keys = plan.get("required_nonsecret_environment_keys")
     if secret_keys != EXPECTED_SECRET_KEYS:
         fail("secret environment key contract changed")
+    if fallback_secret_keys != EXPECTED_FALLBACK_SECRET_KEYS:
+        fail("conditional fallback secret environment key contract changed")
     if nonsecret_keys != EXPECTED_NONSECRET_KEYS:
         fail("non-secret environment key contract changed")
     if budget.get("currency") != "CNY" or budget.get("hard_ceiling") != 300:

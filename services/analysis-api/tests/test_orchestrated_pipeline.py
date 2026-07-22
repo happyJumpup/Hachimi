@@ -452,9 +452,9 @@ async def test_content_understanding_provider_returns_absolute_evidence_referenc
     assert result.analysis_range == Segment(start_seconds=10, end_seconds=20)
     assert result.coverage_status == CoverageStatus.COMPLETE
     assert result.actions[0].source_clip == Segment(start_seconds=12, end_seconds=16)
-    assert result.actions[0].evidence[0].id == "visual-001"
-    assert result.actions[0].field_evidence.name == ["visual-001"]
-    assert result.actions[0].field_evidence.segment == ["visual-001"]
+    assert result.actions[0].evidence[0].id == "candidate-1-visual-001"
+    assert result.actions[0].field_evidence.name == ["candidate-1-visual-001"]
+    assert result.actions[0].field_evidence.segment == ["candidate-1-visual-001"]
     assert result.actions[0].parameters.sets is None
     assert {branch.branch: branch.status for branch in result.branches} == {
         "speech": "empty",

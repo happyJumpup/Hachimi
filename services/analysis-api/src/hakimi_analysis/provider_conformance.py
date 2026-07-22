@@ -14,6 +14,7 @@ from typing import Literal, TypedDict
 import httpx
 from pydantic import Field, model_validator
 
+from hakimi_analysis.content_understanding import EvidenceReconciler
 from hakimi_analysis.media import LocalMediaProcessor, probe_duration_sync
 from hakimi_analysis.models import Segment, StrictModel, VisualLocalizationResult, VisualSegment
 from hakimi_analysis.orchestration import build_visual_chunks, deduplicate_visual_segments
@@ -217,12 +218,28 @@ def build_sanitized_report(
             and summary["schema_or_clock_violations"] == 0
         )
         summaries.append(summary)
+    research_selection = _select_route(summaries)
+    seed_selection = _select_route(
+        [summary for summary in summaries if summary["route"].startswith("seed-")]
+    )
+    qwen_qualified = next(
+        summary["passes_quality_gate"]
+        for summary in summaries
+        if summary["route"] == "qwen-vl"
+    )
     return {
         "schema_version": 1,
         "manifest_version": manifest.manifest_version,
         "prompt_contract_sha256": manifest.prompt_contract_sha256,
         "routes": summaries,
-        "selection": _select_route(summaries),
+        "selection": research_selection,
+        "seed_primary_selection": seed_selection,
+        "qwen_fallback_qualified": qwen_qualified,
+        "version_c_decision": _version_c_decision(
+            research_selection=research_selection,
+            seed_selection=seed_selection,
+            qwen_qualified=qwen_qualified,
+        ),
     }
 
 
@@ -412,7 +429,21 @@ async def _run_visual_sample(
                         instructions=prompt,
                     )
             segments.extend(_offset(result, window.start_seconds))
-    return deduplicate_visual_segments(segments)
+    deduplicated = deduplicate_visual_segments(segments)
+    reconciled = EvidenceReconciler().reconcile_candidates(
+        sample.id,
+        [],
+        deduplicated,
+    )
+    return [
+        VisualSegment(
+            action_name=candidate.name,
+            start_seconds=candidate.segment.start_seconds,
+            end_seconds=candidate.segment.end_seconds,
+            visual_cue="production-reconciler-projection",
+        )
+        for candidate in reconciled
+    ]
 
 
 def _offset(result: VisualLocalizationResult, offset: float) -> list[VisualSegment]:
@@ -541,6 +572,23 @@ def _select_route(summaries: list[RouteSummary]) -> str:
             return str(latency_leaders[0]["route"])
 
     return "qualified-routes-require-cost-review"
+
+
+def _version_c_decision(
+    *,
+    research_selection: str,
+    seed_selection: str,
+    qwen_qualified: bool,
+) -> str:
+    if research_selection == "qualified-routes-require-cost-review":
+        return "blocked-requires-cost-review"
+    if research_selection == "qwen-vl":
+        return "blocked-qwen-primary-conflicts-with-failed-chunk-only-cos"
+    if not research_selection.startswith("seed-") or not seed_selection.startswith("seed-"):
+        return "blocked-no-qualified-seed-primary"
+    if not qwen_qualified:
+        return "blocked-no-qualified-cross-vendor-fallback"
+    return "eligible-for-version-c-canary"
 
 
 def _sha256(path: Path) -> str:
