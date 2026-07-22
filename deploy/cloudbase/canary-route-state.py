@@ -46,15 +46,11 @@ def _required_string(payload: dict[str, Any], key: str) -> str:
 
 def _required_ratio(payload: dict[str, Any], key: str) -> int:
     value = payload.get(key)
-    if isinstance(value, bool):
+    if type(value) is not int:
         raise RouteStateError("release order has an invalid traffic ratio")
-    try:
-        ratio = int(value)
-    except (TypeError, ValueError) as error:
-        raise RouteStateError("release order has an invalid traffic ratio") from error
-    if ratio < 0 or ratio > 100:
+    if value < 0 or value > 100:
         raise RouteStateError("release order has an invalid traffic ratio")
-    return ratio
+    return value
 
 
 def _verify_percentage_routes(
@@ -143,9 +139,6 @@ def verify_route_state(payload: Any) -> dict[str, object]:
             candidate_version=candidate_version,
             require_stable_route=True,
         )
-        if _required_ratio(candidate, "FlowRatio") != 0:
-            raise RouteStateError("candidate still has percentage traffic")
-
     result: dict[str, object] = {
         "mode": mode,
         "traffic_type": expected_traffic_type,

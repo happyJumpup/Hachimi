@@ -105,6 +105,7 @@ def test_route_setter_uses_the_validated_policy_and_redacts_the_token() -> None:
     assert "APP_RELEASE_SHA" in route_setter
     assert "DescribeCloudRunServerDetail" in route_setter
     assert "stable_route_verified_before_mutation" in route_setter
+    assert "Convert-ExactTrafficRatio" in route_setter
     assert "$stateExitCode = $LASTEXITCODE" in route_setter
     assert "$ErrorActionPreference = 'Continue'" in route_setter
 
@@ -223,6 +224,26 @@ def test_restore_succeeds_even_when_the_candidate_has_stopped_running() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_restore_trusts_online_routes_over_stale_release_order_ratio() -> None:
+    order = release_order(traffic_type="FLOW")
+    candidate = order["ReleaseVersion"]
+    assert isinstance(candidate, dict)
+    candidate["FlowRatio"] = 100
+    result = run_state_policy(
+        {
+            "mode": "restore",
+            "stable_version": "trainpal-demo-009",
+            "candidate_commit_sha": "a" * 40,
+            "candidate_identity_verified": True,
+            "stable_route_verified_before_mutation": False,
+            "online_versions": online_versions(),
+            "release_order": order,
+        }
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_route_state_policy_rejects_an_unverified_header_route() -> None:
     result = run_state_policy(
         {
@@ -269,6 +290,31 @@ def test_route_state_policy_rejects_candidate_percentage_traffic() -> None:
     candidate = order["ReleaseVersion"]
     assert isinstance(candidate, dict)
     candidate["FlowRatio"] = 1
+    result = run_state_policy(
+        {
+            "mode": "enable",
+            "stable_version": "trainpal-demo-009",
+            "candidate_commit_sha": "a" * 40,
+            "candidate_identity_verified": True,
+            "stable_route_verified_before_mutation": True,
+            "online_versions": [],
+            "routing_header_name": "X-TrainPal-Canary",
+            "routing_header_value": "private-route-token",
+            "release_order": order,
+        }
+    )
+
+    assert result.returncode == 1
+    assert "private-route-token" not in result.stderr
+
+
+def test_route_state_policy_rejects_fractional_candidate_traffic() -> None:
+    order = release_order(
+        traffic_type="HEADERS", route_value="private-route-token"
+    )
+    candidate = order["ReleaseVersion"]
+    assert isinstance(candidate, dict)
+    candidate["FlowRatio"] = 0.5
     result = run_state_policy(
         {
             "mode": "enable",

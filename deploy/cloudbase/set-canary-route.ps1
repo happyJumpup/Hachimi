@@ -55,6 +55,29 @@ function Get-PropertyValue {
     return $property.Value
 }
 
+function Convert-ExactTrafficRatio {
+    param([Parameter(Mandatory)][AllowNull()][object]$Value)
+
+    $isIntegerValue = (
+        $Value -is [byte] -or
+        $Value -is [sbyte] -or
+        $Value -is [int16] -or
+        $Value -is [uint16] -or
+        $Value -is [int32] -or
+        $Value -is [uint32] -or
+        $Value -is [int64] -or
+        $Value -is [uint64]
+    )
+    if ($Value -isnot [string] -and -not $isIntegerValue) {
+        throw 'CloudBase returned a non-integer traffic ratio.'
+    }
+    $text = [string]$Value
+    if ($text -notmatch '^(?:0|[1-9][0-9]?|100)$') {
+        throw 'CloudBase returned an invalid traffic ratio.'
+    }
+    return [int]::Parse($text, [Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Invoke-TencentApi {
     param(
         [Parameter(Mandatory)][string]$Service,
@@ -215,20 +238,30 @@ if ($Mode -eq 'enable') {
         -Payload @{ EnvId = $EnvironmentId; ServerName = $ServiceName } `
         -Credential $credential
     $onlineVersions = @(Get-PropertyValue $serviceDetail 'OnlineVersionInfos')
+    $normalizedOnlineVersions = @(
+        foreach ($version in $onlineVersions) {
+            [ordered]@{
+                VersionName = [string](Get-PropertyValue $version 'VersionName')
+                FlowRatio = Convert-ExactTrafficRatio (
+                    Get-PropertyValue $version 'FlowRatio'
+                )
+            }
+        }
+    )
     $positiveRoutes = @(
-        $onlineVersions | Where-Object {
-            [int](Get-PropertyValue $_ 'FlowRatio') -gt 0
+        $normalizedOnlineVersions | Where-Object {
+            [int]$_.FlowRatio -gt 0
         }
     )
     $stableRoutes = @(
         $positiveRoutes | Where-Object {
-            [string](Get-PropertyValue $_ 'VersionName') -eq $ExpectedStableVersion
+            [string]$_.VersionName -eq $ExpectedStableVersion
         }
     )
     if (
         $positiveRoutes.Count -ne 1 -or
         $stableRoutes.Count -ne 1 -or
-        [int](Get-PropertyValue $stableRoutes[0] 'FlowRatio') -ne 100
+        [int]$stableRoutes[0].FlowRatio -ne 100
     ) {
         throw 'Private header routing can only start from stable 100 and candidate 0.'
     }
@@ -308,7 +341,9 @@ for ($attempt = 1; $attempt -le 30; $attempt++) {
         foreach ($version in @(Get-PropertyValue $observedDetail 'OnlineVersionInfos')) {
             [ordered]@{
                 VersionName = [string](Get-PropertyValue $version 'VersionName')
-                FlowRatio = [int](Get-PropertyValue $version 'FlowRatio')
+                FlowRatio = Convert-ExactTrafficRatio (
+                    Get-PropertyValue $version 'FlowRatio'
+                )
             }
         }
     )
