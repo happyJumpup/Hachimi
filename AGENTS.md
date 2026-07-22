@@ -40,9 +40,10 @@
 - Analysis starts only after an explicit user action and covers the complete
   selected source or an explicit coverage-gap retry range. The product target
   is at most 10 minutes, but each deployment must expose and enforce its
-  measured capability; the prototype default remains 60 seconds until longer
-  inputs pass benchmark and recovery verification. Page load, playback, and
-  seeking must not auto-create a run.
+  measured capability. The current competition deployment is verified for a
+  complete source of at most 300 seconds; longer originals must be cropped
+  outside the app before upload. Page load, playback, and seeking must not
+  auto-create a run.
 - Progress uses real processed source time and read-only intermediate discovery.
   Reliable partial results must expose coverage gaps and a per-gap retry; a
   provider or system failure must never be presented as “no action evidence.”

@@ -13,7 +13,10 @@ def post(path: str, payload: dict[str, object]) -> dict[str, object]:
     request = urllib.request.Request(
         f"http://127.0.0.1:8000{path}",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "http://127.0.0.1:8000",
+        },
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=5) as response:

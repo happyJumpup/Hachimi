@@ -108,6 +108,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/gymti/next-question": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Gymti Next Question */
+        post: operations["gymti_next_question_api_v1_gymti_next_question_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/gymti/result-narrative": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Gymti Result Narrative */
+        post: operations["gymti_result_narrative_api_v1_gymti_result_narrative_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -364,6 +398,74 @@ export interface components {
          * @enum {string}
          */
         EvidenceType: "speech" | "visual";
+        /** GymtiAnswer */
+        GymtiAnswer: {
+            /** Option Id */
+            option_id: string;
+            /** Question Id */
+            question_id: string;
+        };
+        /** GymtiNarrativeSnapshotView */
+        GymtiNarrativeSnapshotView: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Model */
+            model?: string | null;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "template";
+            /** Text */
+            text: string;
+            /** Version */
+            version: string;
+        };
+        /** GymtiNextQuestionRequest */
+        GymtiNextQuestionRequest: {
+            /** Answered */
+            answered?: components["schemas"]["GymtiAnswer"][];
+            /** Candidate Question Ids */
+            candidate_question_ids: string[];
+            /** Questionnaire Version */
+            questionnaire_version: string;
+            /** Scoring Version */
+            scoring_version: string;
+        };
+        /** GymtiNextQuestionView */
+        GymtiNextQuestionView: {
+            /** Model */
+            model?: string | null;
+            /** Question Id */
+            question_id: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "llm" | "local_fallback";
+            /** Version */
+            version: string;
+        };
+        /** GymtiResultNarrativeRequest */
+        GymtiResultNarrativeRequest: {
+            /** Answered */
+            answered: components["schemas"]["GymtiAnswer"][];
+            /** Coach Style Id */
+            coach_style_id: string;
+            /** Formal Result Id */
+            formal_result_id: string;
+            /** Questionnaire Version */
+            questionnaire_version: string;
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Scoring Version */
+            scoring_version: string;
+            /** Secondary Result Id */
+            secondary_result_id?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -820,6 +922,108 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CapabilitiesView"];
+                };
+            };
+        };
+    };
+    gymti_next_question_api_v1_gymti_next_question_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymtiNextQuestionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymtiNextQuestionView"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 问卷上下文与当前合同不匹配。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description GYMTI 问卷合同暂不可用。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+        };
+    };
+    gymti_result_narrative_api_v1_gymti_result_narrative_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GymtiResultNarrativeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GymtiNarrativeSnapshotView"];
+                };
+            };
+            /** @description 请求未通过同源校验。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description 正式结果与当前合同不匹配。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
+                };
+            };
+            /** @description GYMTI 问卷合同暂不可用。 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorResponse"];
                 };
             };
         };

@@ -15,6 +15,7 @@
 | 本地上传 | 后端合同：完整文件不超过 300 秒、256 MiB；CloudBase HTTP Access：20 MB；Web 安全上限：19,000,000 bytes |
 | 视觉策略 | 60 秒分块、10 秒重叠、单块 20 秒、顺序执行 |
 | 真实分析 | 匿名 0 并发；评委码 3 并发 |
+| GYMTI | 本地确定性合同始终可用；竞赛生产模型增强关闭，匿名永不调用模型 |
 | 总预算 | 300 元人民币硬上限 |
 | 最晚关闭 | `2026-07-25T00:00:00+08:00` |
 
@@ -28,6 +29,7 @@
 | 版本 B | `trainpal-demo-008` / Build `2601400393` / `81de88d0b7475797a51a4fdf73d334d5836dd529` | 前端合并、私有真实短样本通过 |
 | 回滚 | `008 → 007 → 008` | 三次 `/health`、`/ready` 均为 200 |
 | 公网配置 | `trainpal-demo-009`，复用版本 B 同一镜像 | SPA/history、匿名隔离、三路 `202`、第四路 `429` 通过；三条完成结果均为 `partial` |
+| 最终本地候选 | 精确 SHA 由 PR #9 发布回执记录 | 双平台镜像审计、生产 `/ready`、匿名 GYMTI 本地降级与模型 trap 0 调用通过；尚未替换 `009` |
 
 当前公网配置为 2 vCPU / 4 GiB、单 worker、最小/最大实例 `1/1`、`OA + PUBLIC`。已安排一次性任务在 2026-07-24 23:00（Asia/Shanghai）启动关停，确保本周六 0 点前禁用公网映射、恢复 `OA` 并把最小实例降为 0。该任务先用 CLI 刷新临时凭证，只在唯一环境和唯一目标路由核对成功时继续；不调用分析模型。
 
@@ -61,6 +63,8 @@ IMAGEIO_FFMPEG_EXE=/opt/trainpal/ffmpeg/bin/ffmpeg
 FFMPEG_BUILD_RECEIPT_PATH=/opt/trainpal/ffmpeg/receipt.json
 WEB_STATIC_ROOT=/workspace/apps/web/dist
 TRUSTED_PROXY_CIDRS=
+GYMTI_LLM_ENABLED=false
+GYMTI_LLM_RETENTION_CONFIRMED=false
 ```
 
 空 `TRUSTED_PROXY_CIDRS` 表示只使用直连对端地址；应用不会信任任意 `X-Forwarded-For`。在腾讯云提供并实测一个窄可信代理网段前，不得猜测或使用全网 CIDR。
@@ -80,7 +84,7 @@ Docker 多阶段构建从 FFmpeg 8.1.2 官方签名源码生成共享、LGPL-onl
 docker build --tag trainpal-five-minute:local .
 ```
 
-随后在 Bash 环境执行 `deploy/verify-competition-image.sh trainpal-five-minute:local`。通过项包括逐层无秘密/媒体扫描、唯一 FFmpeg 与收据、非 root 用户、容器启动、`/health`、SPA 根路由和 history fallback。
+随后执行 `deploy/verify-competition-image.ps1 trainpal-five-minute:local`；Linux CI 还执行等价的 Bash 门禁。通过项包括逐层无秘密/媒体扫描、180 个登记视觉哈希、唯一 FFmpeg 与收据、非 root 用户、生产 `/health`／`/ready`、SPA/history，以及在模型 trap 已配置时匿名 GYMTI 仍为零模型调用。
 
 ## A / B 发布顺序
 
@@ -104,7 +108,7 @@ docker build --tag trainpal-five-minute:local .
 
    不使用 `--force`。交互页必须再次核对目标服务、访问方式和价格影响。源码构建日志通过后，先验证容器、签名 FFmpeg、`/health`、`/ready`、SSE 和一条真实短视频；版本 A 及其兼容环境配置必须保留。
 
-3. 前端提交后，重新生成 OpenAPI 类型、跑完整前端/E2E 和窄屏检查，再部署版本 B。源码包路线已验证；不再依赖失败的 GHCR 拉取路线。
+3. 最终前端提交后，重新生成 OpenAPI 类型、跑完整前端/E2E 和窄屏检查，再从精确候选 SHA 部署私有候选。源码包路线已验证；不再依赖失败的 GHCR 拉取路线。
 
 4. 全部私有门槛通过后才打开短时公网 Canary：第二浏览器可浏览；评委码真实分析成功；三个并发成功、第四个稳定 429；终态无媒体残留；实际完成 B→A→B 回滚。任一门槛失败就关闭入口，不发布评委链接。
 

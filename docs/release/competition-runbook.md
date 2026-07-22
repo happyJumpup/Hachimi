@@ -1,6 +1,6 @@
 # TrainPal 竞赛版发布、验收与回滚手册
 
-> 状态：CloudBase Run 版本 A/B、私有真实视频、公网并发 canary 与 B→A→B 回滚均已通过；最终素材、移动真机与录屏仍待团队验收
+> 状态：CloudBase Run 版本 A/B、私有真实视频、公网并发 canary 与 B→A→B 回滚均已通过；GYMTI/七猫最终候选已完成本地集成，替换 `009` 前仍须通过私有门禁和候选回滚；最终素材、移动真机与录屏仍待团队验收
 >
 > 更新日期：2026-07-23
 >
@@ -19,6 +19,8 @@
 - 版本 B `trainpal-demo-008`（Build `2601400393`）的前端合并、私有探针、真实短视频，以及 B→A→B 实际流量回滚；
 - 同一版本 B 镜像的公网配置版本 `trainpal-demo-009`：SPA/history、匿名禁用真实分析、两个独立浏览器上下文、三路真实评委分析和第四路稳定 `429` 均已实测；
 - 公网三条已接纳运行均收到 SSE 终态并完成，三条均诚实返回 `partial`，没有把缺口伪装成完整结果；运行结束后评委容量恢复。
+- GYMTI v1、七猫资源、Dexie 单槽生命周期和无状态 API 已进入最终候选；竞赛生产默认关闭 GYMTI 模型，匿名只走本地确定性选题与模板叙事。
+- 最终候选本地门禁已完成 Web 200、API 261、Playwright 20/20，以及 PowerShell／Git Bash 对同一镜像的资源、FFmpeg、生产 `/ready` 和匿名 GYMTI 零模型调用审计；CloudBase 私有候选与候选回滚仍待执行。
 
 尚未完成或没有可审计通过记录：
 
@@ -111,6 +113,8 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `LOCAL_UPLOAD_ENABLED` | `true`，但就绪和能力接口仍可失败关闭 |
 | `LOCAL_ANALYSIS_MAX_SECONDS` | `300`；首次分析必须覆盖完整源文件，超过 300 秒在 Provider 调用前拒绝 |
 | `LOCAL_UPLOAD_MAX_BYTES` | 后端能力合同 `268435456`（256 MiB）；CloudBase HTTP Access 请求体上限 20 MB，当前 Web 以 19,000,000 bytes 作为安全上限 |
+| `GYMTI_LLM_ENABLED` | `false`；竞赛发布不启用可选模型增强 |
+| `GYMTI_LLM_RETENTION_CONFIRMED` | `false`；未确认供应商留存边界不得构造模型客户端 |
 | `RUN_TIMEOUT_SECONDS` | `180` |
 | `RUN_TTL_SECONDS` | `600` |
 | `ANALYSIS_EVIDENCE_TIMEOUT_SECONDS` | `170`，为 180 秒外层上限预留 10 秒终态与清理时间 |
@@ -179,7 +183,7 @@ FFmpeg 不进入 Git，而是在 Docker 多阶段构建中从 FFmpeg 8.1.2 官�
 ### 9.2 私有基础版本
 
 1. 在 CloudBase 控制台确认目标账号、环境、服务、价格和附加资源成本。
-2. 使用不可变镜像 digest 通过已验证的 CloudBase CLI 3.6.4 命令创建 `trainpal-demo`；保留交互式最终确认，不增加 `--force` 或猜测的 dry-run 参数。
+2. 使用 `release-source.ps1` 从干净且不可变的完整提交生成源码包，再通过已验证的 CloudBase CLI 3.6.4 提交 `trainpal-demo` 私有候选；保留交互式最终确认，不增加 `--force` 或猜测的 dry-run 参数。
 3. 保持公网和 HTTP Access 关闭，配置非秘密值并无回显转移秘密。
 4. 接入已批准的媒体／FFmpeg 合同，通过内部 `/health`、`/ready`、真实分析、SSE、清理和本地上传门禁。
 5. 记录该版本的完整源码 SHA、Build ID、服务版本与兼容配置快照，作为回滚基线。
@@ -288,7 +292,7 @@ MP4 保存在演示电脑和团队受控云盘各一份，记录 SHA-256 与时�
 - 训练和个性化数据只在当前浏览器设备保存，无账号、服务器备份或跨设备同步。
 - CloudBase 默认域名可能出现访问确认、冷启动或平台流量限制；它是竞赛临时入口，不是正式生产域名。
 - 卡路里是近似值，不是医疗或精确能量测量；TrainPal 不提供伤病诊断、姿态评分或自动负重处方。
-- GYMTI 题目和正式小猫资产仍由团队补充；结构占位不能作为最终人格或素材交付。
+- GYMTI v1 已有版本化题库、七张人格插画与七猫正式运行资源；当前限制是模型增强默认关闭、数据仅保存在当前浏览器，且不得把测评解释为健康或训练强度诊断。
 
 ## 16. 回滚与到期
 

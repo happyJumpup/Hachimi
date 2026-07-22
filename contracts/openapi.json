@@ -537,6 +537,220 @@
         "title": "EvidenceType",
         "type": "string"
       },
+      "GymtiAnswer": {
+        "additionalProperties": false,
+        "properties": {
+          "option_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Option Id",
+            "type": "string"
+          },
+          "question_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Question Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "option_id"
+        ],
+        "title": "GymtiAnswer",
+        "type": "object"
+      },
+      "GymtiNarrativeSnapshotView": {
+        "additionalProperties": false,
+        "properties": {
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "template"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 600,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "version",
+          "generated_at",
+          "text"
+        ],
+        "title": "GymtiNarrativeSnapshotView",
+        "type": "object"
+      },
+      "GymtiNextQuestionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "answered": {
+            "items": {
+              "$ref": "#/components/schemas/GymtiAnswer"
+            },
+            "maxItems": 8,
+            "title": "Answered",
+            "type": "array"
+          },
+          "candidate_question_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Candidate Question Ids",
+            "type": "array"
+          },
+          "questionnaire_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Questionnaire Version",
+            "type": "string"
+          },
+          "scoring_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Scoring Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "questionnaire_version",
+          "scoring_version",
+          "candidate_question_ids"
+        ],
+        "title": "GymtiNextQuestionRequest",
+        "type": "object"
+      },
+      "GymtiNextQuestionView": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "llm",
+              "local_fallback"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "source",
+          "version"
+        ],
+        "title": "GymtiNextQuestionView",
+        "type": "object"
+      },
+      "GymtiResultNarrativeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "answered": {
+            "items": {
+              "$ref": "#/components/schemas/GymtiAnswer"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Answered",
+            "type": "array"
+          },
+          "coach_style_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Coach Style Id",
+            "type": "string"
+          },
+          "formal_result_id": {
+            "pattern": "^\\S{1,128}$",
+            "title": "Formal Result Id",
+            "type": "string"
+          },
+          "questionnaire_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Questionnaire Version",
+            "type": "string"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "title": "Reason Codes",
+            "type": "array"
+          },
+          "scoring_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Scoring Version",
+            "type": "string"
+          },
+          "secondary_result_id": {
+            "anyOf": [
+              {
+                "pattern": "^\\S{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secondary Result Id"
+          }
+        },
+        "required": [
+          "questionnaire_version",
+          "scoring_version",
+          "answered",
+          "formal_result_id",
+          "coach_style_id",
+          "reason_codes"
+        ],
+        "title": "GymtiResultNarrativeRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1173,6 +1387,122 @@
           }
         },
         "summary": "Capabilities"
+      }
+    },
+    "/api/v1/gymti/next-question": {
+      "post": {
+        "operationId": "gymti_next_question_api_v1_gymti_next_question_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GymtiNextQuestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GymtiNextQuestionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "问卷上下文与当前合同不匹配。"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "GYMTI 问卷合同暂不可用。"
+          }
+        },
+        "summary": "Gymti Next Question"
+      }
+    },
+    "/api/v1/gymti/result-narrative": {
+      "post": {
+        "operationId": "gymti_result_narrative_api_v1_gymti_result_narrative_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GymtiResultNarrativeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GymtiNarrativeSnapshotView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "请求未通过同源校验。"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "正式结果与当前合同不匹配。"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorResponse"
+                }
+              }
+            },
+            "description": "GYMTI 问卷合同暂不可用。"
+          }
+        },
+        "summary": "Gymti Result Narrative"
       }
     },
     "/api/v1/health": {

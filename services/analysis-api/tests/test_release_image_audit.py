@@ -116,3 +116,6 @@ def test_release_image_verifiers_share_the_anonymous_gymti_smoke_contract() -> N
         assert "GYMTI_LLM_ENABLED" in verifier
         assert "GYMTI_LLM_RETENTION_CONFIRMED" in verifier
         assert "/workspace/contracts/gymti-questionnaire.v1.json" in verifier
+
+    smoke = (PROJECT_ROOT / "deploy" / "smoke-gymti-image.py").read_text(encoding="utf-8")
+    assert '"Origin": "http://127.0.0.1:8000"' in smoke

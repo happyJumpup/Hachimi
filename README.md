@@ -6,7 +6,7 @@ TrainPal 是你的专属训练伙伴：把用户主动找到的健身视频转�
 
 TrainPal 同时是产品名、用户可见的唯一 Agent 和小猫教练身份。内部由可替换的内容理解 Provider、训练编译 Skill、个性化调整 Skill、动作要点补充 Skill 与确定性训练引擎协作；用户始终保留最终决定权。
 
-下一轮原型以当前设备的本地视频导入为主、受控视频为可选快速体验兜底。浏览器同设备保存原视频，服务端只处理并清理临时副本；当前竞赛后端完整源文件上限为 5 分钟，部署能力仍以公共能力接口返回的真实值为准。
+当前竞赛版以当前设备的本地视频导入为主、受控视频为可选快速体验兜底。浏览器同设备保存原视频，服务端只处理并清理临时副本；完整源文件上限为 5 分钟，部署能力仍以公共能力接口返回的真实值为准。
 
 ## 已完成的竞赛版基线
 
@@ -16,7 +16,8 @@ TrainPal 同时是产品名、用户可见的唯一 Agent 和小猫教练身份�
 2. 跨视频选择动作，或创建没有参考视频的动作；当前方案自动保存，可排序、复制和编辑参数。
 3. 将当前方案另存为本机方案，执行次数型或时长型训练，并在休息、离页或刷新后恢复。
 4. TrainPal 以五种状态陪练，可随时隐藏；训练档案只在本机用于卡路里约值和个性策略弱参考。
-5. 完整或提前结束的实际完成量进入训练记录；完整训练可生成 1080×1920 PNG 海报并分享或下载。
+5. GYMTI v1 使用共享版本化合同完成 5–8 题测评、七猫单一推荐、明确确认／改选和同设备恢复；匿名用户始终使用确定性本地选题与模板叙事，不消耗模型额度。
+6. 完整或提前结束的实际完成量进入训练记录；完整训练可生成 1080×1920 PNG 海报并分享或下载。
 
 普通访客可使用明确标注的“快速体验方案”。它是静态产品样例，不是 AI 结果或运行时 Mock 回退。评委体验码只用于验证，验证后的访问级别通过安全 Cookie 保存。
 
@@ -51,6 +52,8 @@ pnpm --filter @hachimi/web pets:build -- --source <raw-pets-directory>
 
 测试 Provider 仅允许 `APP_ENV=test`，不能作为开发或生产回退。真实云配置缺失时，后端会明确失败。
 
+GYMTI 模型增强默认关闭。即使配置模型密钥，也必须同时显式开启模型、确认供应商留存边界，并通过评委访问门禁；匿名会话仍只走本地降级。问卷原型 `questionaire/` 不参与构建，正式事实源为 `contracts/gymti-questionnaire.v1.json`。
+
 ## 验证
 
 ```powershell
@@ -69,6 +72,8 @@ pnpm api:generate
 - [冻结的移动体验 Brief](docs/design/trainpal-mobile-experience-brief.md)
 - [历史本地视频训练原型规格](docs/specs/local-video-training-prototype.md)
 - [本地视频优先与可恢复覆盖分析 ADR](docs/adr/0013-local-video-import-and-recoverable-analysis.md)
+- [GYMTI 主应用确认边界 ADR](docs/adr/0031-questionnaire-recommends-main-app-confirms-coach-style.md)
+- [GYMTI 共享版本化合同 ADR](docs/adr/0040-gymti-uses-one-versioned-json-contract.md)
 - [Web 体验规范历史入口](docs/design/web-experience-guidelines.md)
 - [完整 Web 架构](docs/technical/web-mvp-architecture.md)
 - [训练场次、本地媒体与本地数据合同](docs/technical/training-session-contract.md)

@@ -1,8 +1,8 @@
 # TrainPal 移动体验设计 Brief
 
-Status: frozen for Vue design v1
+Status: frozen and implemented for Vue design v1 / GYMTI v1 release candidate
 
-Updated: 2026-07-22
+Updated: 2026-07-23
 
 Applies to: 独立 Web、本地视频导入、分析、方案、个性化、训练、结果与个人中心
 

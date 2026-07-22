@@ -15,7 +15,7 @@ TrainPal 将用户已经保存且有权使用的健身视频转成一场可编�
 - 分析只由用户显式创建。页面切换、刷新或 SSE 断线不取消；显式取消、更换来源、运行安全边界或进程丢失才结束运行。
 - 当前竞赛能力为完整覆盖不超过 5 分钟的源文件，`GET /api/v1/capabilities` 返回 300 秒和 256 MiB 的真实边界。7／19 分钟原片必须先在应用外裁成不超过 5 分钟，不能用首次请求的内部区间冒充完整分析。
 - 过程反馈来自真实处理位置和暂时发现的动作线索数。部分结果必须明确覆盖缺口并允许逐段重试，不能把系统错误伪装成没有动作。
-- 当前 production Provider 保持火山 ASR、Ark Seed 和确定性融合，但视觉改为连续 MP4 的 60 秒分块、10 秒重叠、单并发顺序处理，不以稀疏截图冒充完整窗口。内部视觉块以有界码率转码后直接作为 Ark Responses API 的 Base64 视频输入，不创建方舟 Files API 托管文件；超过 45,000,000 bytes 的块明确成为 `media_error` 覆盖缺口。语音与视觉共享 170 秒证据截止时间，并为 180 秒外层上限预留 10 秒终态和清理余量。目标 CloudBase 上的真实短视频、五分钟样本、三并发和清理仍须通过 Canary 才能宣称交付。生产环境不使用测试 Provider 或预置候选回退。
+- 当前 production Provider 保持火山 ASR、Ark Seed 和确定性融合，但视觉改为连续 MP4 的 60 秒分块、10 秒重叠、单并发顺序处理，不以稀疏截图冒充完整窗口。内部视觉块以有界码率转码后直接作为 Ark Responses API 的 Base64 视频输入，不创建方舟 Files API 托管文件；超过 45,000,000 bytes 的块明确成为 `media_error` 覆盖缺口。语音与视觉共享 170 秒证据截止时间，并为 180 秒外层上限预留 10 秒终态和清理余量。目标 CloudBase 的短视频、295 秒样本、三并发、清理与回滚已经通过；公网三条并发结果均为 `partial`，所以只证明工程门禁，不证明任意视频的完整召回。生产环境不使用测试 Provider 或预置候选回退。
 - 用户只看到一个 TrainPal Agent。内容理解 Provider、三个领域 Skill 和确定性训练引擎是内部能力层，不形成额外用户角色。
 - 训练计时、休息、进度、记录和卡路里由确定性代码负责，不进入开放式 Agent 循环。
 
@@ -37,7 +37,7 @@ flowchart LR
     PER -->|"用户确认差异"| ENG
 ```
 
-当前内容理解 Provider 继续使用已经接入的真实 Ark、豆包流式语音识别 2.0 与确定性媒体处理／融合路径。原生音视频 benchmark 尚未选出通过全部硬门槛的新方案，因此不切换 Provider。竞赛基线已实现一次 ASR 与 60／10 秒顺序视觉分块，并能保留可靠分块及定位 `partial` 缺口；目标 CloudBase 的真实短视频、五分钟样本与逐段重试仍须通过 Canary。
+当前内容理解 Provider 继续使用已经接入的真实 Ark、豆包流式语音识别 2.0 与确定性媒体处理／融合路径。Provider 候选提交 `d742268` 未通过真实 Qwen/COS、五分钟质量、版本 C Canary 与回滚硬门槛，因此延期到 #5；竞赛版不切换路线。当前基线已实现一次 ASR 与 60／10 秒顺序视觉分块，并能保留可靠分块及定位 `partial` 缺口。
 
 ## 3. 页面与移动端边界
 
@@ -241,6 +241,8 @@ interface SourcedValue<T> {
 - 个性化只能在确定性允许范围内提出整套字段差异，不能替换／重排动作、增加重量或覆盖用户值。
 - 基础方案变化使旧提案不可应用；GYMTI、教练风格或个人信息变化只提示“基于旧了解”，用户仍可应用或明确重新调整。
 - 生成失败时基础方案保持可用，不展示部分个性化，也不把规则值伪装成个性化结果。
+- GYMTI 的进行中尝试、待展示结果和当前结果只保存在 Dexie v5 单槽；FastAPI 的选题与叙事 API 无会话，并从共享 JSON 合同重新验证稳定 ID。
+- GYMTI 模型增强默认关闭。只有显式启用、确认供应商留存边界且评委会话取得现有并发租约时才允许调用；匿名会话固定使用确定性选题和模板叙事，不产生模型费用。
 
 动作要点 Skill 只处理已确认动作，每个动作最多三条。依据只能是 `video | web | model`：网页依据必须保留有效引用；模型世界知识明确显示为“TrainPal 通用建议”。冲突内容按 `video > web > model` 选择，但该顺序只表示保留来源意图，不代表专业等级。训练中不联网、不实时生成、不做姿态或伤病判断。
 
@@ -256,10 +258,10 @@ interface SourcedValue<T> {
 
 截至 2026-07-23：
 
-- 本地导入、受控来源、Analysis Run、SSE、浏览器训练数据和真实云 Provider 已有工程基线；五分钟分块后端提交与 TrainPal Vue design v1 提交正在同一发布分支集成。
-- 生产配置已经声明 300 秒，并以 OA、0% 流量提交 CloudBase 私有灰度版本 A；在私有 `/ready`、真实 Provider、恢复与清理验收完成前，不得把配置存在表述为能力已上线。
-- 新的公开内容理解结果、三个 TrainPal Skill、四态字段来源和个性化提案时效是冻结后的生产合同，仍需按切片接入并生成／核对 OpenAPI 与前端类型。
-- 签名 FFmpeg 镜像已完成本地构建、收据与唯一二进制审计；CloudBase 云端构建、私有门禁、公网 Canary、真实并发和回滚 smoke 尚未全部通过，不得表述为已上线。
+- 本地导入、Analysis Run、SSE、浏览器训练数据、五分钟分块后端、TrainPal Vue design v1、七猫动效与 GYMTI v1 已在同一发布候选分支集成；OpenAPI 与前端类型已从运行时重新生成。
+- CloudBase 稳定公网版本仍为 `trainpal-demo-009`；300 秒能力、私有真实短／295 秒样本、并发、清理和 `008 → 007 → 008` 回滚已有脱敏证据。新的 GYMTI 候选只有在独立私有门禁与候选回滚通过后才能替换 `009`。
+- 新的公开内容理解结果、三个 TrainPal Skill、四态字段来源和个性化提案时效是冻结后的生产合同；其中 GYMTI 本地生命周期已落地，其余 Skill 持久化不因文档存在而视为完成。
+- 签名 FFmpeg 镜像、收据、唯一二进制审计和 CloudBase `/ready` 已通过；公网三条真实并发结果均为 `partial`，必须继续显示覆盖缺口和“结果需要核对”。
 
 发布门禁还必须覆盖：能力预检，非法 ID／超限／损坏媒体／区间边界，完整／部分／证据不足／系统失败区分，SSE 恢复与迟到结果拒绝，覆盖缺口绝对时间合并，IndexedDB 迁移与 Blob 恢复，以及所有终态材料清理与无秘密扫描。
 
@@ -276,3 +278,6 @@ interface SourcedValue<T> {
 - [ADR-0025：覆盖状态](../adr/0025-provider-declares-complete-partial-or-insufficient-coverage.md)
 - [ADR-0026：旅程页面与移动端](../adr/0026-journey-pages-replace-the-douyin-style-single-stage.md)
 - [ADR-0029：CloudBase Run 竞赛入口](../adr/0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md)
+- [ADR-0030：五分钟分块与签名 FFmpeg](../adr/0030-five-minute-chunked-analysis-and-signed-ffmpeg.md)
+- [ADR-0039：GYMTI 本地状态与无状态 API](../adr/0039-gymti-state-is-local-and-api-is-stateless.md)
+- [ADR-0040：GYMTI 共享版本化合同](../adr/0040-gymti-uses-one-versioned-json-contract.md)

@@ -1,6 +1,6 @@
 # TrainPal 方案、训练场次与本地数据合同
 
-> 状态：训练状态机基线已接受；TrainPal 个性化与 Skill 持久化为冻结后的接入合同
+> 状态：训练状态机与 GYMTI v1 本地生命周期已实现；TrainPal 个性化与其余 Skill 持久化仍为冻结后的接入合同
 >
 > 更新日期：2026-07-23
 
@@ -20,10 +20,10 @@
 
 ## 2. 本地数据版本与迁移
 
-当前工程基线使用 Dexie v4，内部数据库名称为既有兼容标识。v4 保持 v3 表结构，并只增加数据迁移：
+当前工程基线使用 Dexie v5，内部数据库名称为既有兼容标识。v5 在 v4 训练数据表之外增加三个 GYMTI 单槽表：
 
 ```ts
-db.version(4).stores({
+db.version(5).stores({
   drafts: '&id, updatedAt, linkedPlanId',
   plans: '&id, updatedAt, createdAt, name',
   sessions: '&id, sessionId, status, updatedAt',
@@ -31,6 +31,9 @@ db.version(4).stores({
   profiles: '&id, updatedAt',
   preferences: '&id, updatedAt',
   localMedia: '&sourceId, importedAt, updatedAt',
+  gymtiAttempts: '&id, attemptId, updatedAt',
+  gymtiPendingResults: '&id, resultId, updatedAt',
+  gymtiResults: '&id, resultId, updatedAt',
 })
 ```
 
@@ -526,13 +529,13 @@ kcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 
 ## 14. 当前实现差距
 
-截至 2026-07-22，Dexie v4、可空教练风格快照、单一活动场次、训练状态机、记录、卡路里和七猫五态播放器已有工程基线。以下是冻结合同而非已完成声明：
+截至 2026-07-23，Dexie v5、可空教练风格快照、单一活动场次、训练状态机、记录、卡路里、七猫播放器，以及 GYMTI 进行中／待展示／当前结果单槽与风格明确确认已形成工程基线。以下仍是冻结合同而非已完成声明：
 
 - 四态来源中的 `personalized` 全链路与旧数据迁移；
 - 三个领域 Skill 的持久化任务、幂等键和成功结果复用；
 - 基础方案提案取代独立候选收件箱；
 - 来源节奏结构与公开旧分类字段移除；
-- GYMTI／训练经验、风格推荐与确认写入、个性化上下文与提案时效；
+- 训练经验、GYMTI／已确认风格进入个性化上下文后的完整差异提案与时效；
 - 带依据动作要点、结构化轻反馈、有界场次调整、成长和设备休息提醒。
 
 相关切片在持久化或公开接口落地前必须补充迁移、Repository、状态机与端到端测试，不能只改界面文案。
@@ -548,3 +551,7 @@ kcal = round(4 × activeMinutes + 1 × creditedRestMinutes)
 - [ADR-0021：独立 Web 休息召回](../adr/0021-independent-web-rest-recall-is-in-app-first.md)
 - [ADR-0022：陪伴成长](../adr/0022-companion-growth-rewards-training-days-not-intensity.md)
 - [ADR-0023：Skill 任务幂等](../adr/0023-skill-tasks-are-idempotent-and-version-bound.md)
+- [ADR-0031：GYMTI 推荐由主应用确认](../adr/0031-questionnaire-recommends-main-app-confirms-coach-style.md)
+- [ADR-0039：GYMTI 本地状态与无状态 API](../adr/0039-gymti-state-is-local-and-api-is-stateless.md)
+- [ADR-0040：GYMTI 共享版本化合同](../adr/0040-gymti-uses-one-versioned-json-contract.md)
+- [ADR-0042：GYMTI 使用 TrainPal Vue 设计系统](../adr/0042-gymti-adopts-the-trainpal-vue-design-system.md)

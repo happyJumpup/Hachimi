@@ -1,6 +1,8 @@
 # 0013：本地视频优先与可恢复的覆盖分析
 
-状态：已接受（2026-07-21）；第 7 项及 `segment_role` 合同由 ADR-0017 取代
+状态：已接受（2026-07-21）；第 7 项及公开 `segment_role` 合同由 ADR-0017 取代
+
+> 2026-07-23 更新：下文“今晚 60 秒”、单次全范围 Provider、`partial` 尚未生产验收和 GYMTI 暂缓均为当时的历史边界。当前竞赛能力由 [ADR-0030](0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 更新为完整源文件最多 300 秒的分块路线；GYMTI v1 由 [ADR-0031 至 ADR-0042](0031-questionnaire-recommends-main-app-confirms-coach-style.md) 更新。其余本地优先、显式触发、恢复、覆盖缺口和清理原则继续有效。
 
 ## 背景
 
