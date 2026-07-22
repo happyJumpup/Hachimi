@@ -397,6 +397,7 @@ async def test_kill_failure_uses_native_fallback_and_removes_prepared_media(
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
     children: list[subprocess.Popen[bytes]] = []
+    waited_pids: list[int] = []
     real_popen = subprocess.Popen
 
     class KillFailsProcess:
@@ -426,12 +427,14 @@ async def test_kill_failure_uses_native_fallback_and_removes_prepared_media(
             raise OSError("simulated termination failure")
 
         def wait(self, timeout: float | None = None) -> int:
+            waited_pids.append(self._child.pid)
             return self._child.wait(timeout=timeout)
 
     def create_unstoppable_process(*_args: Any, **_kwargs: Any) -> KillFailsProcess:
         return KillFailsProcess()
 
     monkeypatch.setattr(media_module, "PROCESS_STOP_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(imageio_ffmpeg, "get_ffmpeg_exe", lambda: sys.executable)
     monkeypatch.setattr(subprocess, "Popen", create_unstoppable_process)
     processor = LocalMediaProcessor(
         temp_root=tmp_path / "runs",
@@ -449,6 +452,7 @@ async def test_kill_failure_uses_native_fallback_and_removes_prepared_media(
         await asyncio.wait_for(prepare(), timeout=1)
 
     assert len(children) == 2
+    assert sorted(waited_pids) == sorted(child.pid for child in children)
     assert all(child.returncode is not None for child in children)
     assert not any((tmp_path / "runs").iterdir())
 

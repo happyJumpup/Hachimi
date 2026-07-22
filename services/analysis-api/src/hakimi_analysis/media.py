@@ -385,11 +385,16 @@ async def _stop_process(
                     except OSError as fallback_error:
                         if process.poll() is None:
                             raise fallback_error from kill_error
+            try:
+                process.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired:
+                if process.poll() is None:
+                    raise
 
     cleanup_error: BaseException | None = None
     try:
         await asyncio.to_thread(stop)
-    except OSError as error:
+    except (OSError, subprocess.TimeoutExpired) as error:
         cleanup_error = error
     try:
         async with asyncio.timeout(PROCESS_STOP_TIMEOUT_SECONDS):
