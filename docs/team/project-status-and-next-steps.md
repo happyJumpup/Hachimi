@@ -1,6 +1,6 @@
 # TrainPal：项目状态与下一步
 
-> 更新于 2026-07-23。五分钟后端、TrainPal Vue design v1、七猫动效与 GYMTI v1 已完成本地发布候选；Provider 候选 `d742268` 因真实 Qwen/COS、五分钟质量、Canary 与回滚证据不足而延期。CloudBase A/B、私有真实视频、公网并发 Canary 和 B→A→B 回滚已通过；新候选 `trainpal-demo-011` 的构建与身份通过，但一次性定向路由没有在数据面命中候选，因此没有切公网，稳定公网版本继续使用 `trainpal-demo-009`。
+> 更新于 2026-07-23。五分钟后端、TrainPal Vue design v1、七猫动效与 GYMTI v1 已完成本地发布候选；Provider 候选 `d742268` 因真实 Qwen/COS、五分钟质量、Canary 与回滚证据不足而延期。CloudBase A/B、私有真实视频、公网并发 Canary 和 B→A→B 回滚已通过；新候选 `trainpal-demo-011` 的构建与控制面提交身份通过，但一次性定向路由没有在数据面命中候选，因此没有切公网，稳定公网版本继续使用 `trainpal-demo-009`。
 
 ## 1. 当前产品方向
 
