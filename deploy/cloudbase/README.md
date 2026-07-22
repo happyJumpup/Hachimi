@@ -108,4 +108,9 @@ docker build --tag trainpal-five-minute:local .
   -OutputPath '<private-receipt-path>'
 ```
 
+`release-source.ps1` archives an exact clean Git commit, preserves production
+secrets in memory, enforces the five-minute runtime profile, and submits an
+OA-only gray source release. Its optional receipt contains names and hashes,
+never environment values.
+
 回执放在团队受控位置，不提交 Git。原视频、密钥、账户标识和可搜索的真实分析内容同样不得提交。

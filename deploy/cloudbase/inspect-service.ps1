@@ -178,7 +178,7 @@ $receipt = [ordered]@{
     resources = [ordered]@{
         cpu = Read-Property $serverConfig 'Cpu'
         memory = Read-Property $serverConfig 'Mem'
-        container_port = Read-Property $serverConfig 'ContainerPort'
+        container_port = Read-Property $serverConfig 'Port'
     }
     scaling = [ordered]@{
         minimum_instances = Read-Property $serverConfig 'MinNum'
