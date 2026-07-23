@@ -12,7 +12,7 @@
 | CPU / 内存 | 2 vCPU / 4 GiB |
 | 实例数 | 非评审时 0；评审时 1；最大 1 |
 | 应用 / CloudBase 配置请求超时 | 异步运行 180 秒 / 平台配置至少 240 秒；HTTP Access 曾观测到的 60 秒窗口只作历史限制证据 |
-| CloudBase 启动探针延迟 | `InitialDelaySeconds=300`；受控媒体同步采用 240 秒全局同步截止，网络阻塞按剩余预算收紧；另留至少 60 秒覆盖不可抢占 I/O 与 Uvicorn 启动，不宣称 OS 级绝对硬上界 |
+| CloudBase 启动探针延迟 | `InitialDelaySeconds=60`；五来源生产等价同步实测约 19 秒。240 秒仍是同步器自身的失败关闭上界，不是平台会等待 240 秒的承诺；候选必须在平台探针窗口内完成同步并启动 Uvicorn |
 | 本地上传 | 后端合同：完整文件不超过 300 秒、256 MiB；CloudBase HTTP Access：20 MB；Web 安全上限：19,000,000 bytes |
 | 视觉策略 | 60 秒分块、10 秒重叠、单块 20 秒、顺序执行 |
 | 真实分析 | 公开单并发；无需评委码；无会话／IP 冷却，终态清理后同一会话可立即再次创建 |
@@ -20,7 +20,7 @@
 | 总预算 | 300 元人民币硬上限 |
 | 最晚关闭 | `2026-07-25T00:00:00+08:00` |
 
-`InitialDelaySeconds` 的配置形态以已固定的 `@cloudbase/cli@3.6.4` 为兼容性依据：该 CLI 在服务差异中把它作为 `IntValue`，并在 deploy/update 请求中提交 `Key=InitialDelaySeconds`。发布仍须由候选构建与 `/ready` 实测确认平台接受该值。
+`InitialDelaySeconds` 的配置形态以已固定的 `@cloudbase/cli@3.6.4` 为兼容性依据：该 CLI 在服务差异中把它作为 `IntValue`，并在 deploy/update 请求中提交 `Key=InitialDelaySeconds`。2026-07-23 的真实 `CreateVersion` 任务证明 300 秒会先于平台约 240 秒管理超时而失败，因此当前固定为 60 秒；发布仍须由候选构建与 `/ready` 实测确认平台接受该值。
 
 同一个容器提供 SPA、FastAPI 和 SSE。活跃运行保存在单进程内存中，因此最大实例数不能大于 1。默认域名只用于短期开发演示；首次访问可能出现腾讯云风险提示，评委说明应写明“首次打开会看到腾讯云安全提示，请点击‘确定访问’进入演示”。
 

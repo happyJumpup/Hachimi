@@ -112,10 +112,10 @@ def test_source_release_uses_the_validated_access_policy() -> None:
     assert "GYMTI_LLM_MODEL = 'doubao-seed-2-0-mini-260428'" in source_release
     assert "$environment['GYMTI_LLM_MODEL'] = $environment['ARK_MODEL_ID']" not in source_release
     assert "@{ Key = 'MinNum'; IntValue = 1 }" in source_release
-    assert "@{ Key = 'InitialDelaySeconds'; IntValue = 300 }" in source_release
+    assert "@{ Key = 'InitialDelaySeconds'; IntValue = 60 }" in source_release
     assert "Test-EmptyCommandOverride" in source_release
     assert "CloudBase command overrides must be empty" in source_release
-    assert "startup_initial_delay_seconds = 300" in source_release
+    assert "startup_initial_delay_seconds = 60" in source_release
 
 
 def test_source_release_requires_an_explicit_provider_retention_confirmation() -> None:
