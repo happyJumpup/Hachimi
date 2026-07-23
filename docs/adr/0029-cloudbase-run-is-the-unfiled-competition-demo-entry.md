@@ -7,6 +7,8 @@
 
 > 2026-07-23 更新：本地上传、五分钟分块管线、空可信代理列表和镜像内签名 FFmpeg 合同由 [ADR-0030](0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 取代。本文关于必须配置受控来源、FFmpeg 位于镜像外以及生产代理列表不得为空的要求不再适用于当前 CloudBase 版本。
 
+> 2026-07-23 取代注记：本文关于匿名分析并发为 0、真实分析必须使用评委码和评委并发为 3 的内容已由 [ADR-0043](0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md) 取代。下文相关数字只保留为当时的历史部署决策。
+
 ## Context
 
 The team has no ICP-filed custom domain and needs a public HTTPS entry for judges and invited visitors before 2026-07-23 11:00 Asia/Shanghai. The existing CloudBase environment already supplies a Tencent-managed default domain, while the product and controlled media set are still being finalized.

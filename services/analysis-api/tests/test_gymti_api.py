@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -135,11 +136,25 @@ class _Model:
         return self._narratives.pop(0)
 
 
+class _BlockingModel(_Model):
+    def __init__(self) -> None:
+        super().__init__(question_ids=[], narratives=[])
+        self.three_started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def choose_question(self, payload: GymtiQuestionChoiceInput) -> str | None:
+        self.question_inputs.append(payload)
+        if len(self.question_inputs) == 3:
+            self.three_started.set()
+        await self.release.wait()
+        return "foundation-two"
+
+
 def _service(contract_path: Path, model: _Model | None = None) -> GymtiService:
     return GymtiService(
         contract=load_gymti_contract(contract_path),
         model=model,
-        model_name="deepseek-chat" if model else None,
+        model_name="doubao-seed-2-0-mini-260428" if model else None,
     )
 
 
@@ -726,7 +741,7 @@ async def test_disabled_llm_does_not_construct_a_configured_model(
     settings = Settings(
         _env_file=None,
         gymti_contract_path=_write_contract(tmp_path / "gymti.json"),
-        gymti_llm_api_key="deepseek-secret-value",
+        gymti_llm_api_key="ark-secret-value",
         gymti_llm_enabled=False,
     )
     async with httpx.AsyncClient() as http_client:
@@ -749,7 +764,7 @@ async def test_unconfirmed_retention_does_not_construct_a_configured_model(
     settings = Settings(
         _env_file=None,
         gymti_contract_path=_write_contract(tmp_path / "gymti.json"),
-        gymti_llm_api_key="deepseek-secret-value",
+        gymti_llm_api_key="ark-secret-value",
         gymti_llm_enabled=True,
         gymti_llm_retention_confirmed=False,
     )
@@ -761,12 +776,14 @@ async def test_unconfirmed_retention_does_not_construct_a_configured_model(
 
 
 @pytest.mark.asyncio
-async def test_enabled_llm_never_calls_model_for_anonymous_requests(tmp_path: Path) -> None:
-    model = _Model(question_ids=["foundation-two"], narratives=['{"text":"not used"}'])
+async def test_enabled_llm_calls_model_for_public_requests_without_access_tier_dependency(
+    tmp_path: Path,
+) -> None:
+    model = _Model(question_ids=["foundation-two"], narratives=['{"text":"public narrative"}'])
     app = create_app(
         gymti_service=_service(_write_contract(tmp_path / "gymti.json"), model),
         gymti_llm_enabled=True,
-        access=_access_manager(),
+        access=_access_manager(judge_concurrency=0),
         app_env="test",
     )
     async with httpx.AsyncClient(
@@ -779,14 +796,14 @@ async def test_enabled_llm_never_calls_model_for_anonymous_requests(tmp_path: Pa
             "/api/v1/gymti/result-narrative", json=_narrative_payload()
         )
 
-    assert next_response.json()["source"] == "local_fallback"
-    assert narrative_response.json()["source"] == "template"
-    assert model.question_inputs == []
-    assert model.narrative_inputs == []
+    assert next_response.json()["source"] == "llm"
+    assert narrative_response.json()["source"] == "llm"
+    assert len(model.question_inputs) == 1
+    assert len(model.narrative_inputs) == 1
 
 
 @pytest.mark.asyncio
-async def test_enabled_llm_calls_only_admitted_judge_and_releases_lease(tmp_path: Path) -> None:
+async def test_enabled_llm_does_not_consume_analysis_access_quota(tmp_path: Path) -> None:
     access = _access_manager(judge_concurrency=1)
     model = _Model(question_ids=["foundation-two"], narratives=['{"text":"judge narrative"}'])
     app = create_app(
@@ -816,29 +833,43 @@ async def test_enabled_llm_calls_only_admitted_judge_and_releases_lease(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_enabled_llm_uses_fallback_when_judge_cannot_get_an_access_lease(
+async def test_fourth_concurrent_gymti_model_request_falls_back_without_waiting(
     tmp_path: Path,
 ) -> None:
     access = _access_manager(judge_concurrency=0)
-    model = _Model(question_ids=["foundation-two"], narratives=[])
+    model = _BlockingModel()
     app = create_app(
         gymti_service=_service(_write_contract(tmp_path / "gymti.json"), model),
         gymti_llm_enabled=True,
+        gymti_llm_concurrency=3,
         access=access,
         app_env="test",
     )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="https://test"
     ) as client:
-        await _upgrade_to_judge(client)
-        response = await client.post("/api/v1/gymti/next-question", json=_next_question_payload())
+        admitted = [
+            asyncio.create_task(
+                client.post("/api/v1/gymti/next-question", json=_next_question_payload())
+            )
+            for _ in range(3)
+        ]
+        await asyncio.wait_for(model.three_started.wait(), timeout=1)
+        fourth = await asyncio.wait_for(
+            client.post("/api/v1/gymti/next-question", json=_next_question_payload()),
+            timeout=1,
+        )
+        model.release.set()
+        admitted_responses = await asyncio.gather(*admitted)
 
-    assert response.json()["source"] == "local_fallback"
-    assert model.question_inputs == []
+    assert [response.json()["source"] for response in admitted_responses] == ["llm"] * 3
+    assert fourth.status_code == 200
+    assert fourth.json()["source"] == "local_fallback"
+    assert len(model.question_inputs) == 3
 
 
 @pytest.mark.asyncio
-async def test_missing_deepseek_configuration_builds_an_explicit_local_fallback(
+async def test_missing_ark_configuration_builds_an_explicit_local_fallback(
     tmp_path: Path,
 ) -> None:
     settings = Settings(

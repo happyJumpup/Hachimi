@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from hakimi_analysis.models import SourceSummary
 
 MAX_ANALYZABLE_SOURCE_DURATION_SECONDS = 300.0
+COMPETITION_CONTROLLED_SOURCE_COUNT = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +97,14 @@ def load_source_manifest(manifest_path: Path) -> _SourceManifest:
 
 
 class SourceCatalog:
-    def __init__(self, sources: list[VideoSource], *, manifest_backed: bool = False) -> None:
+    def __init__(
+        self,
+        sources: list[VideoSource],
+        *,
+        manifest_backed: bool = False,
+        media_root: Path | None = None,
+        media_paths: tuple[PurePosixPath, ...] = (),
+    ) -> None:
         if len({source.id for source in sources}) != len(sources):
             raise SourceManifestError("source ids must be unique")
         if any(
@@ -107,6 +115,8 @@ class SourceCatalog:
             raise SourceManifestError("source duration exceeds the analysis boundary")
         self._sources = {source.id: source for source in sources}
         self._manifest_backed = manifest_backed
+        self._media_root = media_root
+        self._media_paths = media_paths
 
     @classmethod
     def from_manifest(
@@ -131,10 +141,12 @@ class SourceCatalog:
         ):
             raise SourceManifestError("public media base url must use https")
 
-        resolved_root = media_root.expanduser().resolve()
+        expanded_root = media_root.expanduser()
+        relative_paths = [_safe_media_path(item.media_path) for item in manifest.sources]
+        _validate_media_cache_contents(expanded_root, relative_paths)
+        resolved_root = expanded_root.resolve()
         sources: list[VideoSource] = []
-        for item in manifest.sources:
-            relative_path = _safe_media_path(item.media_path)
+        for item, relative_path in zip(manifest.sources, relative_paths, strict=True):
             source_path = (resolved_root / Path(*relative_path.parts)).resolve()
             try:
                 source_path.relative_to(resolved_root)
@@ -178,7 +190,12 @@ class SourceCatalog:
                     expected_sha256=item.sha256,
                 )
             )
-        return cls(sources, manifest_backed=True)
+        return cls(
+            sources,
+            manifest_backed=True,
+            media_root=expanded_root.absolute(),
+            media_paths=tuple(relative_paths),
+        )
 
     def list(self) -> list[SourceSummary]:
         return [source.summary() for source in self._sources.values()]
@@ -193,8 +210,21 @@ class SourceCatalog:
     def manifest_backed(self) -> bool:
         return self._manifest_backed
 
+    @property
+    def source_count(self) -> int:
+        return len(self._sources)
+
     def validate_media(self, duration_probe: Callable[[Path], float]) -> bool:
-        if not self._manifest_backed or not self._sources:
+        if (
+            not self._manifest_backed
+            or not self._sources
+            or self._media_root is None
+            or not self._media_paths
+        ):
+            return False
+        try:
+            _validate_media_cache_contents(self._media_root, list(self._media_paths))
+        except SourceManifestError:
             return False
         for source in self._sources.values():
             if source.expected_sha256 is None or not source.path.is_file():
@@ -224,6 +254,24 @@ def _safe_media_path(value: str) -> PurePosixPath:
     if any(part in {"", ".", ".."} for part in raw_parts):
         raise SourceManifestError("source media path contains unsafe segments")
     return PurePosixPath(value)
+
+
+def _validate_media_cache_contents(root: Path, allowed_paths: list[PurePosixPath]) -> None:
+    allowed = {path.as_posix().casefold() for path in allowed_paths}
+    if root.is_symlink() or root.is_junction():
+        raise SourceManifestError("source media cache contains a symbolic link")
+    try:
+        for path in root.rglob("*"):
+            if path.is_symlink() or path.is_junction():
+                raise SourceManifestError("source media cache contains a symbolic link")
+            if path.is_file():
+                relative = path.relative_to(root).as_posix().casefold()
+                if relative not in allowed:
+                    raise SourceManifestError("source media cache contains an unlisted file")
+    except SourceManifestError:
+        raise
+    except OSError as error:
+        raise SourceManifestError("source media cache cannot be read") from error
 
 
 def _sha256(path: Path) -> str:

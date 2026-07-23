@@ -6,7 +6,7 @@ const now = '2026-07-21T00:00:00.000Z'
 
 const runView = (runId: string, outcome: TerminalOutcome) => ({
   id: runId,
-  source_id: 'legacy-arm-workout',
+  source_id: 'e2e-source-01',
   trigger_seconds: 2,
   status: outcome === 'empty' ? 'completed' : 'failed',
   stage: outcome === 'empty' ? 'completed' : 'failed',
@@ -69,8 +69,8 @@ const mockTerminalRun = async (page: Page, outcome: TerminalOutcome): Promise<vo
 const startAnalysis = async (page: Page): Promise<void> => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: /刷到的动作/ })).toBeVisible()
-  await page.getByText('暂时没有合适视频？使用受控示例', { exact: true }).click()
-  await page.getByRole('button', { name: /哈基米手臂训练｜本地来源视频/ }).click()
+  await page.getByRole('button', { name: '0:02', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '确认并开始' }).click()
   await expect(page).toHaveURL(/\/analysis$/)
 }
 

@@ -109,6 +109,8 @@ ENV PYTHONUNBUFFERED=1 \
     WEB_STATIC_ROOT=/workspace/apps/web/dist \
     IMAGEIO_FFMPEG_EXE=/opt/trainpal/ffmpeg/bin/ffmpeg \
     FFMPEG_BUILD_RECEIPT_PATH=/opt/trainpal/ffmpeg/receipt.json \
+    SOURCE_MANIFEST_PATH=/workspace/competition/media-manifest.json \
+    SOURCE_MEDIA_ROOT=/workspace/tmp/controlled-media \
     LD_LIBRARY_PATH=/opt/trainpal/ffmpeg/lib
 
 WORKDIR /workspace
@@ -116,6 +118,7 @@ COPY --from=api-builder /workspace/services/analysis-api/.venv services/analysis
 COPY --from=ffmpeg-builder /opt/trainpal/ffmpeg /opt/trainpal/ffmpeg
 COPY services/analysis-api/src services/analysis-api/src
 COPY contracts/gymti-questionnaire.v1.json contracts/gymti-questionnaire.v1.json
+COPY competition/media-manifest.json competition/media-manifest.json
 COPY skills skills
 COPY LICENSE THIRD_PARTY_NOTICES.md ./
 COPY licenses licenses
@@ -132,4 +135,4 @@ RUN test -z "$(find /workspace/services/analysis-api/.venv/lib -type f -path '*/
 USER 10001:10001
 EXPOSE 8000
 
-CMD ["services/analysis-api/.venv/bin/uvicorn", "hakimi_analysis.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+CMD ["services/analysis-api/.venv/bin/python", "-m", "hakimi_analysis.startup", "--", "services/analysis-api/.venv/bin/uvicorn", "hakimi_analysis.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]

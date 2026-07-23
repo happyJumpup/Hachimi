@@ -2,33 +2,64 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import threading
 import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from runpy import run_path
-from typing import Any, Callable, cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
-
+import imageio_ffmpeg
 
 _PRIVATE_SUPPORT = run_path(str(Path(__file__).with_name("private-canary.py")))
 CanaryError = cast(type[RuntimeError], _PRIVATE_SUPPORT["CanaryError"])
-read_windows_credential = cast(
-    Callable[[str], str],
-    _PRIVATE_SUPPORT["read_windows_credential"],
-)
 
 PUBLIC_UPLOAD_MAX_BYTES = 19_000_000
-PARALLEL_REQUESTS = 4
-EXPECTED_ACCEPTED_RUNS = 3
+LOCAL_CANARY_DURATION_SECONDS = 295.0
+LOCAL_CANARY_DURATION_TOLERANCE_SECONDS = 0.5
+PARALLEL_REQUESTS = 2
+EXPECTED_ACCEPTED_RUNS = 1
+MIN_COOLDOWN_SECONDS = 1
+MAX_COOLDOWN_SECONDS = 600
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
-VALID_COVERAGE_STATUSES = {"complete", "partial", "insufficient"}
+PASSING_COVERAGE_STATUSES = {"complete", "partial"}
+
+
+def _is_295_second_duration(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    duration_seconds = float(value)
+    return math.isfinite(duration_seconds) and (
+        abs(duration_seconds - LOCAL_CANARY_DURATION_SECONDS)
+        <= LOCAL_CANARY_DURATION_TOLERANCE_SECONDS
+    )
+
+
+def probe_local_canary_duration(media_path: Path) -> float:
+    try:
+        reader: Any = imageio_ffmpeg.read_frames(str(media_path), pix_fmt="rgb24")
+        try:
+            metadata = next(reader)
+        finally:
+            reader.close()
+    except (OSError, RuntimeError, StopIteration, TypeError, ValueError) as error:
+        raise CanaryError(
+            "local canary media duration could not be verified"
+        ) from error
+    duration_seconds = metadata.get("duration") if isinstance(metadata, dict) else None
+    if not _is_295_second_duration(duration_seconds):
+        raise CanaryError(
+            "local canary media must be 295 seconds within a 0.5 second tolerance"
+        )
+    return float(cast(int | float, duration_seconds))
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +69,53 @@ class WorkerResult:
     terminal_status: str | None
     coverage_status: str | None
     retry_after_present: bool
+    reliable_candidate_count: int = 0
+    coverage_gap_count: int = 0
+    session_cooldown_enforced: bool = False
+    session_retry_after_seconds: int | None = None
+
+
+def summarize_terminal(
+    payload: dict[str, Any],
+    *,
+    terminal_event_observed: bool,
+    session_retry_after_seconds: int,
+    require_local_295_seconds: bool = False,
+) -> WorkerResult:
+    if require_local_295_seconds and not _is_295_second_duration(
+        payload.get("source_duration_seconds")
+    ):
+        raise CanaryError(
+            "local canary terminal duration must prove 295 seconds within tolerance"
+        )
+    candidates = payload.get("candidates")
+    coverage_gaps = payload.get("coverage_gaps")
+    if not isinstance(candidates, list) or not isinstance(coverage_gaps, list):
+        raise CanaryError("analysis terminal payload omitted coverage evidence")
+    if any(not isinstance(gap, dict) for gap in coverage_gaps):
+        raise CanaryError("analysis terminal payload returned invalid coverage gaps")
+    reliable_candidate_count = 0
+    for candidate in candidates:
+        if (
+            not isinstance(candidate, dict)
+            or type(candidate.get("needs_confirmation")) is not bool
+        ):
+            raise CanaryError("analysis terminal payload returned invalid candidates")
+        if candidate["needs_confirmation"] is False:
+            reliable_candidate_count += 1
+    terminal_status = payload.get("status")
+    coverage_status = payload.get("coverage_status")
+    return WorkerResult(
+        upload_status=202,
+        terminal_event_observed=terminal_event_observed,
+        terminal_status=terminal_status if isinstance(terminal_status, str) else None,
+        coverage_status=coverage_status if isinstance(coverage_status, str) else None,
+        retry_after_present=False,
+        reliable_candidate_count=reliable_candidate_count,
+        coverage_gap_count=len(coverage_gaps),
+        session_cooldown_enforced=True,
+        session_retry_after_seconds=session_retry_after_seconds,
+    )
 
 
 def normalize_public_origin(value: str) -> str:
@@ -47,7 +125,9 @@ def normalize_public_origin(value: str) -> str:
     if parsed.username is not None or parsed.password is not None:
         raise CanaryError("public canary origin must not contain credentials")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise CanaryError("public canary origin must not contain a path, query, or fragment")
+        raise CanaryError(
+            "public canary origin must not contain a path, query, or fragment"
+        )
     try:
         port = parsed.port
     except ValueError as error:
@@ -57,7 +137,34 @@ def normalize_public_origin(value: str) -> str:
     return f"https://{parsed.hostname.lower()}"
 
 
-def _expect_json(response: httpx.Response, expected_status: int, label: str) -> dict[str, Any]:
+def select_shortest_controlled_source(
+    payload: object,
+) -> tuple[str, float]:
+    if not isinstance(payload, list) or len(payload) != 5:
+        raise CanaryError("controlled source canary requires exactly five sources")
+    sources: list[tuple[str, float]] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise CanaryError("controlled source canary received an invalid source catalog")
+        source_id = item.get("id")
+        duration = item.get("duration_seconds")
+        if (
+            not isinstance(source_id, str)
+            or not source_id
+            or isinstance(duration, bool)
+            or not isinstance(duration, (int, float))
+            or not 0 < float(duration) <= 300
+        ):
+            raise CanaryError("controlled source canary received an invalid source catalog")
+        sources.append((source_id, float(duration)))
+    if len({source_id for source_id, _ in sources}) != len(sources):
+        raise CanaryError("controlled source canary received an invalid source catalog")
+    return min(sources, key=lambda source: (source[1], source[0]))
+
+
+def _expect_json(
+    response: httpx.Response, expected_status: int, label: str
+) -> dict[str, Any]:
     if response.status_code != expected_status:
         raise CanaryError(f"{label} failed with HTTP {response.status_code}")
     try:
@@ -90,23 +197,37 @@ class PublicCanaryClient:
     def get_json(self, path: str, *, label: str) -> dict[str, Any]:
         return _expect_json(self._client.get(path), 200, label)
 
-    def prepare_judge_session(self, judge_code: str) -> None:
+    def prepare_public_session(self) -> None:
         public_session = self.get_json(
             "/api/v1/access/session",
             label="public session",
         )
-        if public_session.get("tier") != "public" or public_session.get("can_analyze"):
-            raise CanaryError("anonymous analysis is not fail-closed")
-        judge_session = _expect_json(
-            self._client.post(
-                "/api/v1/access/session",
-                json={"access_code": judge_code},
-            ),
-            200,
-            "judge session",
-        )
-        if judge_session.get("tier") != "judge" or not judge_session.get("can_analyze"):
-            raise CanaryError("judge session was not granted analysis capacity")
+        if public_session.get("tier") != "public" or not public_session.get(
+            "can_analyze"
+        ):
+            raise CanaryError("public analysis is not available")
+
+    def list_controlled_sources(self) -> object:
+        response = self._client.get("/api/v1/sources")
+        if response.status_code != 200:
+            raise CanaryError(
+                f"controlled source catalog failed with HTTP {response.status_code}"
+            )
+        try:
+            return response.json()
+        except ValueError as error:
+            raise CanaryError("controlled source catalog returned invalid JSON") from error
+
+    def require_analysis_cooldown(self, *, label: str) -> int:
+        session = self.get_json("/api/v1/access/session", label=label)
+        retry_after_seconds = session.get("retry_after_seconds")
+        if (
+            session.get("can_analyze") is not False
+            or type(retry_after_seconds) is not int
+            or not MIN_COOLDOWN_SECONDS <= retry_after_seconds <= MAX_COOLDOWN_SECONDS
+        ):
+            raise CanaryError(f"{label} did not prove the analysis cooldown")
+        return retry_after_seconds
 
     def upload_video(self, media_path: Path) -> httpx.Response:
         with media_path.open("rb") as media:
@@ -115,6 +236,12 @@ class PublicCanaryClient:
                 data={"local_source_id": f"local:{uuid4()}"},
                 files={"media": ("canary.mp4", media, "video/mp4")},
             )
+
+    def start_controlled_analysis(self, source_id: str) -> httpx.Response:
+        return self._client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": source_id},
+        )
 
     def stream_events(self, run_id: str) -> tuple[int, bool]:
         terminal_observed = False
@@ -137,7 +264,9 @@ class PublicCanaryClient:
                     break
         return 200, terminal_observed
 
-    def wait_for_terminal(self, run_id: str, *, timeout_seconds: float) -> dict[str, Any]:
+    def wait_for_terminal(
+        self, run_id: str, *, timeout_seconds: float
+    ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
             payload = self.get_json(
@@ -155,28 +284,60 @@ class PublicCanaryClient:
 
 def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
     status_counts = Counter(str(result.upload_status) for result in results)
-    if (
-        len(results) != PARALLEL_REQUESTS
-        or status_counts != Counter({"202": EXPECTED_ACCEPTED_RUNS, "429": 1})
+    if len(results) != PARALLEL_REQUESTS or status_counts != Counter(
+        {"202": EXPECTED_ACCEPTED_RUNS, "429": 1}
     ):
-        raise CanaryError("public concurrency gate requires three accepted runs and one 429")
+        raise CanaryError(
+            "public concurrency gate requires one accepted run and one 429"
+        )
 
     accepted = [result for result in results if result.upload_status == 202]
     rejected = [result for result in results if result.upload_status == 429]
     if any(result.terminal_status != "completed" for result in accepted):
-        raise CanaryError("an accepted public canary run returned a non-completed terminal status")
+        raise CanaryError(
+            "an accepted public canary run returned a non-completed terminal status"
+        )
     if any(not result.terminal_event_observed for result in accepted):
-        raise CanaryError("an accepted public canary run did not emit a terminal SSE event")
-    if any(result.coverage_status not in VALID_COVERAGE_STATUSES for result in accepted):
-        raise CanaryError("an accepted public canary run returned invalid coverage status")
+        raise CanaryError(
+            "an accepted public canary run did not emit a terminal SSE event"
+        )
+    for result in accepted:
+        if result.coverage_status not in PASSING_COVERAGE_STATUSES:
+            raise CanaryError(
+                "an accepted public canary run failed the coverage contract"
+            )
+        if (
+            result.session_cooldown_enforced is not True
+            or type(result.session_retry_after_seconds) is not int
+            or not MIN_COOLDOWN_SECONDS
+            <= result.session_retry_after_seconds
+            <= MAX_COOLDOWN_SECONDS
+        ):
+            raise CanaryError(
+                "an accepted public canary run failed the session cooldown contract"
+            )
+        if result.coverage_status == "complete" and result.coverage_gap_count != 0:
+            raise CanaryError(
+                "an accepted public canary run failed the coverage contract"
+            )
+        if result.coverage_status == "partial" and (
+            result.reliable_candidate_count < 1 or result.coverage_gap_count < 1
+        ):
+            raise CanaryError(
+                "an accepted public canary run failed the coverage contract"
+            )
     if any(not result.retry_after_present for result in rejected):
         raise CanaryError("the capacity rejection omitted Retry-After")
 
     terminal_counts = Counter(
-        result.terminal_status for result in accepted if result.terminal_status is not None
+        result.terminal_status
+        for result in accepted
+        if result.terminal_status is not None
     )
     coverage_counts = Counter(
-        result.coverage_status for result in accepted if result.coverage_status is not None
+        result.coverage_status
+        for result in accepted
+        if result.coverage_status is not None
     )
     return {
         "parallel_requests": len(results),
@@ -188,6 +349,14 @@ def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
         ),
         "terminal_status_counts": dict(terminal_counts),
         "coverage_status_counts": dict(coverage_counts),
+        "reliable_candidate_count": sum(
+            result.reliable_candidate_count for result in accepted
+        ),
+        "coverage_gap_count": sum(result.coverage_gap_count for result in accepted),
+        "session_cooldown_enforced": all(
+            result.session_cooldown_enforced for result in accepted
+        ),
+        "session_retry_after_seconds": accepted[0].session_retry_after_seconds,
         "retry_after_present_count": sum(
             result.retry_after_present for result in rejected
         ),
@@ -197,17 +366,23 @@ def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
 def _run_worker(
     *,
     origin: str,
-    media_path: Path,
-    judge_code: str,
     barrier: threading.Barrier,
     timeout_seconds: float,
+    media_path: Path | None = None,
+    source_id: str | None = None,
 ) -> WorkerResult:
+    if (media_path is None) == (source_id is None):
+        raise CanaryError("public canary worker requires exactly one analysis input")
     client = PublicCanaryClient(origin=origin, timeout_seconds=timeout_seconds)
     run_id: str | None = None
     try:
-        client.prepare_judge_session(judge_code)
+        client.prepare_public_session()
         barrier.wait(timeout=30)
-        response = client.upload_video(media_path)
+        response = (
+            client.upload_video(media_path)
+            if media_path is not None
+            else client.start_controlled_analysis(cast(str, source_id))
+        )
         if response.status_code == 429:
             return WorkerResult(
                 upload_status=429,
@@ -216,7 +391,7 @@ def _run_worker(
                 coverage_status=None,
                 retry_after_present="Retry-After" in response.headers,
             )
-        created = _expect_json(response, 202, "parallel local analysis upload")
+        created = _expect_json(response, 202, "parallel public analysis start")
         run_id_value = created.get("id")
         if not isinstance(run_id_value, str) or not run_id_value:
             raise CanaryError("analysis upload did not return a run id")
@@ -225,50 +400,78 @@ def _run_worker(
         if sse_status != 200:
             raise CanaryError(f"public SSE failed with HTTP {sse_status}")
         terminal = client.wait_for_terminal(run_id, timeout_seconds=timeout_seconds)
-        return WorkerResult(
-            upload_status=202,
+        session_retry_after_seconds = client.require_analysis_cooldown(
+            label="accepted session cooldown"
+        )
+        return summarize_terminal(
+            terminal,
             terminal_event_observed=terminal_observed,
-            terminal_status=(
-                str(terminal.get("status")) if terminal.get("status") is not None else None
-            ),
-            coverage_status=(
-                str(terminal.get("coverage_status"))
-                if terminal.get("coverage_status") is not None
-                else None
-            ),
-            retry_after_present=False,
+            session_retry_after_seconds=session_retry_after_seconds,
+            require_local_295_seconds=media_path is not None,
         )
     except BaseException:
         if run_id is not None:
-            try:
+            with suppress(Exception):
                 client.cancel(run_id)
-            except Exception:
-                pass
         raise
     finally:
         client.close()
 
 
+def probe_fresh_ip_cooldown(
+    *, origin: str, timeout_seconds: float
+) -> dict[str, object]:
+    client = PublicCanaryClient(origin=origin, timeout_seconds=timeout_seconds)
+    try:
+        retry_after_seconds = client.require_analysis_cooldown(
+            label="fresh IP cooldown"
+        )
+    finally:
+        client.close()
+    return {
+        "enforced": True,
+        "retry_after_seconds": retry_after_seconds,
+    }
+
+
 def run_canary(args: argparse.Namespace) -> dict[str, Any]:
     origin = normalize_public_origin(args.public_base_url)
-    media_path = Path(args.media).expanduser().resolve()
-    if not media_path.is_file():
-        raise CanaryError("canary media is unavailable")
-    media_bytes = media_path.stat().st_size
-    if media_bytes <= 0 or media_bytes > PUBLIC_UPLOAD_MAX_BYTES:
-        raise CanaryError("public canary media is outside the CloudBase upload envelope")
+    controlled_shortest = bool(getattr(args, "controlled_shortest", False))
+    media_path: Path | None = None
+    media_bytes: int | None = None
+    media_duration_seconds: float | None = None
+    source_id: str | None = None
+    selected_duration: float | None = None
+    if not controlled_shortest:
+        media_value = getattr(args, "media", None)
+        if not isinstance(media_value, str) or not media_value:
+            raise CanaryError("local upload canary requires a media path")
+        media_path = Path(media_value).expanduser().resolve()
+        if not media_path.is_file():
+            raise CanaryError("canary media is unavailable")
+        media_bytes = media_path.stat().st_size
+        if media_bytes <= 0 or media_bytes > PUBLIC_UPLOAD_MAX_BYTES:
+            raise CanaryError(
+                "public canary media is outside the CloudBase upload envelope"
+            )
+        media_duration_seconds = probe_local_canary_duration(media_path)
 
-    judge_code = read_windows_credential(args.judge_credential_target)
     probe = PublicCanaryClient(origin=origin, timeout_seconds=args.timeout_seconds)
     try:
         capabilities = probe.get_json("/api/v1/capabilities", label="capabilities")
         anonymous = probe.get_json("/api/v1/access/session", label="anonymous session")
+        if controlled_shortest:
+            source_id, selected_duration = select_shortest_controlled_source(
+                probe.list_controlled_sources()
+            )
     finally:
         probe.close()
     if capabilities.get("local_analysis_max_seconds") != 300:
-        raise CanaryError("deployed local analysis duration boundary is not 300 seconds")
-    if anonymous.get("tier") != "public" or anonymous.get("can_analyze"):
-        raise CanaryError("anonymous analysis is not fail-closed")
+        raise CanaryError(
+            "deployed local analysis duration boundary is not 300 seconds"
+        )
+    if anonymous.get("tier") != "public" or not anonymous.get("can_analyze"):
+        raise CanaryError("public analysis is not available")
 
     barrier = threading.Barrier(PARALLEL_REQUESTS)
     with ThreadPoolExecutor(max_workers=PARALLEL_REQUESTS) as executor:
@@ -277,7 +480,7 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
                 _run_worker,
                 origin=origin,
                 media_path=media_path,
-                judge_code=judge_code,
+                source_id=source_id,
                 barrier=barrier,
                 timeout_seconds=args.timeout_seconds,
             )
@@ -285,33 +488,52 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         ]
         results = [future.result() for future in futures]
 
+    concurrency = summarize_parallel_results(results)
+    ip_cooldown = probe_fresh_ip_cooldown(
+        origin=origin,
+        timeout_seconds=args.timeout_seconds,
+    )
+
+    input_receipt: dict[str, object]
+    if controlled_shortest:
+        input_receipt = {
+            "kind": "controlled_source",
+            "catalog_count": 5,
+            "duration_seconds": selected_duration,
+        }
+    else:
+        input_receipt = {
+            "kind": "local_upload",
+            "media_bytes": media_bytes,
+            "duration_seconds": media_duration_seconds,
+        }
+
     return {
         "schema_version": 1,
         "service": "trainpal-demo",
         "access": "public-http-route",
-        "media_bytes": media_bytes,
+        "input": input_receipt,
         "capabilities": {
             "local_analysis_max_seconds": capabilities.get(
                 "local_analysis_max_seconds"
             ),
             "local_upload_max_bytes": capabilities.get("local_upload_max_bytes"),
         },
-        "access_gate": {"anonymous_can_analyze": False, "judge_sessions": 4},
-        "concurrency": summarize_parallel_results(results),
+        "access_gate": {"public_can_analyze": True, "public_sessions": 2},
+        "concurrency": concurrency,
+        "ip_cooldown": ip_cooldown,
     }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a content-redacted four-request CloudBase public canary."
+        description="Run a content-redacted two-request CloudBase public canary."
     )
     parser.add_argument("--public-base-url", required=True)
-    parser.add_argument("--media", required=True)
-    parser.add_argument(
-        "--judge-credential-target",
-        default="HakimiFitness.CloudBase.JudgeCode",
-    )
-    parser.add_argument("--timeout-seconds", type=float, default=180)
+    input_group = parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--media")
+    input_group.add_argument("--controlled-shortest", action="store_true")
+    parser.add_argument("--timeout-seconds", type=float, default=240)
     parser.add_argument("--output", required=True)
     return parser.parse_args()
 

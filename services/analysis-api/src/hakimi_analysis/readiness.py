@@ -11,10 +11,11 @@ from typing import Protocol
 from urllib.parse import urlparse
 from uuid import uuid4
 
+from hakimi_analysis.gymti import GymtiContractError, load_gymti_contract
 from hakimi_analysis.media import probe_duration_sync
 from hakimi_analysis.orchestration import SkillRepository
-from hakimi_analysis.settings import Settings
-from hakimi_analysis.sources import SourceCatalog
+from hakimi_analysis.settings import GYMTI_DOUBAO_SEED_MINI_MODEL, Settings
+from hakimi_analysis.sources import COMPETITION_CONTROLLED_SOURCE_COUNT, SourceCatalog
 
 FFMPEG_VERSION_TIMEOUT_SECONDS = 5
 FFMPEG_CONFIGURATION_PREFIX = "configuration:"
@@ -169,39 +170,58 @@ class ProductionReadiness:
             or self._settings.analysis_provider != "cloud"
             or self._settings.ark_api_key is None
             or self._settings.volc_asr_api_key is None
-            or not self._settings.ark_api_key.get_secret_value()
-            or not self._settings.volc_asr_api_key.get_secret_value()
+            or self._settings.gymti_llm_api_key is None
+            or not self._settings.ark_api_key.get_secret_value().strip()
+            or not self._settings.volc_asr_api_key.get_secret_value().strip()
+            or not self._settings.gymti_llm_api_key.get_secret_value().strip()
             or not self._settings.ark_model_id.strip()
             or not self._settings.ark_base_url.strip()
             or not self._settings.volc_asr_resource_id.strip()
             or not self._settings.volc_asr_url.strip()
+            or not self._settings.gymti_llm_enabled
+            or not self._settings.gymti_llm_retention_confirmed
+            or self._settings.gymti_llm_model.strip()
+            != GYMTI_DOUBAO_SEED_MINI_MODEL
+            or not self._settings.gymti_llm_base_url.strip()
         ):
             return "provider_configuration_invalid"
         ark_url = urlparse(self._settings.ark_base_url)
         asr_url = urlparse(self._settings.volc_asr_url)
+        gymti_url = urlparse(self._settings.gymti_llm_base_url)
         if ark_url.scheme != "https" or not ark_url.netloc:
             return "provider_configuration_invalid"
         if asr_url.scheme != "wss" or not asr_url.netloc:
             return "provider_configuration_invalid"
+        if (
+            gymti_url.scheme != "https"
+            or gymti_url.hostname != "ark.cn-beijing.volces.com"
+            or gymti_url.path.rstrip("/") != "/api/v3"
+            or gymti_url.username is not None
+            or gymti_url.password is not None
+            or gymti_url.params
+            or gymti_url.query
+            or gymti_url.fragment
+        ):
+            return "provider_configuration_invalid"
+        try:
+            load_gymti_contract(self._settings.gymti_contract_path)
+        except GymtiContractError:
+            return "gymti_contract_invalid"
         controlled_source_values = (
             self._settings.source_manifest_path,
             self._settings.source_media_root,
             self._settings.public_media_base_url,
         )
-        controlled_sources_configured = any(value is not None for value in controlled_source_values)
-        if controlled_sources_configured:
-            if (
-                self._settings.source_manifest_path is None
-                or self._settings.source_media_root is None
-                or self._settings.public_media_base_url is None
-                or not self._settings.source_manifest_path.is_file()
-                or not self._catalog.manifest_backed
-            ):
-                return "source_manifest_invalid"
-            parsed_media_url = urlparse(self._settings.public_media_base_url)
-            if parsed_media_url.scheme != "https" or not parsed_media_url.netloc:
-                return "source_manifest_invalid"
-        elif not self._settings.local_upload_enabled:
+        if (
+            any(value is None for value in controlled_source_values)
+            or self._settings.source_manifest_path is None
+            or not self._settings.source_manifest_path.is_file()
+            or not self._catalog.manifest_backed
+            or self._catalog.source_count != COMPETITION_CONTROLLED_SOURCE_COUNT
+        ):
+            return "source_manifest_invalid"
+        parsed_media_url = urlparse(self._settings.public_media_base_url)
+        if parsed_media_url.scheme != "https" or not parsed_media_url.netloc:
             return "source_manifest_invalid"
         ffmpeg_executable = self._settings.imageio_ffmpeg_exe
         ffmpeg_receipt = self._settings.ffmpeg_build_receipt_path
@@ -212,7 +232,7 @@ class ProductionReadiness:
         )
         if not receipt_valid:
             return "media_processor_unavailable"
-        if controlled_sources_configured and not self._catalog.validate_media(self._duration_probe):
+        if not self._catalog.validate_media(self._duration_probe):
             return "media_cache_invalid"
         try:
             SkillRepository.load(self._skills_root)
@@ -248,8 +268,9 @@ class ProductionReadiness:
             and self._settings.analysis_visual_chunk_seconds == 60
             and self._settings.analysis_visual_overlap_seconds == 10
             and self._settings.run_timeout_seconds == 180
-            and self._settings.judge_analysis_concurrency == 3
-            and self._settings.public_analysis_concurrency == 0
+            and self._settings.judge_analysis_concurrency == 0
+            and self._settings.public_analysis_concurrency == 1
+            and self._settings.gymti_llm_concurrency == 3
             and not self._settings.trusted_proxy_cidr_list
         )
 

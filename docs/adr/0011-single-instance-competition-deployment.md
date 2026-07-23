@@ -4,6 +4,8 @@
 
 已接受，2026-07-21。
 
+> 2026-07-23 取代注记：CloudBase Run 公网边缘已由 [ADR-0029](0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md) 取代 Caddy；离页或 SSE 断线不取消运行的恢复合同已由 [ADR-0013](0013-local-video-import-and-recoverable-analysis.md) 取代；两个准入池、评委码门槛和三路评委并发已由 [ADR-0043](0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md) 取代为公开单并发、评委并发为零及会话／IP 600 秒冷却。本文的单实例、单 worker、进程内状态、无队列、受控媒体校验和失败关闭原则继续有效；下文旧拓扑与容量数字只保留为历史决策。
+
 ## 背景
 
 动作分析请求、SSE 事件、取消句柄和终态 TTL 当前都存在 FastAPI 进程内存中。竞赛现场需要稳定服务三名评委和约 10–50 名访客，但访客的大部分训练体验在浏览器本地运行，不需要把三天工程扩展成分布式任务系统。

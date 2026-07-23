@@ -43,6 +43,18 @@ EXPECTED_NONSECRET_KEYS = [
     "VOLC_ASR_URL",
     "WEB_STATIC_ROOT",
 ]
+EXPECTED_RELEASE_MANAGED_SECRET_ALIAS_KEYS = ["GYMTI_LLM_API_KEY"]
+EXPECTED_RELEASE_MANAGED_NONSECRET_KEYS = [
+    "APP_RELEASE_SHA",
+    "GYMTI_LLM_BASE_URL",
+    "GYMTI_LLM_CONCURRENCY",
+    "GYMTI_LLM_ENABLED",
+    "GYMTI_LLM_MODEL",
+    "GYMTI_LLM_RETENTION_CONFIRMED",
+    "PUBLIC_MEDIA_BASE_URL",
+    "SOURCE_MANIFEST_PATH",
+    "SOURCE_MEDIA_ROOT",
+]
 SECRET_VALUE_MARKERS = (
     "secretid",
     "secretkey",
@@ -95,6 +107,8 @@ def validate(plan: dict[str, Any]) -> None:
             "rollback",
             "required_secret_environment_keys",
             "required_nonsecret_environment_keys",
+            "release_managed_secret_alias_environment_keys",
+            "release_managed_nonsecret_environment_keys",
             "budget",
             "submission_deadline",
         },
@@ -149,6 +163,8 @@ def validate(plan: dict[str, Any]) -> None:
             "analysis_provider",
             "judge_analysis_concurrency",
             "public_analysis_concurrency",
+            "public_attempt_limit",
+            "public_attempt_window_seconds",
             "run_timeout_seconds",
             "local_upload_enabled",
             "local_analysis_max_seconds",
@@ -160,6 +176,10 @@ def validate(plan: dict[str, Any]) -> None:
             "unauthenticated_page_browse",
             "judge_code_required_for_paid_analysis",
             "anonymous_paid_analysis",
+            "gymti_llm_enabled",
+            "gymti_llm_provider",
+            "gymti_llm_concurrency",
+            "gymti_llm_request_quota",
             "raw_media_persistence",
             "active_run_state",
         },
@@ -171,6 +191,8 @@ def validate(plan: dict[str, Any]) -> None:
             "controlled_sources_required",
             "source_manifest_path",
             "source_media_root",
+            "controlled_source_count",
+            "public_media_base_url_required",
             "ffmpeg_path",
             "ffmpeg_receipt_path",
             "smoke_annotations_path",
@@ -196,9 +218,10 @@ def validate(plan: dict[str, Any]) -> None:
         release_gates["public_canary"],
         {
             "public_health_ready",
-            "judge_analysis_sse_result",
+            "public_analysis_sse_result",
             "second_browser_entry",
-            "concurrent_judge_requests",
+            "concurrent_public_requests",
+            "accepted_public_requests",
             "over_capacity_http_status",
             "memory_pressure_observed",
             "rollback_smoke",
@@ -276,16 +299,28 @@ def validate(plan: dict[str, Any]) -> None:
         fail("runtime APP_ENV must be production")
     if runtime.get("analysis_provider") != "cloud":
         fail("runtime analysis provider must be cloud")
-    if runtime.get("judge_analysis_concurrency") != 3:
-        fail("judge analysis concurrency must remain three")
-    if runtime.get("public_analysis_concurrency") != 0:
-        fail("anonymous paid analysis must remain disabled")
+    if runtime.get("judge_analysis_concurrency") != 0:
+        fail("judge analysis capacity must be disabled")
+    if runtime.get("public_analysis_concurrency") != 1:
+        fail("public analysis concurrency must remain one")
+    if runtime.get("public_attempt_limit") != 1:
+        fail("public analysis must allow one attempt per window")
+    if runtime.get("public_attempt_window_seconds") != 600:
+        fail("public analysis attempt window must remain ten minutes")
     if runtime.get("unauthenticated_page_browse") is not True:
         fail("the public product pages must remain browseable")
-    if runtime.get("judge_code_required_for_paid_analysis") is not True:
-        fail("paid analysis must require the judge code")
-    if runtime.get("anonymous_paid_analysis") is not False:
-        fail("anonymous paid analysis must remain disabled")
+    if runtime.get("judge_code_required_for_paid_analysis") is not False:
+        fail("the device demo must not require a judge code")
+    if runtime.get("anonymous_paid_analysis") is not True:
+        fail("the device demo must allow direct public analysis")
+    if runtime.get("gymti_llm_enabled") is not True:
+        fail("GYMTI model enhancement must be enabled")
+    if runtime.get("gymti_llm_provider") != "ark-doubao":
+        fail("GYMTI must use the existing Ark Doubao provider")
+    if runtime.get("gymti_llm_concurrency") != 3:
+        fail("GYMTI model concurrency must remain three")
+    if runtime.get("gymti_llm_request_quota") is not None:
+        fail("GYMTI must not impose a request-count quota")
     if runtime.get("run_timeout_seconds") != 180:
         fail("application analysis timeout must remain 180 seconds")
     if runtime.get("local_upload_enabled") is not True:
@@ -307,17 +342,24 @@ def validate(plan: dict[str, Any]) -> None:
     if runtime.get("raw_media_persistence") != "forbidden":
         fail("raw media persistence must remain forbidden")
 
-    if assets.get("controlled_sources_required") is not False:
-        fail("competition readiness must allow local-upload-only operation")
-    for key in ("source_manifest_path", "source_media_root", "smoke_annotations_path"):
-        if assets.get(key) is not None:
-            fail(f"{key} must remain unset until controlled content is approved")
+    if assets.get("controlled_sources_required") is not True:
+        fail("the device demo requires controlled quick-analysis sources")
+    if assets.get("source_manifest_path") != "/workspace/competition/media-manifest.json":
+        fail("unexpected controlled source manifest path")
+    if assets.get("source_media_root") != "/workspace/tmp/controlled-media":
+        fail("unexpected controlled source media root")
+    if assets.get("controlled_source_count") != 5:
+        fail("the device demo requires exactly five controlled sources")
+    if assets.get("public_media_base_url_required") is not True:
+        fail("controlled media requires a public HTTPS base URL")
+    if assets.get("smoke_annotations_path") is not None:
+        fail("smoke annotations must not be committed to the deployment plan")
     if assets.get("ffmpeg_path") != "/opt/trainpal/ffmpeg/bin/ffmpeg":
         fail("unexpected ffmpeg_path")
     if assets.get("ffmpeg_receipt_path") != "/opt/trainpal/ffmpeg/receipt.json":
         fail("unexpected ffmpeg_receipt_path")
-    if assets.get("assets_deferred_until_content_approval") is not True:
-        fail("content assets must remain deferred")
+    if assets.get("assets_deferred_until_content_approval") is not False:
+        fail("controlled content approval must be recorded")
     if assets.get("must_verify_ffmpeg_receipt") is not True:
         fail("FFmpeg build receipt verification must remain enabled")
 
@@ -330,9 +372,10 @@ def validate(plan: dict[str, Any]) -> None:
         fail("private release gates must protect public exposure")
     if public_canary_gates != {
         "public_health_ready": True,
-        "judge_analysis_sse_result": True,
+        "public_analysis_sse_result": True,
         "second_browser_entry": True,
-        "concurrent_judge_requests": 3,
+        "concurrent_public_requests": 2,
+        "accepted_public_requests": 1,
         "over_capacity_http_status": 429,
         "memory_pressure_observed": True,
         "rollback_smoke": True,
@@ -348,10 +391,24 @@ def validate(plan: dict[str, Any]) -> None:
 
     secret_keys = plan.get("required_secret_environment_keys")
     nonsecret_keys = plan.get("required_nonsecret_environment_keys")
+    managed_secret_alias_keys = plan.get(
+        "release_managed_secret_alias_environment_keys"
+    )
+    managed_nonsecret_keys = plan.get("release_managed_nonsecret_environment_keys")
     if secret_keys != EXPECTED_SECRET_KEYS:
         fail("secret environment key contract changed")
     if nonsecret_keys != EXPECTED_NONSECRET_KEYS:
         fail("non-secret environment key contract changed")
+    if managed_secret_alias_keys != EXPECTED_RELEASE_MANAGED_SECRET_ALIAS_KEYS:
+        fail("release-managed secret alias environment key contract changed")
+    if managed_nonsecret_keys != EXPECTED_RELEASE_MANAGED_NONSECRET_KEYS:
+        fail("release-managed non-secret environment key contract changed")
+    inherited_keys = set(EXPECTED_SECRET_KEYS) | set(EXPECTED_NONSECRET_KEYS)
+    release_managed_keys = set(EXPECTED_RELEASE_MANAGED_SECRET_ALIAS_KEYS) | set(
+        EXPECTED_RELEASE_MANAGED_NONSECRET_KEYS
+    )
+    if inherited_keys & release_managed_keys:
+        fail("inherited and release-managed environment keys must not overlap")
     if budget.get("currency") != "CNY" or budget.get("hard_ceiling") != 300:
         fail("authorized budget ceiling must remain CNY 300")
     if budget.get("pricing_source") != (

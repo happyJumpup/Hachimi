@@ -9,6 +9,8 @@ import {
   validateLocalMediaFile,
   validateLocalMediaUpload,
 } from '@/domain/local-media'
+import type { SourceSummary } from '@/domain/types'
+import { useDialogFocus } from '@/composables/useDialogFocus'
 import { useAnalysisStore } from '@/stores/analysis'
 import { useDraftStore } from '@/stores/draft'
 import { useLibraryStore } from '@/stores/library'
@@ -23,17 +25,25 @@ const initializing = ref(true)
 const importing = ref(false)
 const starting = ref(false)
 const importError = ref('')
+const quickRealSource = ref<SourceSummary | null>(null)
+const quickRealDialog = ref<HTMLElement | null>(null)
+const quickRealDialogFocus = useDialogFocus(quickRealDialog)
 
 const current = computed(() => localMedia.current)
 const previewUrl = computed(() => current.value ? localMedia.urlFor(current.value.sourceId) : null)
 const canStart = computed(() => {
-  if (!current.value || !analysis.capabilities) return false
+  if (!current.value || !analysis.capabilities || analysis.isRunning) return false
   return validateLocalMediaFile(
     localMediaAsFile(current.value),
     current.value.durationSeconds,
     analysis.capabilities,
   ).ok
 })
+const quickRealSources = computed(() => [...analysis.sources]
+  .sort((left, right) => (
+    left.duration_seconds - right.duration_seconds || left.id.localeCompare(right.id)
+  ))
+  .slice(0, 5))
 
 const formatTime = (seconds: number): string => {
   const safe = Number.isFinite(seconds) ? Math.max(0, seconds) : 0
@@ -51,12 +61,16 @@ const formatDurationLimit = (seconds: number): string => {
   return `${minutes} 分 ${remainder} 秒`
 }
 
+const formatRoundedDuration = (seconds: number): string => formatTime(Math.round(seconds))
+
+const formatRoundedMinutes = (seconds: number): number => Math.max(1, Math.round(seconds / 60))
+
 const capabilityCopy = computed(() => {
   const capability = analysis.capabilities
   if (analysis.capabilitiesLoading) return '正在读取当前分析能力…'
   if (!capability) return '暂时无法确认本地视频能力'
   if (!capability.local_upload_enabled) return '当前环境暂不支持本地视频分析'
-  return `最长 ${formatDurationLimit(capability.local_analysis_max_seconds)} · 结果需要核对 · 云端演示请压缩到 20 MB 以内`
+  return `最长 ${formatDurationLimit(capability.local_analysis_max_seconds)} · 建议不超过 19 MB · 结果需要核对`
 })
 
 const initialize = async (): Promise<void> => {
@@ -151,6 +165,24 @@ const startControlledAnalysis = async (sourceId: string): Promise<void> => {
   }
 }
 
+const openQuickRealAnalysis = async (source: SourceSummary, event: Event): Promise<void> => {
+  quickRealSource.value = source
+  await quickRealDialogFocus.activate(event.currentTarget as HTMLElement | null)
+}
+
+const closeQuickRealAnalysis = async (): Promise<void> => {
+  quickRealSource.value = null
+  await quickRealDialogFocus.deactivate()
+}
+
+const confirmQuickRealAnalysis = async (): Promise<void> => {
+  const sourceId = quickRealSource.value?.id
+  if (!sourceId || starting.value) return
+  quickRealSource.value = null
+  await quickRealDialogFocus.deactivate()
+  await startControlledAnalysis(sourceId)
+}
+
 onMounted(initialize)
 </script>
 
@@ -202,6 +234,9 @@ onMounted(initialize)
 
       <p class="capability-copy">{{ capabilityCopy }} · 原视频保存在当前设备；服务端临时副本只用于本次分析</p>
       <p v-if="importError" class="form-error" role="alert">{{ importError }}</p>
+      <p v-if="analysis.isRunning" class="analysis-running-note" role="status">
+        当前已有分析正在进行。请先查看进度，或在分析页明确取消后再开始新的分析。
+      </p>
 
       <button
         v-if="current"
@@ -224,8 +259,29 @@ onMounted(initialize)
       </button>
     </section>
 
+    <section
+      v-if="quickRealSources.length"
+      class="quick-real-section"
+      aria-labelledby="quick-real-title"
+    >
+      <div class="section-line"><span>02</span><h2 id="quick-real-title">快速真实分析</h2></div>
+      <p>选一段已授权视频，体验真实 AI 动作理解。分析需要几分钟，结果需要核对。</p>
+      <div class="quick-real-sources" aria-label="按时长排序的真实分析来源">
+        <button
+          v-for="source in quickRealSources"
+          :key="source.id"
+          class="quick-real-source"
+          type="button"
+          :disabled="starting || analysis.isRunning"
+          @click="openQuickRealAnalysis(source, $event)"
+        >
+          {{ formatRoundedDuration(source.duration_seconds) }}
+        </button>
+      </div>
+    </section>
+
     <section v-if="draft.items.length || library.plans.length" class="recent-section" aria-labelledby="recent-title">
-      <div class="section-line"><span>02</span><h2 id="recent-title">接着上次</h2></div>
+      <div class="section-line"><span>03</span><h2 id="recent-title">接着上次</h2></div>
       <div class="recent-links">
         <RouterLink v-if="draft.items.length" to="/plan">
           <span><small>当前方案</small><b>{{ draft.plan.name }}</b></span>
@@ -238,22 +294,48 @@ onMounted(initialize)
       </div>
     </section>
 
-    <details v-if="analysis.sources.length" class="controlled-fallback">
-      <summary>暂时没有合适视频？使用受控示例</summary>
-      <div>
-        <p>示例只用于快速体验完整流程，会明确标注为演示内容。</p>
-        <button
-          v-for="source in analysis.sources.slice(0, 2)"
-          :key="source.id"
-          class="tp-secondary-action"
-          type="button"
-          :disabled="starting"
-          @click="startControlledAnalysis(source.id)"
-        >
-          {{ source.title }}
-        </button>
-      </div>
-    </details>
+    <template v-if="quickRealSource">
+      <button
+        class="quick-real-backdrop"
+        type="button"
+        aria-label="取消快速真实分析"
+        @click="closeQuickRealAnalysis"
+      />
+      <section
+        ref="quickRealDialog"
+        class="quick-real-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="quick-real-dialog-title"
+        aria-describedby="quick-real-dialog-description"
+        tabindex="-1"
+        @keydown="quickRealDialogFocus.onKeydown($event, closeQuickRealAnalysis)"
+      >
+        <p class="tp-kicker">REAL ANALYSIS</p>
+        <h2 id="quick-real-dialog-title">开始真实 AI 分析？</h2>
+        <p id="quick-real-dialog-description">
+          这段视频约 {{ formatRoundedMinutes(quickRealSource.duration_seconds) }} 分钟。分析会调用真实 AI，需要等待几分钟；结果需要核对，你可以编辑或删除不准确的动作。
+        </p>
+        <div class="quick-real-dialog-actions">
+          <button
+            class="tp-quiet-action quick-real-cancel"
+            type="button"
+            data-dialog-initial-focus
+            @click="closeQuickRealAnalysis"
+          >
+            取消
+          </button>
+          <button
+            class="tp-primary-action quick-real-confirm"
+            type="button"
+            :disabled="starting"
+            @click="confirmQuickRealAnalysis"
+          >
+            {{ starting ? '正在开始…' : '确认并开始' }}
+          </button>
+        </div>
+      </section>
+    </template>
   </main>
 </template>
 
@@ -290,9 +372,24 @@ onMounted(initialize)
 .file-picker--secondary > span { border-color: var(--tp-line); font-size: 18px; }
 .capability-copy { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.6; }
 .form-error { margin: 0; color: var(--tp-danger); font-size: 13px; line-height: 1.5; }
+.analysis-running-note { margin: 0; color: var(--tp-primary-readable); font-size: 12px; line-height: 1.6; }
 .start-analysis { width: 100%; min-height: 58px; margin-top: 4px; }
 .start-analysis span { margin-left: auto; font-size: 20px; }
 .retry-capability { justify-self: center; }
+
+.quick-real-section { display: grid; gap: 13px; padding-top: 4px; }
+.quick-real-section > p { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.6; }
+.quick-real-sources { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.quick-real-source { min-height: 48px; border: 1px solid var(--tp-line); border-radius: 14px; color: var(--tp-ink); background: var(--tp-surface); font: 700 16px/1 var(--font-display); }
+.quick-real-source:focus-visible { outline: 2px solid var(--tp-focus); outline-offset: 2px; }
+.quick-real-source:disabled { opacity: .55; }
+
+.quick-real-backdrop { position: fixed; inset: 0; z-index: 70; width: 100%; border: 0; background: rgb(14 19 17 / 50%); backdrop-filter: blur(4px); }
+.quick-real-dialog { position: fixed; right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); z-index: 71; display: grid; max-width: 520px; gap: 13px; margin: auto; padding: 22px; border-radius: 24px; color: var(--tp-ink); background: var(--tp-surface); box-shadow: var(--tp-shadow-float); }
+.quick-real-dialog h2 { margin: 0; font-size: 25px; }
+.quick-real-dialog > p:not(.tp-kicker) { margin: 0; color: var(--tp-muted); font-size: 12px; line-height: 1.65; }
+.quick-real-dialog-actions { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr); gap: 9px; }
+.quick-real-dialog-actions button { min-height: 48px; }
 
 .recent-section { display: grid; gap: 14px; }
 .section-line { display: flex; align-items: baseline; gap: 10px; }
@@ -303,14 +400,15 @@ onMounted(initialize)
 .recent-links b { font-size: 14px; }
 .recent-links strong { color: var(--tp-primary-readable); font: 700 14px/1 var(--font-display); }
 
-.controlled-fallback { border-top: 1px solid var(--tp-line); padding-top: 18px; color: var(--tp-muted); }
-.controlled-fallback summary { min-height: 44px; font-size: 13px; font-weight: 700; }
-.controlled-fallback > div { display: grid; gap: 10px; padding: 6px 0 12px; }
-.controlled-fallback p { margin: 0; font-size: 12px; line-height: 1.6; }
-.controlled-fallback button { justify-content: flex-start; border-radius: 14px; }
-
 @media (min-width: 768px) {
   .home-page { gap: 42px; }
   .ticket-copy { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .quick-real-sources { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .quick-real-source,
+  .quick-real-dialog,
+  .quick-real-backdrop { transition: none; animation: none; }
 }
 </style>

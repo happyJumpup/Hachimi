@@ -1,6 +1,21 @@
 import { expect, test } from '@playwright/test'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+const controlledMediaRoot = fileURLToPath(
+  new URL('../../../../tmp/e2e-sources/', import.meta.url),
+)
 
 test('video result becomes a base plan, resolves uncertainty, and restores from the current plan', async ({ page }) => {
+  await page.route('**/api/v1/sources/*/media', async (route) => {
+    const sourceId = new URL(route.request().url()).pathname.split('/').at(-2) ?? ''
+    expect(sourceId).toMatch(/^e2e-source-\d{2}$/)
+    await route.fulfill({
+      path: path.join(controlledMediaRoot, `${sourceId}.mp4`),
+      contentType: 'video/mp4',
+    })
+  })
+
   await page.goto('/')
   await expect(page.getByRole('heading', { name: /刷到的动作/ })).toBeVisible()
 
@@ -14,8 +29,8 @@ test('video result becomes a base plan, resolves uncertainty, and restores from 
     expect(box!.height).toBeGreaterThanOrEqual(44)
   }
 
-  await page.getByText('暂时没有合适视频？使用受控示例', { exact: true }).click()
-  await page.getByRole('button', { name: /哈基米手臂训练｜本地来源视频/ }).click()
+  await page.getByRole('button', { name: '0:02', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '确认并开始' }).click()
   await expect(page).toHaveURL(/\/analysis$/)
 
   await expect(page.getByRole('heading', { name: '训练方案已准备好' })).toBeVisible()
@@ -38,15 +53,14 @@ test('video result becomes a base plan, resolves uncertainty, and restores from 
   await expect(firstConfirmationSheet).toBeHidden()
 
   await page.getByRole('link', { name: '返回首页' }).click()
-  await page.getByText('暂时没有合适视频？使用受控示例', { exact: true }).click()
-  await page.getByRole('button', { name: /合成测试来源/ }).click()
+  await page.getByRole('button', { name: '0:03', exact: true }).click()
+  await page.getByRole('dialog').getByRole('button', { name: '确认并开始' }).click()
   await expect(page).toHaveURL(/\/analysis$/)
   await expect(page.getByRole('heading', { name: '训练方案已准备好' })).toBeVisible()
   await page.getByRole('button', { name: '查看训练方案' }).click()
   await expect(page.getByRole('dialog', { name: '当前已经有训练方案' })).toBeVisible()
   await page.getByRole('button', { name: /追加/ }).click()
   await expect(page.locator('.plan-card')).toHaveCount(2)
-  await expect(page.getByText(/合成测试来源/)).toBeVisible()
 
   await page.locator('.plan-card').nth(1).locator('.action-summary').click()
   const secondConfirmationSheet = page.locator('.action-sheet')

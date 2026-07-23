@@ -44,6 +44,13 @@
   complete source of at most 300 seconds; longer originals must be cropped
   outside the app before upload. Page load, playback, and seeking must not
   auto-create a run.
+- The device-demo production profile uses one public analysis slot and no judge
+  slot. A session and its direct peer IP may each start only one analysis per
+  600 seconds. Keep the legacy access-session endpoint compatible, but do not
+  expose a judge-code control in the product or let a judge cookie add capacity.
+- The competition catalog contains exactly five manifest-backed controlled
+  sources. Public UI may show their rounded durations only, and every confirmed
+  start must create a fresh real Analysis Run rather than replay cached output.
 - Progress uses real processed source time and read-only intermediate discovery.
   Reliable partial results must expose coverage gaps and a per-gap retry; a
   provider or system failure must never be presented as “no action evidence.”
@@ -60,6 +67,11 @@
   non-blocking coach role, and five training presentation states are not
   deferred. Keep the current calorie contract until a separate decision changes
   it.
+- GYMTI model enhancement is independent of video-analysis admission. Production
+  uses the configured Ark/Doubao seam with a non-blocking global concurrency of
+  three; overflow, timeout, provider errors, or invalid output must immediately
+  use the deterministic local result. Send only contract-approved stable IDs,
+  semantic labels, score state, candidate IDs, and reason codes.
 
 ## Experience boundaries
 

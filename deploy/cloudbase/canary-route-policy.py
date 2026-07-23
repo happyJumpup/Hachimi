@@ -26,8 +26,8 @@ def resolve_canary_route(payload: Any) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise CanaryRoutePolicyError("canary route input must be a JSON object")
     mode = payload.get("mode")
-    if mode not in {"enable", "restore"}:
-        raise CanaryRoutePolicyError("route mode must be enable or restore")
+    if mode not in {"enable", "promote", "restore"}:
+        raise CanaryRoutePolicyError("route mode must be enable, promote, or restore")
     stable_version = _required_string(payload, "stable_version")
     candidate_version = _required_string(payload, "candidate_version")
     if not VERSION_PATTERN.fullmatch(stable_version) or not VERSION_PATTERN.fullmatch(
@@ -36,21 +36,27 @@ def resolve_canary_route(payload: Any) -> dict[str, object]:
         raise CanaryRoutePolicyError("version name has an invalid format")
     if stable_version == candidate_version:
         raise CanaryRoutePolicyError("stable and candidate versions must differ")
-    if mode == "restore":
+    if mode in {"promote", "restore"}:
+        if "routing_header_name" in payload or "routing_header_value" in payload:
+            raise CanaryRoutePolicyError(
+                "FLOW route modes do not accept routing headers"
+            )
+        stable_ratio = 0 if mode == "promote" else 100
+        candidate_ratio = 100 if mode == "promote" else 0
         return {
             "GrayType": "gray",
             "TrafficType": "FLOW",
-            "GrayFlowRatio": 0,
+            "GrayFlowRatio": candidate_ratio,
             "VersionFlowItems": [
                 {
                     "VersionName": stable_version,
-                    "FlowRatio": 100,
+                    "FlowRatio": stable_ratio,
                     "IsDefaultPriority": True,
                     "Priority": 1,
                 },
                 {
                     "VersionName": candidate_version,
-                    "FlowRatio": 0,
+                    "FlowRatio": candidate_ratio,
                     "IsDefaultPriority": False,
                     "Priority": 2,
                 },

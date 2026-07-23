@@ -130,7 +130,7 @@ describe('API client', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       question_id: 'q06_correction_tone',
       source: 'llm',
-      model: 'deepseek-chat',
+      model: 'doubao-seed-2-0-mini-260428',
       version: 'gymti-questionnaire.v1',
     }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)

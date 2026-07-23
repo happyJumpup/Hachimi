@@ -269,6 +269,59 @@ async def test_judge_and_public_capacity_are_isolated_and_full_pool_returns_429(
 
 
 @pytest.mark.asyncio
+async def test_legacy_judge_session_cannot_bypass_the_public_single_capacity(
+    tmp_path: Path,
+) -> None:
+    access = AccessManager(
+        cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
+        judge_access_code="judge-demo-code",
+        judge_concurrency=0,
+        public_concurrency=1,
+    )
+    app = create_app(
+        catalog=two_source_catalog(tmp_path),
+        pipeline=SlowPipeline(),
+        access=access,
+    )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("203.0.113.1", 1001)),
+            base_url="https://test",
+        ) as public_client,
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("203.0.113.2", 1002)),
+            base_url="https://test",
+        ) as legacy_judge,
+    ):
+        public_run = await public_client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-01", "trigger_seconds": 10},
+        )
+        await legacy_judge.get("/api/v1/access/session")
+        upgraded = await legacy_judge.post(
+            "/api/v1/access/session",
+            json={"access_code": "judge-demo-code"},
+            headers={"Origin": "https://test"},
+        )
+        rejected = await legacy_judge.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-02", "trigger_seconds": 10},
+        )
+
+        assert public_run.status_code == 202
+        assert upgraded.status_code == 200
+        assert upgraded.json() == {
+            "tier": "judge",
+            "can_analyze": False,
+            "retry_after_seconds": None,
+        }
+        assert rejected.status_code == 429
+        assert rejected.headers["retry-after"] == "15"
+
+        await public_client.delete(f"/api/v1/analysis-runs/{public_run.json()['id']}")
+
+
+@pytest.mark.asyncio
 async def test_public_session_is_limited_to_one_analysis_per_ten_minutes(tmp_path: Path) -> None:
     app = create_app(
         catalog=two_source_catalog(tmp_path),
@@ -295,6 +348,68 @@ async def test_public_session_is_limited_to_one_analysis_per_ten_minutes(tmp_pat
     assert first.status_code == 202
     assert second.status_code == 429
     assert second.headers["retry-after"] == "600"
+
+
+@pytest.mark.asyncio
+async def test_access_session_view_includes_the_client_ip_cooldown(tmp_path: Path) -> None:
+    app = create_app(
+        catalog=two_source_catalog(tmp_path),
+        pipeline=ImmediatePipeline(),
+        access=access_manager(public_concurrency=1),
+    )
+    first_transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1001))
+    second_transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1002))
+    async with (
+        httpx.AsyncClient(transport=first_transport, base_url="https://test") as first_client,
+        httpx.AsyncClient(transport=second_transport, base_url="https://test") as second_client,
+    ):
+        started = await first_client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-01", "trigger_seconds": 10},
+        )
+        for _ in range(50):
+            completed = await first_client.get(f"/api/v1/analysis-runs/{started.json()['id']}")
+            if completed.json()["status"] == "completed":
+                break
+            await asyncio.sleep(0.01)
+        session = await second_client.get("/api/v1/access/session")
+
+    assert session.status_code == 200
+    assert session.json() == {
+        "tier": "public",
+        "can_analyze": False,
+        "retry_after_seconds": 600,
+    }
+
+
+@pytest.mark.asyncio
+async def test_public_session_and_ip_capacity_recovers_at_the_600_second_boundary() -> None:
+    now = [0.0]
+    access = AccessManager(
+        cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
+        judge_access_code="judge-demo-code",
+        judge_concurrency=0,
+        public_concurrency=1,
+        public_attempt_limit=1,
+        public_attempt_window_seconds=600,
+        time_source=lambda: now[0],
+    )
+    session = access.resolve(None)
+    lease = await access.reserve(
+        session,
+        source_id="arm-01",
+        client_ip="198.51.100.10",
+    )
+    await lease.release()
+    fresh_cookie = access.resolve(None)
+
+    now[0] = 599.0
+    assert access.view(session, client_ip="198.51.100.10").retry_after_seconds == 1
+    assert access.view(fresh_cookie, client_ip="198.51.100.10").retry_after_seconds == 1
+
+    now[0] = 600.0
+    assert access.view(session, client_ip="198.51.100.10").can_analyze is True
+    assert access.view(fresh_cookie, client_ip="198.51.100.10").can_analyze is True
 
 
 @pytest.mark.asyncio
@@ -402,6 +517,36 @@ async def test_untrusted_direct_client_cannot_bypass_ip_limit_with_forwarded_hea
     assert first.status_code == 202
     assert second.status_code == 429
     assert second.headers["retry-after"] == "600"
+
+
+@pytest.mark.asyncio
+async def test_public_cooldown_cannot_cancel_an_active_run_with_another_source(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        catalog=two_source_catalog(tmp_path),
+        pipeline=SlowPipeline(),
+        access=access_manager(public_concurrency=1),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        first = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-01"},
+        )
+        second = await client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-02"},
+        )
+        first_view = await client.get(f"/api/v1/analysis-runs/{first.json()['id']}")
+
+        assert first.status_code == 202
+        assert second.status_code == 429
+        assert second.headers["retry-after"] == "600"
+        assert first_view.json()["status"] in {"queued", "running"}
+
+        await client.delete(f"/api/v1/analysis-runs/{first.json()['id']}")
 
 
 @pytest.mark.asyncio

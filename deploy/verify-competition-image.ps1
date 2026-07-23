@@ -14,9 +14,11 @@ $suffix = [Guid]::NewGuid().ToString('N')
 $containerName = "trainpal-image-smoke-$suffix"
 $modelTrapName = "trainpal-gymti-model-trap-$suffix"
 $networkName = "trainpal-image-smoke-$suffix"
+$fixtureVolumeName = "trainpal-image-fixture-$suffix"
 $containerStarted = $false
 $modelTrapStarted = $false
 $networkCreated = $false
+$fixtureVolumeCreated = $false
 
 function Invoke-DockerChecked {
     param([Parameter(Mandatory)][string[]]$Arguments)
@@ -84,14 +86,82 @@ $encodedContainerAudit = [Convert]::ToBase64String(
 )
 $containerAuditCommand = "printf '%s' '$encodedContainerAudit' | base64 -d | /bin/sh -eu"
 
+$fixtureSetup = @'
+mkdir -p /audit/media
+/opt/trainpal/ffmpeg/bin/ffmpeg \
+  -hide_banner -loglevel error \
+  -f lavfi -i color=c=black:s=16x16:r=1 \
+  -t 1 -c:v mpeg4 -an /audit/media/fixture.mp4
+for index in 1 2 3 4 5; do
+  cp /audit/media/fixture.mp4 "/audit/media/media-${index}.mp4"
+done
+rm /audit/media/fixture.mp4
+/workspace/services/analysis-api/.venv/bin/python - <<'PY'
+import hashlib
+import json
+from pathlib import Path
+
+media_root = Path("/audit/media")
+sources = []
+for index in range(1, 6):
+    media_path = media_root / f"media-{index}.mp4"
+    sources.append(
+        {
+            "id": f"audit-source-{index}",
+            "title": "Runtime image verification fixture",
+            "media_path": media_path.name,
+            "duration_seconds": 1.0,
+            "sha256": hashlib.sha256(media_path.read_bytes()).hexdigest(),
+            "origin_url": None,
+        }
+    )
+Path("/audit/media-manifest.json").write_text(
+    json.dumps({"version": 1, "sources": sources}),
+    encoding="utf-8",
+)
+PY
+chmod -R a+rX /audit
+'@
+$fixtureSetup = $fixtureSetup.Replace("`r`n", "`n")
+$encodedFixtureSetup = [Convert]::ToBase64String(
+    [Text.Encoding]::UTF8.GetBytes($fixtureSetup)
+)
+$fixtureSetupCommand = "printf '%s' '$encodedFixtureSetup' | base64 -d | /bin/sh -eu"
+
 $modelTrapCode = @'
+import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class TrapHandler(BaseHTTPRequestHandler):
+    call_count = 0
+
     def do_POST(self):
-        print("unexpected-gymti-model-call", flush=True)
-        self.send_response(503)
+        content_length = int(self.headers.get("Content-Length", "0"))
+        self.rfile.read(content_length)
+        type(self).call_count += 1
+        print("gymti-provider-call", flush=True)
+        if self.path != "/v1/chat/completions":
+            self.send_error(404)
+            return
+        if self.headers.get("Authorization") != "Bearer release-smoke-trap-key":
+            self.send_error(401)
+            return
+        if self.call_count == 4:
+            self.send_response(503)
+            self.end_headers()
+            return
+        if self.call_count == 1:
+            content = json.dumps({"question_id": "q01_energy_after_work"})
+        elif self.call_count == 2:
+            content = json.dumps({"text": "Provider-backed image verification narrative."})
+        else:
+            content = json.dumps({"question_id": "not-a-legal-candidate"})
+        payload = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
+        self.wfile.write(payload)
 
     def log_message(self, _format, *_args):
         return
@@ -141,6 +211,24 @@ try {
         "from pathlib import Path; from hakimi_analysis.readiness import validate_ffmpeg_build_receipt; raise SystemExit(0 if validate_ffmpeg_build_receipt(Path('/opt/trainpal/ffmpeg/bin/ffmpeg'), Path('/opt/trainpal/ffmpeg/receipt.json')) else 1)"
     ) | Out-Null
 
+    Invoke-DockerChecked @('volume', 'create', $fixtureVolumeName) | Out-Null
+    $fixtureVolumeCreated = $true
+    Invoke-DockerChecked @(
+        'run', '--rm',
+        '--user', '0:0',
+        '--volume', "${fixtureVolumeName}:/audit",
+        '--entrypoint', '/bin/sh',
+        $ImageRef,
+        '-eu', '-c', $fixtureSetupCommand
+    ) | Out-Null
+    Invoke-DockerChecked @(
+        'run', '--rm',
+        '--volume', "${fixtureVolumeName}:/audit:ro",
+        '--entrypoint', '/workspace/services/analysis-api/.venv/bin/python',
+        $ImageRef,
+        '-c',
+        "from pathlib import Path; from hakimi_analysis.media import probe_duration_sync; from hakimi_analysis.sources import SourceCatalog; catalog = SourceCatalog.from_manifest(manifest_path=Path('/audit/media-manifest.json'), media_root=Path('/audit/media'), public_media_base_url='https://image-audit.invalid/media', duration_probe=probe_duration_sync); raise SystemExit(0 if catalog.source_count == 5 else 1)"
+    ) | Out-Null
     Invoke-DockerChecked @('network', 'create', $networkName) | Out-Null
     $networkCreated = $true
     Invoke-DockerChecked @(
@@ -168,6 +256,7 @@ try {
         '--read-only',
         '--tmpfs', '/tmp:rw,noexec,nosuid,size=64m,mode=1777',
         '--tmpfs', '/workspace/tmp/analysis-runs:rw,noexec,nosuid,size=128m,uid=10001,gid=10001,mode=0700',
+        '--volume', "${fixtureVolumeName}:/runtime-fixture:ro",
         '--env', 'APP_ENV=production',
         '--env', 'ANALYSIS_PROVIDER=cloud',
         '--env', 'ARK_API_KEY=image-audit-provider-key',
@@ -177,12 +266,17 @@ try {
         '--env', 'CORS_ORIGINS=https://image-audit.invalid',
         '--env', 'LOCAL_UPLOAD_ENABLED=true',
         '--env', 'TRUSTED_PROXY_CIDRS=',
-        '--env', 'PUBLIC_ANALYSIS_CONCURRENCY=0',
-        '--env', 'JUDGE_ANALYSIS_CONCURRENCY=3',
+        '--env', 'PUBLIC_ANALYSIS_CONCURRENCY=1',
+        '--env', 'JUDGE_ANALYSIS_CONCURRENCY=0',
+        '--env', 'SOURCE_MANIFEST_PATH=/runtime-fixture/media-manifest.json',
+        '--env', 'SOURCE_MEDIA_ROOT=/runtime-fixture/media',
+        '--env', 'PUBLIC_MEDIA_BASE_URL=https://image-audit.invalid/media',
         '--env', 'GYMTI_LLM_ENABLED=true',
         '--env', 'GYMTI_LLM_RETENTION_CONFIRMED=true',
+        '--env', 'GYMTI_LLM_CONCURRENCY=3',
         '--env', 'GYMTI_LLM_API_KEY=release-smoke-trap-key',
-        '--env', "GYMTI_LLM_BASE_URL=http://${modelTrapName}:8081/v1",
+        '--env', 'GYMTI_LLM_MODEL=doubao-seed-2-0-mini-260428',
+        '--env', 'GYMTI_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3',
         '--env', 'GYMTI_LLM_MAX_ATTEMPTS=1',
         '--env', 'GYMTI_LLM_TIMEOUT_SECONDS=1',
         '--publish', '127.0.0.1::8000',
@@ -224,7 +318,7 @@ try {
         $readyBody = $readyResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         $ready = $readyBody | ConvertFrom-Json
         if (-not $readyResponse.IsSuccessStatusCode -or $ready.status -ne 'ready') {
-            throw 'production ready endpoint did not accept the local-upload-only image'
+            throw 'production ready endpoint did not accept the runtime media fixture'
         }
 
         foreach ($route in @('/', '/mine')) {
@@ -244,18 +338,32 @@ try {
     }
 
     $gymtiSmoke = Get-Content -Raw (Join-Path $PSScriptRoot 'smoke-gymti-image.py')
-    $gymtiSmoke | & docker exec --interactive $containerName `
+    $gymtiSmoke | & docker exec --interactive `
+        --env 'APP_ENV=test' `
+        --env 'ANALYSIS_PROVIDER=test' `
+        --env 'GYMTI_LLM_ENABLED=true' `
+        --env 'GYMTI_LLM_RETENTION_CONFIRMED=true' `
+        --env 'GYMTI_LLM_CONCURRENCY=3' `
+        --env 'GYMTI_LLM_API_KEY=release-smoke-trap-key' `
+        --env 'GYMTI_LLM_MODEL=image-audit-trap-model' `
+        --env "GYMTI_LLM_BASE_URL=http://${modelTrapName}:8081/v1" `
+        --env 'GYMTI_LLM_MAX_ATTEMPTS=1' `
+        --env 'GYMTI_LLM_TIMEOUT_SECONDS=1' `
+        $containerName `
         /workspace/services/analysis-api/.venv/bin/python -
     if ($LASTEXITCODE -ne 0) {
-        throw 'anonymous GYMTI image smoke failed'
+        throw 'public GYMTI image smoke failed'
     }
 
     $modelLogs = (& docker logs $modelTrapName 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0) {
         throw 'could not inspect GYMTI model trap logs'
     }
-    if ($modelLogs.Contains('unexpected-gymti-model-call')) {
-        throw 'anonymous GYMTI image smoke reached the configured model'
+    $providerCalls = @(
+        $modelLogs -split "`r?`n" | Where-Object { $_.Trim() -eq 'gymti-provider-call' }
+    ).Count
+    if ($providerCalls -ne 4) {
+        throw 'GYMTI image smoke did not exercise the configured provider contract'
     }
     $modelTrapRunning = (
         Invoke-DockerChecked @('inspect', '--format', '{{.State.Running}}', $modelTrapName)
@@ -266,12 +374,15 @@ try {
 
     Write-Output "competition image verification passed: $ImageRef"
 } catch {
+    $previousCatchPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     if ($containerStarted) {
         & docker logs $containerName 2>$null
     }
     if ($modelTrapStarted) {
         & docker logs $modelTrapName 2>$null
     }
+    $ErrorActionPreference = $previousCatchPreference
     throw
 } finally {
     $previousErrorActionPreference = $ErrorActionPreference
@@ -284,6 +395,9 @@ try {
     }
     if ($networkCreated) {
         & docker network rm $networkName 2>$null | Out-Null
+    }
+    if ($fixtureVolumeCreated) {
+        & docker volume rm $fixtureVolumeName 2>$null | Out-Null
     }
     $ErrorActionPreference = $previousErrorActionPreference
 

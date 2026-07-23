@@ -155,8 +155,13 @@ class AccessManager:
         encoded_signature = base64.urlsafe_b64encode(signature).rstrip(b"=")
         return f"{encoded.decode('ascii')}.{encoded_signature.decode('ascii')}"
 
-    def view(self, session: AccessSession) -> AccessSessionView:
-        retry_after = self._rate_retry_after(session.tier, session.id, None)
+    def view(
+        self,
+        session: AccessSession,
+        *,
+        client_ip: str | None = None,
+    ) -> AccessSessionView:
+        retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
         can_analyze = (
             session.id not in self._active_by_session
             and self._active_counts[session.tier] < self._capacities[session.tier]
@@ -183,11 +188,11 @@ class AccessManager:
         client_ip: str,
     ) -> AnalysisLease:
         async with self._lock:
-            if session.id in self._active_by_session:
-                raise AdmissionDenied(retry_after_seconds=1)
             retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
             if retry_after is not None:
                 raise AdmissionDenied(retry_after_seconds=retry_after)
+            if session.id in self._active_by_session:
+                raise AdmissionDenied(retry_after_seconds=1)
             if self._active_counts[session.tier] >= self._capacities[session.tier]:
                 raise AdmissionDenied(retry_after_seconds=15)
             lease = AnalysisLease(

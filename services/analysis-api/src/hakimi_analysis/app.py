@@ -76,6 +76,25 @@ class _RequestBodyTooLarge(OSError):
     pass
 
 
+class _NonBlockingConcurrencyGate:
+    """Single-worker admission gate that never queues callers."""
+
+    def __init__(self, capacity: int) -> None:
+        if capacity < 1:
+            raise ValueError("GYMTI model concurrency must be positive")
+        self._capacity = capacity
+        self._active = 0
+
+    def try_acquire(self) -> bool:
+        if self._active >= self._capacity:
+            return False
+        self._active += 1
+        return True
+
+    def release(self) -> None:
+        self._active = max(0, self._active - 1)
+
+
 class LocalUploadBodyLimitMiddleware:
     def __init__(
         self,
@@ -86,6 +105,8 @@ class LocalUploadBodyLimitMiddleware:
         development_origins: list[str],
         access_manager: AccessManager,
         readiness_probe: ReadinessProbe,
+        trusted_proxy_networks: tuple[IPv4Network | IPv6Network, ...],
+        ingress_gate: _NonBlockingConcurrencyGate,
     ) -> None:
         self._app = app
         self._max_body_bytes = max_body_bytes
@@ -93,6 +114,8 @@ class LocalUploadBodyLimitMiddleware:
         self._development_origins = development_origins
         self._access_manager = access_manager
         self._readiness_probe = readiness_probe
+        self._trusted_proxy_networks = trusted_proxy_networks
+        self._ingress_gate = ingress_gate
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
@@ -128,21 +151,51 @@ class LocalUploadBodyLimitMiddleware:
                 await response(scope, receive, send)
                 return
         session = self._access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
-        active = await self._access_manager.active_run(session.id)
-        if active is None:
-            access_view = self._access_manager.view(session)
-            if not access_view.can_analyze:
-                retry_after = access_view.retry_after_seconds or 15
-                response = JSONResponse(
-                    status_code=429,
-                    content={"detail": "真实动作分析暂时繁忙，请稍后重试"},
-                    headers={
-                        "Cache-Control": "no-store",
-                        "Retry-After": str(retry_after),
-                    },
-                )
-                await response(scope, receive, send)
-                return
+        try:
+            client_ip = _client_ip(request, self._trusted_proxy_networks)
+        except HTTPException as error:
+            response = JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail},
+                headers={"Cache-Control": "no-store"},
+            )
+            await response(scope, receive, send)
+            return
+        access_view = self._access_manager.view(session, client_ip=client_ip)
+        if not access_view.can_analyze:
+            retry_after = access_view.retry_after_seconds or 15
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": "真实动作分析暂时繁忙，请稍后重试"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": str(retry_after),
+                },
+            )
+            await response(scope, receive, send)
+            return
+        if not self._ingress_gate.try_acquire():
+            response = JSONResponse(
+                status_code=429,
+                content={"detail": "真实动作分析暂时繁忙，请稍后重试"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "Retry-After": "15",
+                },
+            )
+            await response(scope, receive, send)
+            return
+        try:
+            await self._handle_admitted_request(scope, receive, send)
+        finally:
+            self._ingress_gate.release()
+
+    async def _handle_admitted_request(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
         content_length = Headers(scope=scope).get("content-length")
         if content_length is not None:
             try:
@@ -222,6 +275,7 @@ def create_app(
     local_duration_probe: Callable[[Path], float] | None = None,
     gymti_service: GymtiService | None = None,
     gymti_llm_enabled: bool = False,
+    gymti_llm_concurrency: int = 3,
     release_sha: str | None = None,
 ) -> FastAPI:
     if (
@@ -252,6 +306,8 @@ def create_app(
         cookie_secret=secrets.token_urlsafe(32),
         judge_access_code=secrets.token_urlsafe(16),
     )
+    local_upload_ingress_gate = _NonBlockingConcurrencyGate(1)
+    gymti_model_gate = _NonBlockingConcurrencyGate(gymti_llm_concurrency)
     readiness_probe = readiness or StaticReadiness(
         "provider_configuration_invalid" if app_env == "production" else None
     )
@@ -294,6 +350,8 @@ def create_app(
             development_origins=resolved_cors_origins,
             access_manager=access_manager,
             readiness_probe=readiness_probe,
+            trusted_proxy_networks=trusted_proxy_networks,
+            ingress_gate=local_upload_ingress_gate,
         )
     app.add_middleware(
         CORSMiddleware,
@@ -319,28 +377,19 @@ def create_app(
             local_upload_max_bytes=local_upload_max_bytes,
         )
 
-    async def reserve_gymti_model(
+    def reserve_gymti_model(
         request: Request,
-    ) -> tuple[AccessSession, AnalysisLease | None]:
-        """Admit a paid GYMTI model request only through the existing judge gate."""
+    ) -> tuple[AccessSession, bool]:
+        """Admit model work immediately or select the request's local fallback."""
 
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         if (
             not gymti_llm_enabled
             or gymti_service is None
             or not gymti_service.model_available
-            or session.tier is not AccessTier.JUDGE
         ):
-            return session, None
-        try:
-            lease = await access_manager.reserve(
-                session,
-                source_id="gymti-llm",
-                client_ip=_client_ip(request, trusted_proxy_networks),
-            )
-        except AdmissionDenied:
-            return session, None
-        return session, lease
+            return session, False
+        return session, gymti_model_gate.try_acquire()
 
     @app.post(
         "/api/v1/gymti/next-question",
@@ -375,20 +424,20 @@ def create_app(
             )
         except GymtiContextError as error:
             raise HTTPException(status_code=422, detail="GYMTI 问卷上下文无效") from error
-        session, model_lease = await reserve_gymti_model(request)
+        session, model_admitted = reserve_gymti_model(request)
         try:
             selected = await gymti_service.next_question(
                 questionnaire_version=payload.questionnaire_version,
                 scoring_version=payload.scoring_version,
                 answered_question_option_ids=answered_question_option_ids,
                 candidate_question_ids=payload.candidate_question_ids,
-                allow_model=model_lease is not None,
+                allow_model=model_admitted,
             )
         except GymtiContextError as error:
             raise HTTPException(status_code=422, detail="GYMTI 问卷上下文无效") from error
         finally:
-            if model_lease is not None:
-                await model_lease.release()
+            if model_admitted:
+                gymti_model_gate.release()
         _set_access_cookie(response, access_manager, session)
         response.headers["Cache-Control"] = "no-store"
         return GymtiNextQuestionView(
@@ -434,7 +483,7 @@ def create_app(
             )
         except GymtiContextError as error:
             raise HTTPException(status_code=422, detail="GYMTI 正式结果无效") from error
-        session, model_lease = await reserve_gymti_model(request)
+        session, model_admitted = reserve_gymti_model(request)
         try:
             snapshot = await gymti_service.result_narrative(
                 questionnaire_version=payload.questionnaire_version,
@@ -444,13 +493,13 @@ def create_app(
                 secondary_result_id=payload.secondary_result_id,
                 coach_style_id=payload.coach_style_id,
                 reason_codes=payload.reason_codes,
-                allow_model=model_lease is not None,
+                allow_model=model_admitted,
             )
         except GymtiContextError as error:
             raise HTTPException(status_code=422, detail="GYMTI 正式结果无效") from error
         finally:
-            if model_lease is not None:
-                await model_lease.release()
+            if model_admitted:
+                gymti_model_gate.release()
         _set_access_cookie(response, access_manager, session)
         response.headers["Cache-Control"] = "no-store"
         return GymtiNarrativeSnapshotView(
@@ -485,7 +534,10 @@ def create_app(
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         _set_access_cookie(response, access_manager, session)
         response.headers["Cache-Control"] = "no-store"
-        return await access_view(session)
+        return await access_view(
+            session,
+            client_ip=_client_ip(request, trusted_proxy_networks),
+        )
 
     @app.post("/api/v1/access/session", response_model=AccessSessionView)
     async def upgrade_access_session(
@@ -522,10 +574,17 @@ def create_app(
             )
         _set_access_cookie(response, access_manager, upgraded)
         response.headers["Cache-Control"] = "no-store"
-        return await access_view(upgraded)
+        return await access_view(
+            upgraded,
+            client_ip=_client_ip(request, trusted_proxy_networks),
+        )
 
-    async def access_view(session: AccessSession) -> AccessSessionView:
-        view = access_manager.view(session)
+    async def access_view(
+        session: AccessSession,
+        *,
+        client_ip: str | None = None,
+    ) -> AccessSessionView:
+        view = access_manager.view(session, client_ip=client_ip)
         if app_env != "production":
             return view
         failure_code = await asyncio.to_thread(readiness_probe.check)
@@ -600,7 +659,12 @@ def create_app(
             raise HTTPException(status_code=404, detail="受控视频源不存在") from error
         session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
         active = await access_manager.active_run(session.id)
-        if active is not None and active.source_id != source.id and active.run_id is not None:
+        if (
+            session.tier == AccessTier.JUDGE
+            and active is not None
+            and active.source_id != source.id
+            and active.run_id is not None
+        ):
             with suppress(KeyError):
                 await manager.cancel(active.run_id, owner_session_id=session.id)
         try:
@@ -749,7 +813,12 @@ def create_app(
 
             session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
             active = await access_manager.active_run(session.id)
-            if active is not None and active.source_id != source.id and active.run_id is not None:
+            if (
+                session.tier == AccessTier.JUDGE
+                and active is not None
+                and active.source_id != source.id
+                and active.run_id is not None
+            ):
                 with suppress(KeyError):
                     await manager.cancel(active.run_id, owner_session_id=session.id)
             try:

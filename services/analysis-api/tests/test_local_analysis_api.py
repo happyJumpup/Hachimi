@@ -12,7 +12,7 @@ import imageio_ffmpeg
 import pytest
 from fastapi.routing import APIRoute
 
-from hakimi_analysis.access import AccessManager
+from hakimi_analysis.access import ACCESS_COOKIE_NAME, AccessManager
 from hakimi_analysis.app import create_app
 from hakimi_analysis.bootstrap import DeterministicTestPipeline
 from hakimi_analysis.media import LocalMediaProcessor
@@ -476,6 +476,160 @@ async def test_unavailable_session_capacity_is_rejected_before_reading_body(
     assert response.headers["cache-control"] == "no-store"
     assert body.consumed is False
     assert probe_called is False
+    assert not upload_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_same_ip_cooldown_is_rejected_before_reading_a_fresh_cookie_upload(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    body = FailsIfConsumedStream()
+    access = make_test_access()
+    previous_session = access.resolve(None)
+    lease = await access.reserve(
+        previous_session,
+        source_id="local:previous",
+        client_ip="198.51.100.10",
+    )
+    await lease.release()
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=access,
+        local_upload_temp_root=upload_root,
+        local_duration_probe=lambda _: 10.0,
+    )
+    transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1002))
+    async with httpx.AsyncClient(transport=transport, base_url="https://test") as client:
+        response = await client.post(
+            "/api/v1/analysis-runs/local",
+            content=body,
+            headers={
+                "Content-Type": "multipart/form-data; boundary=not-consumed",
+                "Content-Length": "1",
+            },
+        )
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "600"
+    assert response.headers["cache-control"] == "no-store"
+    assert body.consumed is False
+    assert not upload_root.exists()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_fresh_session_upload_is_rejected_before_reading_second_body(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    second_body = FailsIfConsumedStream()
+    probe_started = threading.Event()
+    release_probe = threading.Event()
+    probe_calls = 0
+
+    def duration_probe(_: Path) -> float:
+        nonlocal probe_calls
+        probe_calls += 1
+        probe_started.set()
+        assert release_probe.wait(3)
+        return 20.0
+
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(public_attempt_limit=10),
+        local_upload_temp_root=upload_root,
+        local_duration_probe=duration_probe,
+    )
+    first_transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1001))
+    second_transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1002))
+    async with (
+        httpx.AsyncClient(transport=first_transport, base_url="https://test") as first_client,
+        httpx.AsyncClient(transport=second_transport, base_url="https://test") as second_client,
+    ):
+        first_task = asyncio.create_task(
+            first_client.post(
+                "/api/v1/analysis-runs/local",
+                files={"media": ("first.mp4", b"first-video", "video/mp4")},
+                data={"local_source_id": LOCAL_SOURCE_ID},
+            )
+        )
+        assert await asyncio.to_thread(probe_started.wait, 1)
+        try:
+            rejected = await second_client.post(
+                "/api/v1/analysis-runs/local",
+                content=second_body,
+                headers={
+                    "Content-Type": "multipart/form-data; boundary=not-consumed",
+                    "Content-Length": "1",
+                },
+            )
+
+            assert rejected.status_code == 429
+            assert rejected.headers["retry-after"] == "15"
+            assert rejected.headers["cache-control"] == "no-store"
+            assert second_body.consumed is False
+            assert probe_calls == 1
+            assert len(list(upload_root.iterdir())) == 1
+        finally:
+            release_probe.set()
+
+        first = await first_task
+        assert first.status_code == 202
+        await wait_for_status(first_client, first.json()["id"], "completed")
+
+        retried = await first_client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("retry.mp4", b"retry-video", "video/mp4")},
+            data={"local_source_id": SECOND_LOCAL_SOURCE_ID},
+        )
+        assert retried.status_code == 202
+        await wait_for_status(first_client, retried.json()["id"], "completed")
+
+    assert probe_calls == 2
+    assert list(upload_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_active_session_upload_is_rejected_before_reading_a_second_body(
+    tmp_path: Path,
+) -> None:
+    upload_root = tmp_path / "uploads"
+    body = FailsIfConsumedStream()
+    access = make_test_access()
+    session = access.resolve(None)
+    lease = await access.reserve(
+        session,
+        source_id="local:active",
+        client_ip="198.51.100.10",
+    )
+    app = create_app(
+        pipeline=RelativeCandidatePipeline(),
+        access=access,
+        local_upload_temp_root=upload_root,
+        local_duration_probe=lambda _: 10.0,
+    )
+    transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1002))
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="https://test",
+            cookies={ACCESS_COOKIE_NAME: access.encode(session)},
+        ) as client:
+            response = await client.post(
+                "/api/v1/analysis-runs/local",
+                content=body,
+                headers={
+                    "Content-Type": "multipart/form-data; boundary=not-consumed",
+                    "Content-Length": "1",
+                },
+            )
+    finally:
+        await lease.release()
+
+    assert response.status_code == 429
+    assert response.headers["retry-after"] == "600"
+    assert response.headers["cache-control"] == "no-store"
+    assert body.consumed is False
     assert not upload_root.exists()
 
 
@@ -1153,12 +1307,14 @@ async def test_terminal_cleanup_failure_is_not_silently_reported_as_completed(
 
 
 @pytest.mark.asyncio
-async def test_replacing_the_local_source_cancels_only_the_previous_run(tmp_path: Path) -> None:
+async def test_a_second_local_source_cannot_replace_the_active_public_run(
+    tmp_path: Path,
+) -> None:
     pipeline = BlockingCapturePipeline()
     upload_root = tmp_path / "uploads"
     app = create_app(
         pipeline=pipeline,
-        access=make_test_access(public_attempt_limit=10),
+        access=make_test_access(),
         local_upload_temp_root=upload_root,
         local_duration_probe=lambda _: 20.0,
     )
@@ -1181,22 +1337,20 @@ async def test_replacing_the_local_source_cancels_only_the_previous_run(tmp_path
             files={"media": ("second.mp4", b"second-video", "video/mp4")},
             data={"local_source_id": SECOND_LOCAL_SOURCE_ID},
         )
-        for _ in range(100):
-            if len(pipeline.sources) == 2:
-                break
-            await asyncio.sleep(0.01)
-        old_view = await client.get(f"/api/v1/analysis-runs/{first.json()['id']}")
+        first_view = await client.get(f"/api/v1/analysis-runs/{first.json()['id']}")
 
         assert first.status_code == 202
-        assert second.status_code == 202
-        assert old_view.json()["status"] == "cancelled"
-        assert LOCAL_SOURCE_ID in pipeline.cancelled_source_ids
-        assert not first_path.exists()
-        assert pipeline.sources[1].path.is_file()
+        assert second.status_code == 429
+        assert second.headers["retry-after"] == "600"
+        assert first_view.json()["status"] == "running"
+        assert pipeline.cancelled_source_ids == set()
+        assert first_path.is_file()
+        assert len(pipeline.sources) == 1
+        assert len(list(upload_root.iterdir())) == 1
 
-        await client.delete(f"/api/v1/analysis-runs/{second.json()['id']}")
+        await client.delete(f"/api/v1/analysis-runs/{first.json()['id']}")
 
-    assert not pipeline.sources[1].path.exists()
+    assert not first_path.exists()
     assert list(upload_root.iterdir()) == []
 
 

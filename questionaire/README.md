@@ -2,6 +2,8 @@
 
 > 状态：参考原型。该目录保留独立问卷的原始实现与素材，用于设计和实现追溯；TrainPal 正式实现位于 `apps/web` 与 `services/analysis-api`。本目录不参与根工作区测试、CloudBase 源码包、容器构建或线上部署。
 
+> 本目录中的 DeepSeek 环境变量、请求载荷、日志和 API 仅描述历史参考原型，不是当前生产配置或隐私合同。竞赛生产路线以 [ADR-0044](../docs/adr/0044-gymti-uses-ark-doubao-minimal-data-and-independent-concurrency.md) 为准；DeepSeek 只保留为待发 Issue #5 的脱敏评估输入。
+
 `questionaire` 是一个可独立运行的 GYMTI 健身人格与哈基米教练匹配问卷。
 
 它会在 5-8 道题内判断用户的 GYMTI 健身人格，并按匹配度推荐哈基米教练。人格结果固定，用户如果不满意默认哈基米，可以继续按匹配度顺序切换，直到选中满意的教练。
@@ -18,6 +20,8 @@
 - `GYMTI-LLM评分体系.md`：评分体系和 LLM 使用边界说明。
 
 ## 运行
+
+以下命令只用于本地查看参考原型，不属于根仓库构建或发布步骤。
 
 ```powershell
 cd questionaire
