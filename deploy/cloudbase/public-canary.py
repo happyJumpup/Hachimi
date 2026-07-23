@@ -31,6 +31,9 @@ MIN_COOLDOWN_SECONDS = 1
 MAX_COOLDOWN_SECONDS = 600
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 PASSING_COVERAGE_STATUSES = {"complete", "partial"}
+ADMISSION_REASON_HEADER = "X-TrainPal-Admission-Reason"
+CAPACITY_ADMISSION_REASON = "capacity"
+RUNTIME_CLEANUP_TIMEOUT_SECONDS = 30.0
 
 
 def _is_295_second_duration(value: object) -> bool:
@@ -69,6 +72,7 @@ class WorkerResult:
     terminal_status: str | None
     coverage_status: str | None
     retry_after_present: bool
+    admission_reason: str | None = None
     reliable_candidate_count: int = 0
     coverage_gap_count: int = 0
     session_cooldown_enforced: bool = False
@@ -278,6 +282,36 @@ class PublicCanaryClient:
             time.sleep(1)
         raise CanaryError("analysis run did not reach a terminal state")
 
+    def wait_for_runtime_cleanup(
+        self, *, timeout_seconds: float
+    ) -> dict[str, object]:
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            payload = self.get_json(
+                "/api/v1/runtime-cleanup",
+                label="runtime cleanup",
+            )
+            clean = payload.get("clean")
+            residue_count = payload.get("residue_count")
+            ffmpeg_process_count = payload.get("ffmpeg_process_count")
+            if (
+                type(clean) is not bool
+                or type(residue_count) is not int
+                or residue_count < 0
+                or type(ffmpeg_process_count) is not int
+                or ffmpeg_process_count < 0
+                or clean != (residue_count == 0 and ffmpeg_process_count == 0)
+            ):
+                raise CanaryError("runtime cleanup returned invalid cleanup evidence")
+            if clean:
+                return {
+                    "clean": True,
+                    "residue_count": residue_count,
+                    "ffmpeg_process_count": ffmpeg_process_count,
+                }
+            time.sleep(0.5)
+        raise CanaryError("runtime cleanup was not proven before timeout")
+
     def cancel(self, run_id: str) -> None:
         self._client.delete(f"/api/v1/analysis-runs/{run_id}")
 
@@ -328,6 +362,8 @@ def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
             )
     if any(not result.retry_after_present for result in rejected):
         raise CanaryError("the capacity rejection omitted Retry-After")
+    if any(result.admission_reason != CAPACITY_ADMISSION_REASON for result in rejected):
+        raise CanaryError("the concurrency rejection omitted the capacity reason")
 
     terminal_counts = Counter(
         result.terminal_status
@@ -360,6 +396,9 @@ def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
         "retry_after_present_count": sum(
             result.retry_after_present for result in rejected
         ),
+        "capacity_reason_count": sum(
+            result.admission_reason == CAPACITY_ADMISSION_REASON for result in rejected
+        ),
     }
 
 
@@ -390,6 +429,7 @@ def _run_worker(
                 terminal_status=None,
                 coverage_status=None,
                 retry_after_present="Retry-After" in response.headers,
+                admission_reason=response.headers.get(ADMISSION_REASON_HEADER),
             )
         created = _expect_json(response, 202, "parallel public analysis start")
         run_id_value = created.get("id")
@@ -418,20 +458,26 @@ def _run_worker(
         client.close()
 
 
-def probe_fresh_ip_cooldown(
+def probe_post_run_guards(
     *, origin: str, timeout_seconds: float
-) -> dict[str, object]:
+) -> tuple[dict[str, object], dict[str, object]]:
     client = PublicCanaryClient(origin=origin, timeout_seconds=timeout_seconds)
     try:
+        runtime_cleanup = client.wait_for_runtime_cleanup(
+            timeout_seconds=min(timeout_seconds, RUNTIME_CLEANUP_TIMEOUT_SECONDS)
+        )
         retry_after_seconds = client.require_analysis_cooldown(
             label="fresh IP cooldown"
         )
     finally:
         client.close()
-    return {
-        "enforced": True,
-        "retry_after_seconds": retry_after_seconds,
-    }
+    return (
+        runtime_cleanup,
+        {
+            "enforced": True,
+            "retry_after_seconds": retry_after_seconds,
+        },
+    )
 
 
 def run_canary(args: argparse.Namespace) -> dict[str, Any]:
@@ -489,7 +535,7 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         results = [future.result() for future in futures]
 
     concurrency = summarize_parallel_results(results)
-    ip_cooldown = probe_fresh_ip_cooldown(
+    runtime_cleanup, ip_cooldown = probe_post_run_guards(
         origin=origin,
         timeout_seconds=args.timeout_seconds,
     )
@@ -521,6 +567,7 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         },
         "access_gate": {"public_can_analyze": True, "public_sessions": 2},
         "concurrency": concurrency,
+        "runtime_cleanup": runtime_cleanup,
         "ip_cooldown": ip_cooldown,
     }
 

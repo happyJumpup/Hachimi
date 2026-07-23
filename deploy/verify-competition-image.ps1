@@ -137,7 +137,8 @@ class TrapHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         content_length = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(content_length)
+        request = json.loads(self.rfile.read(content_length))
+        gymti_payload = json.loads(request["messages"][1]["content"])
         type(self).call_count += 1
         print("gymti-provider-call", flush=True)
         if self.path != "/v1/chat/completions":
@@ -153,7 +154,16 @@ class TrapHandler(BaseHTTPRequestHandler):
         if self.call_count == 1:
             content = json.dumps({"question_id": "q01_energy_after_work"})
         elif self.call_count == 2:
-            content = json.dumps({"text": "Provider-backed image verification narrative."})
+            content = json.dumps({
+                "contract_version": gymti_payload["contract_version"],
+                "questionnaire_version": gymti_payload["questionnaire_version"],
+                "scoring_version": gymti_payload["scoring_version"],
+                "formal_result_id": gymti_payload["formal_result_id"],
+                "secondary_result_id": gymti_payload["secondary_result_id"],
+                "coach_style_id": gymti_payload["coach_style_id"],
+                "reason_codes": gymti_payload["reason_codes"],
+                "narrative_id": gymti_payload["candidate_narrative_ids"][0],
+            })
         else:
             content = json.dumps({"question_id": "not-a-legal-candidate"})
         payload = json.dumps({"choices": [{"message": {"content": content}}]}).encode()

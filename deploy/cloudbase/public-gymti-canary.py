@@ -27,6 +27,7 @@ from hakimi_analysis.gymti import (  # noqa: E402
     GymtiContractError,
     GymtiRankedResult,
     GymtiService,
+    approved_gymti_narratives,
     load_gymti_contract,
 )
 
@@ -300,6 +301,8 @@ def _validate_narrative(
         raise CanaryError("result narrative returned an invalid timestamp") from error
     if parsed_generated_at.tzinfo is None:
         raise CanaryError("result narrative returned an invalid timestamp")
+    if text not in approved_gymti_narratives():
+        raise CanaryError("result narrative was not server-approved")
     return _model_name(response, label="result narrative")
 
 

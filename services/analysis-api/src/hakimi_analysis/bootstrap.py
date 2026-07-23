@@ -25,6 +25,7 @@ from hakimi_analysis.pipeline import AnalysisPipeline, EmitCallback, PipelineFai
 from hakimi_analysis.providers.ark import ArkResponsesClient
 from hakimi_analysis.providers.asr import VolcAsrClient
 from hakimi_analysis.readiness import ProductionReadiness
+from hakimi_analysis.runtime_cleanup import RuntimeCleanupMonitor
 from hakimi_analysis.settings import PROJECT_ROOT, Settings
 from hakimi_analysis.sources import (
     MAX_ANALYZABLE_SOURCE_DURATION_SECONDS,
@@ -138,6 +139,7 @@ def build_pipeline(
     http_client: httpx.AsyncClient,
     *,
     temp_root: Path | None = None,
+    runtime_cleanup: RuntimeCleanupMonitor | None = None,
 ) -> AnalysisPipeline:
     if settings.analysis_provider == "test":
         return DeterministicTestPipeline()
@@ -147,6 +149,7 @@ def build_pipeline(
     media = LocalMediaProcessor(
         temp_root=temp_root or PROJECT_ROOT / "tmp" / "analysis-runs",
         max_source_duration_seconds=settings.local_analysis_max_seconds,
+        runtime_cleanup=runtime_cleanup,
     )
     asr = VolcAsrClient(
         api_key=settings.volc_asr_api_key.get_secret_value(),
@@ -234,6 +237,7 @@ def build_default_app() -> FastAPI:
     )
     catalog = build_catalog(settings)
     temp_root = PROJECT_ROOT / "tmp" / "analysis-runs"
+    runtime_cleanup = RuntimeCleanupMonitor(temp_root)
     configured_cookie_secret = (
         settings.access_cookie_secret.get_secret_value()
         if settings.access_cookie_secret is not None
@@ -270,7 +274,12 @@ def build_default_app() -> FastAPI:
     )
     return create_app(
         catalog=catalog,
-        pipeline=build_pipeline(settings, http_client, temp_root=temp_root),
+        pipeline=build_pipeline(
+            settings,
+            http_client,
+            temp_root=temp_root,
+            runtime_cleanup=runtime_cleanup,
+        ),
         timeout_seconds=settings.run_timeout_seconds,
         ttl_seconds=settings.run_ttl_seconds,
         cors_origins=settings.cors_origin_list,
@@ -288,4 +297,5 @@ def build_default_app() -> FastAPI:
         gymti_llm_enabled=settings.gymti_llm_enabled,
         gymti_llm_concurrency=settings.gymti_llm_concurrency,
         release_sha=settings.app_release_sha,
+        runtime_cleanup=runtime_cleanup,
     )

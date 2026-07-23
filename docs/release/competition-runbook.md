@@ -199,7 +199,7 @@ FFmpeg 不进入 Git，而是在 Docker 多阶段构建中从 FFmpeg 8.1.2 官�
 
 1. 构建不同不可变 digest 的候选版本；当前已有公开稳定版时，候选保持 0% 流量，稳定版继续 100%。
 2. 运行兼容文件名 `run-private-canary.ps1` 的 full-FLOW 身份事务。脚本从唯一确认的稳定版 100%／候选 0% 起步，先 `promote` 到候选 100%，再从公开入口确认 `/health` 的 `release_sha` 与预期完整 SHA 精确一致且 `/ready` 为 `ready`，并在 `finally` 中 `restore` 且验证稳定版 100%／候选 0%。该事务不接收请求头、媒体或 Provider 输入；恢复失败按 P0 阻断发布。
-3. 身份事务通过并恢复稳定流量后，才在受控公开窗口重新提升候选。先运行 `public-canary.py --controlled-shortest`，用五条受控来源中的最短项验证一个请求 `202`、并发第二个请求 `429 + Retry-After`、SSE 终态、覆盖合同和会话／IP 冷却。
+3. 身份事务通过并恢复稳定流量后，才在受控公开窗口重新提升候选。先运行 `public-canary.py --controlled-shortest`，用五条受控来源中的最短项验证一个请求 `202`、并发第二个请求 `429 + Retry-After + X-TrainPal-Admission-Reason: capacity`、SSE 终态、覆盖合同和会话／IP 冷却；终态后还必须在 30 秒内由脱敏 `/api/v1/runtime-cleanup` 证明 `clean=true`、临时残留数和 FFmpeg 子进程数均为 0，回执不得记录路径、文件名或 PID。
 4. 等公开能力接口恢复且实际冷却窗口结束后，再运行 `public-canary.py --media`，以团队授权的 295 秒、19 MB Web 安全边界内样本验证同一上传合同。两类回执都只保留输入种类、计数、时长／字节数及结果聚合；不记录来源身份、标题、origin、对象／本地路径、文件名、分析候选或内容。
 5. 数据面门槛通过后运行 `python .\deploy\cloudbase\public-gymti-canary.py --public-base-url '<operator-supplied-https-origin>' --output '<private-receipt-outside-repository>'`。它必须先通过一次 LLM 选题和一次非空 LLM 正式结果叙事，再取得四并发精确三次 `llm`／一次 `local_fallback`；回执只含 schema、服务名、两项通过布尔值、并发计数和 Provider 模型名，不含 URL、Cookie、题目、选项、答案、正式结果、原因 ID、叙事或响应正文。
 6. 完成候选→稳定版→候选回滚。任何门槛失败都恢复稳定版并放弃灰度；全部通过才保留新候选作为公开版本。

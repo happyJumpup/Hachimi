@@ -14,6 +14,7 @@ from hakimi_analysis.gymti import (
     GymtiNarrativeInput,
     GymtiQuestionChoiceInput,
     GymtiService,
+    OpenAiStyleGymtiModel,
     load_gymti_contract,
 )
 from hakimi_analysis.settings import PROJECT_ROOT, Settings
@@ -209,6 +210,25 @@ def _narrative_payload() -> dict[str, object]:
         "coach_style_id": "hotblood",
         "reason_codes": ["goal_strength"],
     }
+
+
+def _model_narrative_response(
+    *,
+    override: dict[str, object] | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "contract_version": "gymti-v1",
+        "questionnaire_version": "gymti-v1",
+        "scoring_version": "gymti-v1",
+        "formal_result_id": "strength",
+        "secondary_result_id": None,
+        "coach_style_id": "hotblood",
+        "reason_codes": ["goal_strength"],
+        "narrative_id": "warm_confirmation",
+    }
+    if override is not None:
+        payload.update(override)
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def test_contract_loader_rejects_duplicate_question_and_wrong_camel_case(tmp_path: Path) -> None:
@@ -612,6 +632,159 @@ async def test_result_narrative_never_accepts_model_result_fields_and_uses_templ
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malicious_text",
+    [
+        "你不是 strength 类型，你其实属于 cardio 类型。",
+        "这个结果说明你的身体不健康，需要先做医学检查。",
+        "今天必须做 100 次深蹲，再加 20 公斤训练。",
+    ],
+)
+async def test_result_narrative_rejects_false_type_health_and_training_claims(
+    tmp_path: Path,
+    malicious_text: str,
+) -> None:
+    response = json.dumps({"text": malicious_text}, ensure_ascii=False)
+    model = _Model(question_ids=[], narratives=[response, response])
+    service = _service(_write_contract(tmp_path / "gymti.json"), model)
+
+    snapshot = await service.result_narrative(
+        questionnaire_version="gymti-v1",
+        scoring_version="gymti-v1",
+        answered_question_option_ids=[
+            *_foundation_answers(),
+            ("routine-preference", "routine-preference.option"),
+        ],
+        formal_result_id="strength",
+        secondary_result_id=None,
+        coach_style_id="hotblood",
+        reason_codes=["goal_strength"],
+        allow_model=True,
+    )
+
+    assert snapshot.source == "template"
+    assert snapshot.model is None
+    assert malicious_text not in snapshot.text
+    assert len(model.narrative_inputs) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"contract_version": "gymti-v0"},
+        {"formal_result_id": "other"},
+        {"secondary_result_id": "other"},
+        {"coach_style_id": "gentle"},
+        {"reason_codes": ["other"]},
+        {"narrative_id": "not_approved"},
+        {"text": "provider free text must never be displayed"},
+    ],
+)
+async def test_result_narrative_rejects_changed_facts_and_unapproved_output(
+    tmp_path: Path,
+    override: dict[str, object],
+) -> None:
+    response = _model_narrative_response(override=override)
+    model = _Model(question_ids=[], narratives=[response, response])
+    service = _service(_write_contract(tmp_path / "gymti.json"), model)
+
+    snapshot = await service.result_narrative(
+        questionnaire_version="gymti-v1",
+        scoring_version="gymti-v1",
+        answered_question_option_ids=[
+            *_foundation_answers(),
+            ("routine-preference", "routine-preference.option"),
+        ],
+        formal_result_id="strength",
+        secondary_result_id=None,
+        coach_style_id="hotblood",
+        reason_codes=["goal_strength"],
+        allow_model=True,
+    )
+
+    assert snapshot.source == "template"
+    assert snapshot.model is None
+
+
+@pytest.mark.asyncio
+async def test_result_narrative_provider_receives_only_fixed_ids_and_selects_server_text(
+    tmp_path: Path,
+) -> None:
+    observed_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_body = json.loads(request.content)
+        user_payload = json.loads(request_body["messages"][1]["content"])
+        observed_payload.update(user_payload)
+        provider_output = {
+            key: user_payload[key]
+            for key in (
+                "contract_version",
+                "questionnaire_version",
+                "scoring_version",
+                "formal_result_id",
+                "secondary_result_id",
+                "coach_style_id",
+                "reason_codes",
+            )
+        }
+        provider_output["narrative_id"] = user_payload["candidate_narrative_ids"][1]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps(provider_output)}}
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAiStyleGymtiModel(
+            api_key="test-ark-key",
+            model="doubao-seed-2-0-mini-260428",
+            base_url="https://ark.example/api/v3",
+            http_client=client,
+            timeout_seconds=1,
+            temperature=0,
+        )
+        service = GymtiService(
+            contract=load_gymti_contract(_write_contract(tmp_path / "gymti.json")),
+            model=model,
+            model_name="doubao-seed-2-0-mini-260428",
+        )
+        snapshot = await service.result_narrative(
+            questionnaire_version="gymti-v1",
+            scoring_version="gymti-v1",
+            answered_question_option_ids=[
+                *_foundation_answers(),
+                ("routine-preference", "routine-preference.option"),
+            ],
+            formal_result_id="strength",
+            secondary_result_id=None,
+            coach_style_id="hotblood",
+            reason_codes=["goal_strength"],
+            allow_model=True,
+        )
+
+    assert set(observed_payload) == {
+        "contract_version",
+        "questionnaire_version",
+        "scoring_version",
+        "formal_result_id",
+        "secondary_result_id",
+        "coach_style_id",
+        "reason_codes",
+        "candidate_narrative_ids",
+    }
+    assert snapshot.source == "llm"
+    assert snapshot.text == (
+        "这份 GYMTI 结果描述的是你当前的健身偏好。接下来可以查看推荐教练风格，"
+        "再由你决定是否采用。"
+    )
+
+
+@pytest.mark.asyncio
 async def test_result_narrative_rejects_any_snapshot_not_rebuilt_from_answers_before_model(
     tmp_path: Path,
 ) -> None:
@@ -779,7 +952,9 @@ async def test_unconfirmed_retention_does_not_construct_a_configured_model(
 async def test_enabled_llm_calls_model_for_public_requests_without_access_tier_dependency(
     tmp_path: Path,
 ) -> None:
-    model = _Model(question_ids=["foundation-two"], narratives=['{"text":"public narrative"}'])
+    model = _Model(
+        question_ids=["foundation-two"], narratives=[_model_narrative_response()]
+    )
     app = create_app(
         gymti_service=_service(_write_contract(tmp_path / "gymti.json"), model),
         gymti_llm_enabled=True,
@@ -798,14 +973,22 @@ async def test_enabled_llm_calls_model_for_public_requests_without_access_tier_d
 
     assert next_response.json()["source"] == "llm"
     assert narrative_response.json()["source"] == "llm"
+    assert "public narrative" not in narrative_response.json()["text"]
     assert len(model.question_inputs) == 1
     assert len(model.narrative_inputs) == 1
+    assert model.narrative_inputs[0].candidate_narrative_ids == (
+        "warm_confirmation",
+        "clear_next_step",
+        "steady_reflection",
+    )
 
 
 @pytest.mark.asyncio
 async def test_enabled_llm_does_not_consume_analysis_access_quota(tmp_path: Path) -> None:
     access = _access_manager(judge_concurrency=1)
-    model = _Model(question_ids=["foundation-two"], narratives=['{"text":"judge narrative"}'])
+    model = _Model(
+        question_ids=["foundation-two"], narratives=[_model_narrative_response()]
+    )
     app = create_app(
         gymti_service=_service(_write_contract(tmp_path / "gymti.json"), model),
         gymti_llm_enabled=True,

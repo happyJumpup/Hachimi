@@ -13,6 +13,7 @@
 - 竞赛生产设置 `PUBLIC_ANALYSIS_CONCURRENCY=1`、`JUDGE_ANALYSIS_CONCURRENCY=0`。公开会话可以直接创建受控来源或本地上传的真实分析，不要求先取得评委码。
 - 全部公开会话共享一个非排队的真实分析槽。槽已占用时立即返回 `429 + Retry-After`，不创建运行、不缓存待处理请求，也不通过增加 worker 或实例扩容。
 - 每个成功取得分析租约的公开请求，同时在匿名会话 ID 和服务端认可的客户端 IP 上记录一次尝试。任一维度在滚动 600 秒窗口内已有一次尝试，后续创建立即返回 `429 + Retry-After`；更换 Cookie 不能绕过 IP 冷却，共享 IP 下也不能用另一个会话绕过。
+- 分析创建的 `429` 还必须携带脱敏的 `X-TrainPal-Admission-Reason: capacity | rate_limit | session_active`；公网并发 Canary 只接受 `capacity`，因此即使把公开并发误配为 2，也不能把同 IP 的 600 秒频控误报成单槽生效。
 - 只有通过输入校验并成功取得租约的 Provider-backed 创建计入尝试。页面浏览、能力／来源读取、格式错误、媒体超限、未就绪和容量拒绝不消耗次数。
 - `GET /api/v1/access/session` 使用同一会话／IP 规则返回 `can_analyze` 和剩余等待时间；它是状态提示，不预留容量。
 - 在 `TRUSTED_PROXY_CIDRS` 为空时只使用直连对端地址，忽略任意转发头。只有获得并实测 CloudBase 的窄可信代理网段后，才能按既有校验规则使用转发地址。

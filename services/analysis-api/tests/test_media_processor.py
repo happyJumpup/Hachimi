@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import sys
+import threading
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import pytest
 
 import hakimi_analysis.media as media_module
 from hakimi_analysis.media import AnalysisWindow, LocalMediaProcessor, MediaProcessingError
+from hakimi_analysis.runtime_cleanup import RuntimeCleanupMonitor
 
 
 async def create_synthetic_video(path: Path) -> None:
@@ -328,7 +330,16 @@ async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
         return process
 
     monkeypatch.setattr(subprocess, "Popen", create_blocking_process)
-    processor = LocalMediaProcessor(temp_root=tmp_path / "runs")
+    monkeypatch.setattr(imageio_ffmpeg, "get_ffmpeg_exe", lambda: sys.executable)
+    temp_root = tmp_path / "runs"
+    runtime_cleanup = RuntimeCleanupMonitor(
+        temp_root,
+        descendant_ffmpeg_probe=lambda: set(),
+    )
+    processor = LocalMediaProcessor(
+        temp_root=temp_root,
+        runtime_cleanup=runtime_cleanup,
+    )
     prepared_directories: list[Path] = []
 
     async def prepare() -> None:
@@ -341,6 +352,9 @@ async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
 
     task = asyncio.create_task(prepare())
     await asyncio.wait_for(both_started.wait(), timeout=1)
+    active = runtime_cleanup.snapshot()
+    assert active.ffmpeg_process_count == 2
+    assert active.residue_count == 1
     await asyncio.sleep(0.05)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -348,8 +362,86 @@ async def test_prepared_media_and_ffmpeg_are_stopped_when_cancelled(
 
     assert len(processes) == 2
     assert all(process.returncode is not None for process in processes)
-    assert not any((tmp_path / "runs").iterdir())
+    assert not any(temp_root.iterdir())
+    assert runtime_cleanup.snapshot().clean is True
     assert prepared_directories == []
+
+
+@pytest.mark.asyncio
+async def test_cleanup_probe_stays_dirty_when_ffmpeg_cannot_be_stopped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    both_started = threading.Event()
+
+    class StuckProcess:
+        returncode = None
+
+        def __init__(self, process_id: int) -> None:
+            self.pid = process_id
+            self._release_communication = threading.Event()
+
+        def poll(self) -> None:
+            return None
+
+        def communicate(self) -> tuple[bytes, bytes]:
+            self._release_communication.wait(timeout=1)
+            return b"", b""
+
+        def kill(self) -> None:
+            self._release_communication.set()
+            raise OSError("simulated ffmpeg cleanup failure")
+
+        def wait(self, timeout: float | None = None) -> int:
+            raise subprocess.TimeoutExpired(
+                "ffmpeg",
+                timeout if timeout is not None else 0,
+            )
+
+    processes: list[StuckProcess] = []
+
+    def create_stuck_process(*_args: Any, **_kwargs: Any) -> StuckProcess:
+        process = StuckProcess(10_000 + len(processes))
+        processes.append(process)
+        if len(processes) == 2:
+            both_started.set()
+        return process
+
+    def reject_fallback_kill(_process_id: int, _signal: int) -> None:
+        raise OSError("simulated fallback cleanup failure")
+
+    monkeypatch.setattr(imageio_ffmpeg, "get_ffmpeg_exe", lambda: "ffmpeg")
+    monkeypatch.setattr(subprocess, "Popen", create_stuck_process)
+    monkeypatch.setattr("hakimi_analysis.media.os.kill", reject_fallback_kill)
+    temp_root = tmp_path / "runs"
+    runtime_cleanup = RuntimeCleanupMonitor(
+        temp_root,
+        descendant_ffmpeg_probe=lambda: set(),
+    )
+    processor = LocalMediaProcessor(
+        temp_root=temp_root,
+        runtime_cleanup=runtime_cleanup,
+    )
+
+    async def prepare() -> None:
+        async with processor.prepare(
+            source,
+            AnalysisWindow(start_seconds=0, end_seconds=1, expanded=False),
+        ):
+            raise AssertionError("stuck extraction must not yield prepared media")
+
+    task = asyncio.create_task(prepare())
+    assert await asyncio.to_thread(both_started.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert len(processes) == 2
+    snapshot = runtime_cleanup.snapshot()
+    assert snapshot.ffmpeg_process_count == 2
+    assert snapshot.clean is False
 
 
 @pytest.mark.asyncio

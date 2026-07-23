@@ -9,7 +9,11 @@ import httpx
 from hakimi_analysis.access import AccessManager
 from hakimi_analysis.app import create_app
 from hakimi_analysis.bootstrap import build_gymti_service
-from hakimi_analysis.gymti import GymtiService, load_gymti_contract
+from hakimi_analysis.gymti import (
+    GymtiService,
+    approved_gymti_narratives,
+    load_gymti_contract,
+)
 from hakimi_analysis.readiness import StaticReadiness
 from hakimi_analysis.settings import Settings
 
@@ -111,7 +115,7 @@ async def run_smoke() -> None:
         if (
             narrative.get("source") != "llm"
             or narrative.get("model") != "image-audit-trap-model"
-            or not narrative.get("text")
+            or narrative.get("text") not in approved_gymti_narratives()
         ):
             raise RuntimeError("public GYMTI narrative did not use the provider")
 

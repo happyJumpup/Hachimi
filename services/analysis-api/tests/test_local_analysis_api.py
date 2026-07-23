@@ -25,7 +25,7 @@ from hakimi_analysis.models import (
 )
 from hakimi_analysis.observability import ALLOWED_LOG_FIELDS
 from hakimi_analysis.pipeline import EmitCallback, PipelineFailure, PipelineOutput
-from hakimi_analysis.sources import VideoSource
+from hakimi_analysis.sources import SourceCatalog, VideoSource
 
 LOCAL_SOURCE_ID = "local:62f31c4b-bd1c-4b6a-8ad8-c6121b56135a"
 SECOND_LOCAL_SOURCE_ID = "local:a55df85a-e80d-4c85-807f-cd4a9c26f7e5"
@@ -402,12 +402,20 @@ async def test_streamed_oversize_local_upload_is_rejected_before_endpoint(
             content=ChunkedStream(payload),
             headers={"Content-Type": encoded.headers["Content-Type"]},
         )
+        assert response.status_code == 413
+        assert probe_called is False
+        retried = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("source.mp4", b"1234", "video/mp4")},
+            data={"local_source_id": LOCAL_SOURCE_ID},
+        )
+        await wait_for_status(client, retried.json()["id"], "completed")
 
-    assert response.status_code == 413
     assert response.json() == {"detail": "视频文件超过上传大小限制"}
     assert response.headers["cache-control"] == "no-store"
-    assert probe_called is False
-    assert not upload_root.exists()
+    assert retried.status_code == 202
+    assert probe_called is True
+    assert list(upload_root.iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -473,6 +481,7 @@ async def test_unavailable_session_capacity_is_rejected_before_reading_body(
     assert response.status_code == 429
     assert response.json() == {"detail": "真实动作分析暂时繁忙，请稍后重试"}
     assert response.headers["retry-after"] == "15"
+    assert response.headers["x-trainpal-admission-reason"] == "capacity"
     assert response.headers["cache-control"] == "no-store"
     assert body.consumed is False
     assert probe_called is False
@@ -512,6 +521,7 @@ async def test_same_ip_cooldown_is_rejected_before_reading_a_fresh_cookie_upload
 
     assert response.status_code == 429
     assert response.headers["retry-after"] == "600"
+    assert response.headers["x-trainpal-admission-reason"] == "rate_limit"
     assert response.headers["cache-control"] == "no-store"
     assert body.consumed is False
     assert not upload_root.exists()
@@ -566,6 +576,7 @@ async def test_concurrent_fresh_session_upload_is_rejected_before_reading_second
 
             assert rejected.status_code == 429
             assert rejected.headers["retry-after"] == "15"
+            assert rejected.headers["x-trainpal-admission-reason"] == "capacity"
             assert rejected.headers["cache-control"] == "no-store"
             assert second_body.consumed is False
             assert probe_calls == 1
@@ -587,6 +598,80 @@ async def test_concurrent_fresh_session_upload_is_rejected_before_reading_second
 
     assert probe_calls == 2
     assert list(upload_root.iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_slow_local_upload_reserves_the_shared_public_slot_before_reading_its_body(
+    tmp_path: Path,
+) -> None:
+    controlled_path = tmp_path / "controlled.mp4"
+    controlled_path.write_bytes(b"controlled-video")
+    catalog = SourceCatalog(
+        [
+            VideoSource(
+                id="controlled-01",
+                title="controlled",
+                path=controlled_path,
+                duration_seconds=20,
+            )
+        ]
+    )
+    encoded = httpx.Request(
+        "POST",
+        "https://test/api/v1/analysis-runs/local",
+        files={"media": ("private.mp4", b"x" * 8192, "video/mp4")},
+        data={"local_source_id": LOCAL_SOURCE_ID},
+    )
+    slow_body = PausingStream(encoded.read())
+    app = create_app(
+        catalog=catalog,
+        pipeline=RelativeCandidatePipeline(),
+        access=make_test_access(),
+        local_upload_temp_root=tmp_path / "uploads",
+        local_duration_probe=lambda _: 20.0,
+    )
+    local_transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1001))
+    controlled_transport = httpx.ASGITransport(app=app, client=("198.51.100.20", 1002))
+    status_transport = httpx.ASGITransport(app=app, client=("198.51.100.30", 1003))
+    async with (
+        httpx.AsyncClient(transport=local_transport, base_url="https://test") as local_client,
+        httpx.AsyncClient(
+            transport=controlled_transport,
+            base_url="https://test",
+        ) as controlled_client,
+        httpx.AsyncClient(transport=status_transport, base_url="https://test") as status_client,
+    ):
+        local_task = asyncio.create_task(
+            local_client.post(
+                "/api/v1/analysis-runs/local",
+                content=slow_body,
+                headers={"Content-Type": encoded.headers["Content-Type"]},
+            )
+        )
+        await asyncio.wait_for(slow_body.paused.wait(), timeout=1)
+        try:
+            controlled = await controlled_client.post(
+                "/api/v1/analysis-runs",
+                json={"source_id": "controlled-01"},
+            )
+            access_view = await status_client.get("/api/v1/access/session")
+
+            assert controlled.status_code == 429
+            assert controlled.headers["retry-after"] == "15"
+            assert controlled.headers["x-trainpal-admission-reason"] == "capacity"
+            assert access_view.status_code == 200
+            assert access_view.json()["can_analyze"] is False
+        finally:
+            local_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await local_task
+
+        retried = await controlled_client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "controlled-01"},
+        )
+        assert retried.status_code == 202
+        await wait_for_status(controlled_client, retried.json()["id"], "completed")
 
 
 @pytest.mark.asyncio
@@ -627,7 +712,8 @@ async def test_active_session_upload_is_rejected_before_reading_a_second_body(
         await lease.release()
 
     assert response.status_code == 429
-    assert response.headers["retry-after"] == "600"
+    assert response.headers["retry-after"] == "15"
+    assert response.headers["x-trainpal-admission-reason"] == "capacity"
     assert response.headers["cache-control"] == "no-store"
     assert body.consumed is False
     assert not upload_root.exists()
@@ -931,10 +1017,17 @@ async def test_local_upload_rejects_media_outside_the_video_allowlist(tmp_path: 
             files={"media": ("payload.bin", b"not-video", "application/octet-stream")},
             data={"local_source_id": LOCAL_SOURCE_ID},
         )
+        retried = await client.post(
+            "/api/v1/analysis-runs/local",
+            files={"media": ("source.mp4", b"video-bytes", "video/mp4")},
+            data={"local_source_id": SECOND_LOCAL_SOURCE_ID},
+        )
+        await wait_for_status(client, retried.json()["id"], "completed")
 
     assert response.status_code == 415
     assert response.json() == {"detail": "暂不支持这种视频格式"}
-    assert not upload_root.exists()
+    assert retried.status_code == 202
+    assert list(upload_root.iterdir()) == []
 
 
 @pytest.mark.asyncio
@@ -1341,7 +1434,8 @@ async def test_a_second_local_source_cannot_replace_the_active_public_run(
 
         assert first.status_code == 202
         assert second.status_code == 429
-        assert second.headers["retry-after"] == "600"
+        assert second.headers["retry-after"] == "15"
+        assert second.headers["x-trainpal-admission-reason"] == "capacity"
         assert first_view.json()["status"] == "running"
         assert pipeline.cancelled_source_ids == set()
         assert first_path.is_file()

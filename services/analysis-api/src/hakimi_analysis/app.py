@@ -31,6 +31,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from hakimi_analysis.access import (
     ACCESS_COOKIE_NAME,
     ACCESS_SESSION_SECONDS,
+    ADMISSION_REASON_HEADER,
     AccessCodeRateLimited,
     AccessManager,
     AccessSession,
@@ -58,6 +59,7 @@ from hakimi_analysis.models import (
 from hakimi_analysis.pipeline import AnalysisPipeline
 from hakimi_analysis.readiness import ReadinessProbe, StaticReadiness
 from hakimi_analysis.runs import AnalysisRunManager, as_pipeline
+from hakimi_analysis.runtime_cleanup import RuntimeCleanupProbe, RuntimeCleanupProbeError
 from hakimi_analysis.sources import EmptySourceCatalog, SourceCatalog, VideoSource
 
 LOCAL_SOURCE_ID_PATTERN = re.compile(
@@ -69,6 +71,9 @@ LOCAL_MEDIA_TYPES = {
     "video/webm": ".webm",
 }
 LOCAL_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+_LOCAL_UPLOAD_LEASE_STATE = "trainpal_local_upload_lease"
+_LOCAL_UPLOAD_SESSION_STATE = "trainpal_local_upload_session"
+_LOCAL_UPLOAD_LEASE_TRANSFERRED_STATE = "trainpal_local_upload_lease_transferred"
 
 
 class _RequestBodyTooLarge(OSError):
@@ -106,7 +111,6 @@ class LocalUploadBodyLimitMiddleware:
         access_manager: AccessManager,
         readiness_probe: ReadinessProbe,
         trusted_proxy_networks: tuple[IPv4Network | IPv6Network, ...],
-        ingress_gate: _NonBlockingConcurrencyGate,
     ) -> None:
         self._app = app
         self._max_body_bytes = max_body_bytes
@@ -115,7 +119,6 @@ class LocalUploadBodyLimitMiddleware:
         self._access_manager = access_manager
         self._readiness_probe = readiness_probe
         self._trusted_proxy_networks = trusted_proxy_networks
-        self._ingress_gate = ingress_gate
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if (
@@ -161,34 +164,33 @@ class LocalUploadBodyLimitMiddleware:
             )
             await response(scope, receive, send)
             return
-        access_view = self._access_manager.view(session, client_ip=client_ip)
-        if not access_view.can_analyze:
-            retry_after = access_view.retry_after_seconds or 15
+        try:
+            lease = await self._access_manager.reserve_provisional(
+                session,
+                source_id="local:provisional",
+                client_ip=client_ip,
+            )
+        except AdmissionDenied as error:
             response = JSONResponse(
                 status_code=429,
                 content={"detail": "真实动作分析暂时繁忙，请稍后重试"},
                 headers={
                     "Cache-Control": "no-store",
-                    "Retry-After": str(retry_after),
+                    "Retry-After": str(error.retry_after_seconds),
+                    ADMISSION_REASON_HEADER: error.reason,
                 },
             )
             await response(scope, receive, send)
             return
-        if not self._ingress_gate.try_acquire():
-            response = JSONResponse(
-                status_code=429,
-                content={"detail": "真实动作分析暂时繁忙，请稍后重试"},
-                headers={
-                    "Cache-Control": "no-store",
-                    "Retry-After": "15",
-                },
-            )
-            await response(scope, receive, send)
-            return
+        state = scope.setdefault("state", {})
+        state[_LOCAL_UPLOAD_LEASE_STATE] = lease
+        state[_LOCAL_UPLOAD_SESSION_STATE] = session
+        state[_LOCAL_UPLOAD_LEASE_TRANSFERRED_STATE] = False
         try:
             await self._handle_admitted_request(scope, receive, send)
         finally:
-            self._ingress_gate.release()
+            if not state[_LOCAL_UPLOAD_LEASE_TRANSFERRED_STATE]:
+                await _run_cleanup_to_completion(lease.release())
 
     async def _handle_admitted_request(
         self,
@@ -277,6 +279,7 @@ def create_app(
     gymti_llm_enabled: bool = False,
     gymti_llm_concurrency: int = 3,
     release_sha: str | None = None,
+    runtime_cleanup: RuntimeCleanupProbe | None = None,
 ) -> FastAPI:
     if (
         not math.isfinite(local_analysis_max_seconds)
@@ -306,7 +309,6 @@ def create_app(
         cookie_secret=secrets.token_urlsafe(32),
         judge_access_code=secrets.token_urlsafe(16),
     )
-    local_upload_ingress_gate = _NonBlockingConcurrencyGate(1)
     gymti_model_gate = _NonBlockingConcurrencyGate(gymti_llm_concurrency)
     readiness_probe = readiness or StaticReadiness(
         "provider_configuration_invalid" if app_env == "production" else None
@@ -351,7 +353,6 @@ def create_app(
             access_manager=access_manager,
             readiness_probe=readiness_probe,
             trusted_proxy_networks=trusted_proxy_networks,
-            ingress_gate=local_upload_ingress_gate,
         )
     app.add_middleware(
         CORSMiddleware,
@@ -367,6 +368,38 @@ def create_app(
         if release_sha is not None:
             payload["release_sha"] = release_sha
         return payload
+
+    @app.get("/api/v1/runtime-cleanup", include_in_schema=False)
+    async def runtime_cleanup_status() -> JSONResponse:
+        if runtime_cleanup is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "code": "runtime_cleanup_probe_unavailable",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            snapshot = await asyncio.to_thread(runtime_cleanup.snapshot)
+        except RuntimeCleanupProbeError:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "not_ready",
+                    "code": "runtime_cleanup_probe_unavailable",
+                },
+                headers={"Cache-Control": "no-store"},
+            )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "clean": snapshot.clean,
+                "residue_count": snapshot.residue_count,
+                "ffmpeg_process_count": snapshot.ffmpeg_process_count,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/api/v1/capabilities", response_model=CapabilitiesView)
     async def capabilities(response: Response) -> CapabilitiesView:
@@ -677,7 +710,10 @@ def create_app(
             raise HTTPException(
                 status_code=429,
                 detail="真实动作分析暂时繁忙，请稍后重试",
-                headers={"Retry-After": str(error.retry_after_seconds)},
+                headers={
+                    "Retry-After": str(error.retry_after_seconds),
+                    ADMISSION_REASON_HEADER: error.reason,
+                },
             ) from error
         try:
             created = await manager.create(
@@ -692,7 +728,7 @@ def create_app(
         except Exception:
             await lease.release()
             raise
-        await lease.bind(created.id)
+        lease.commit(created.id)
         _set_access_cookie(response, access_manager, session)
         return created
 
@@ -738,8 +774,11 @@ def create_app(
     ) -> AnalysisRunView:
         upload_directory: Path | None = None
         duration_task: asyncio.Task[float] | None = None
-        lease: AnalysisLease | None = None
         ownership_transferred = False
+        lease = getattr(request.state, _LOCAL_UPLOAD_LEASE_STATE, None)
+        session = getattr(request.state, _LOCAL_UPLOAD_SESSION_STATE, None)
+        if not isinstance(lease, AnalysisLease) or not isinstance(session, AccessSession):
+            raise RuntimeError("local upload admission state is missing")
 
         async def cleanup_request_resources() -> None:
             try:
@@ -747,13 +786,8 @@ def create_app(
             finally:
                 if duration_task is not None:
                     await asyncio.gather(duration_task, return_exceptions=True)
-                if not ownership_transferred:
-                    try:
-                        if upload_directory is not None:
-                            await _remove_upload_directory(upload_directory)
-                    finally:
-                        if lease is not None:
-                            await lease.release()
+                if not ownership_transferred and upload_directory is not None:
+                    await _remove_upload_directory(upload_directory)
 
         try:
             _require_same_origin(
@@ -811,28 +845,7 @@ def create_app(
                 analysis_end_seconds=analysis_end,
             )
 
-            session = access_manager.resolve(request.cookies.get(ACCESS_COOKIE_NAME))
-            active = await access_manager.active_run(session.id)
-            if (
-                session.tier == AccessTier.JUDGE
-                and active is not None
-                and active.source_id != source.id
-                and active.run_id is not None
-            ):
-                with suppress(KeyError):
-                    await manager.cancel(active.run_id, owner_session_id=session.id)
-            try:
-                lease = await access_manager.reserve(
-                    session,
-                    source_id=source.id,
-                    client_ip=_client_ip(request, trusted_proxy_networks),
-                )
-            except AdmissionDenied as error:
-                raise HTTPException(
-                    status_code=429,
-                    detail="真实动作分析暂时繁忙，请稍后重试",
-                    headers={"Retry-After": str(error.retry_after_seconds)},
-                ) from error
+            await lease.activate(source.id)
 
             owned_directory = upload_directory
             owned_lease = lease
@@ -849,8 +862,9 @@ def create_app(
                 owner_session_id=session.id,
                 on_terminal=finalize_local_run,
             )
+            lease.commit(created.id)
             ownership_transferred = True
-            await lease.bind(created.id)
+            request.scope["state"][_LOCAL_UPLOAD_LEASE_TRANSFERRED_STATE] = True
             _set_access_cookie(response, access_manager, session)
             return created
         finally:

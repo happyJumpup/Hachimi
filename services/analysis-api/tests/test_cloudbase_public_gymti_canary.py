@@ -8,7 +8,11 @@ from typing import Any
 import httpx
 import pytest
 
-from hakimi_analysis.gymti import GymtiService, load_gymti_contract
+from hakimi_analysis.gymti import (
+    GymtiService,
+    approved_gymti_narratives,
+    load_gymti_contract,
+)
 
 
 def load_public_gymti_canary() -> dict[str, Any]:
@@ -131,7 +135,7 @@ def test_public_gymti_canary_proves_llm_narrative_and_three_plus_one_concurrency
                         "model": "ark-model-v1",
                         "version": payload["questionnaire_version"],
                         "generated_at": "2026-07-23T00:00:00Z",
-                        "text": "PRIVATE result narrative body",
+                        "text": approved_gymti_narratives()[0],
                     }
                 assert label == "parallel next question"
                 parallel_call_count += 1
@@ -236,6 +240,25 @@ def test_public_gymti_canary_rejects_an_incomplete_narrative_shape(
         )
 
 
+def test_public_gymti_canary_rejects_provider_authored_narrative_text() -> None:
+    namespace = load_public_gymti_canary()
+    validate_narrative = namespace["_validate_narrative"]
+    payloads = namespace["build_probe_payloads"]()
+    canary_error = namespace["CanaryError"]
+
+    with pytest.raises(canary_error, match="server-approved"):
+        validate_narrative(
+            {
+                "source": "llm",
+                "model": "ark-model-v1",
+                "version": payloads.contract_version,
+                "generated_at": "2026-07-23T00:00:00+00:00",
+                "text": "You are a different type and must follow this workout.",
+            },
+            payloads,
+        )
+
+
 @pytest.mark.parametrize(
     ("response", "message"),
     [
@@ -329,7 +352,7 @@ def test_public_gymti_canary_rejects_any_other_parallel_distribution(
                     "model": "ark-model-v1",
                     "version": payload["questionnaire_version"],
                     "generated_at": "2026-07-23T00:00:00Z",
-                    "text": "private narrative",
+                    "text": approved_gymti_narratives()[0],
                 }
             assert label in {"initial next question", "parallel next question"}
             return {

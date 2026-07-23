@@ -1,6 +1,7 @@
 import argparse
 import json
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from runpy import run_path
 from typing import Any
@@ -99,6 +100,7 @@ def test_public_canary_requires_one_public_accept_and_one_capacity_rejection() -
             terminal_status=None,
             coverage_status=None,
             retry_after_present=True,
+            admission_reason="capacity",
         ),
     ]
 
@@ -115,6 +117,7 @@ def test_public_canary_requires_one_public_accept_and_one_capacity_rejection() -
         "session_cooldown_enforced": True,
         "session_retry_after_seconds": 295,
         "retry_after_present_count": 1,
+        "capacity_reason_count": 1,
     }
 
 
@@ -155,6 +158,7 @@ def test_public_canary_rejects_a_false_concurrency_pass() -> None:
         terminal_status=None,
         coverage_status=None,
         retry_after_present=True,
+        admission_reason="capacity",
     )
     with pytest.raises(canary_error, match="terminal status"):
         summarize([failed, rejected])
@@ -165,9 +169,21 @@ def test_public_canary_rejects_a_false_concurrency_pass() -> None:
         terminal_status=None,
         coverage_status=None,
         retry_after_present=False,
+        admission_reason="capacity",
     )
     with pytest.raises(canary_error, match="Retry-After"):
         summarize([accepted, missing_retry_after])
+
+    cooldown_rejection = worker_result(
+        upload_status=429,
+        terminal_event_observed=False,
+        terminal_status=None,
+        coverage_status=None,
+        retry_after_present=True,
+        admission_reason="rate_limit",
+    )
+    with pytest.raises(canary_error, match="capacity reason"):
+        summarize([accepted, cooldown_rejection])
 
 
 @pytest.mark.parametrize(
@@ -205,6 +221,7 @@ def test_public_canary_rejects_non_promotable_completed_results(
         terminal_status=None,
         coverage_status=None,
         retry_after_present=True,
+        admission_reason="capacity",
     )
 
     with pytest.raises(canary_error, match="coverage contract"):
@@ -239,6 +256,7 @@ def test_public_canary_redacts_terminal_content_from_the_receipt() -> None:
         terminal_status=None,
         coverage_status=None,
         retry_after_present=True,
+        admission_reason="capacity",
     )
 
     encoded = json.dumps(summarize([accepted, rejected]))
@@ -384,6 +402,105 @@ def test_accepted_worker_proves_cookie_cooldown_after_terminal(
     assert calls[-3:] == ["terminal", "accepted session cooldown", "close"]
 
 
+def test_rejected_worker_requires_the_capacity_admission_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = load_public_canary()
+    run_worker = namespace["_run_worker"]
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def prepare_public_session(self) -> None:
+            pass
+
+        def start_controlled_analysis(self, _source_id: str) -> object:
+            return namespace["httpx"].Response(
+                429,
+                headers={
+                    "Retry-After": "600",
+                    "X-TrainPal-Admission-Reason": "rate_limit",
+                },
+            )
+
+        def close(self) -> None:
+            pass
+
+    class Barrier:
+        def wait(self, *, timeout: int) -> None:
+            assert timeout == 30
+
+    monkeypatch.setitem(run_worker.__globals__, "PublicCanaryClient", FakeClient)
+
+    result = run_worker(
+        origin="https://demo.example.com",
+        source_id="controlled-source",
+        barrier=Barrier(),
+        timeout_seconds=180,
+    )
+
+    assert result.retry_after_present is True
+    assert result.admission_reason == "rate_limit"
+
+
+def test_public_canary_polls_until_runtime_cleanup_is_proven(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    namespace = load_public_canary()
+    client_type = namespace["PublicCanaryClient"]
+    client = object.__new__(client_type)
+    payload_values: list[dict[str, object]] = [
+        {"clean": False, "residue_count": 2, "ffmpeg_process_count": 1},
+        {"clean": True, "residue_count": 0, "ffmpeg_process_count": 0},
+    ]
+    payloads: Iterator[dict[str, object]] = iter(payload_values)
+    paths: list[str] = []
+
+    def get_json(path: str, *, label: str) -> dict[str, object]:
+        assert label == "runtime cleanup"
+        paths.append(path)
+        return next(payloads)
+
+    client.get_json = get_json
+    ticks = iter((0.0, 0.1, 0.2))
+    monkeypatch.setattr(namespace["time"], "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
+
+    assert client.wait_for_runtime_cleanup(timeout_seconds=1) == {
+        "clean": True,
+        "residue_count": 0,
+        "ffmpeg_process_count": 0,
+    }
+    assert paths == [
+        "/api/v1/runtime-cleanup",
+        "/api/v1/runtime-cleanup",
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"clean": True, "residue_count": 1, "ffmpeg_process_count": 0},
+        {"clean": True, "residue_count": 0, "ffmpeg_process_count": True},
+        {"clean": "yes", "residue_count": 0, "ffmpeg_process_count": 0},
+    ],
+)
+def test_public_canary_rejects_invalid_runtime_cleanup_evidence(
+    payload: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace = load_public_canary()
+    client_type = namespace["PublicCanaryClient"]
+    canary_error = namespace["CanaryError"]
+    client = object.__new__(client_type)
+    client.get_json = lambda *_args, **_kwargs: payload
+    ticks = iter((0.0, 0.1))
+    monkeypatch.setattr(namespace["time"], "monotonic", lambda: next(ticks))
+
+    with pytest.raises(canary_error, match="cleanup evidence"):
+        client.wait_for_runtime_cleanup(timeout_seconds=1)
+
+
 def test_run_canary_proves_fresh_client_ip_cooldown(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -410,6 +527,14 @@ def test_run_canary_proves_fresh_client_ip_cooldown(
             assert label == "fresh IP cooldown"
             return 294
 
+        def wait_for_runtime_cleanup(self, *, timeout_seconds: float) -> dict[str, object]:
+            assert timeout_seconds == 30
+            return {
+                "clean": True,
+                "residue_count": 0,
+                "ffmpeg_process_count": 0,
+            }
+
         def close(self) -> None:
             self.closed = True
 
@@ -430,6 +555,7 @@ def test_run_canary_proves_fresh_client_ip_cooldown(
         terminal_status=None,
         coverage_status=None,
         retry_after_present=True,
+        admission_reason="capacity",
     )
     worker_results = iter((accepted, rejected))
 
@@ -453,6 +579,11 @@ def test_run_canary_proves_fresh_client_ip_cooldown(
     assert receipt["ip_cooldown"] == {
         "enforced": True,
         "retry_after_seconds": 294,
+    }
+    assert receipt["runtime_cleanup"] == {
+        "clean": True,
+        "residue_count": 0,
+        "ffmpeg_process_count": 0,
     }
     assert receipt["input"] == {
         "kind": "local_upload",
@@ -525,6 +656,14 @@ def test_controlled_source_canary_receipt_redacts_source_identity(
             assert label == "fresh IP cooldown"
             return 294
 
+        def wait_for_runtime_cleanup(self, *, timeout_seconds: float) -> dict[str, object]:
+            assert timeout_seconds == 30
+            return {
+                "clean": True,
+                "residue_count": 0,
+                "ffmpeg_process_count": 0,
+            }
+
         def close(self) -> None:
             pass
 
@@ -543,6 +682,7 @@ def test_controlled_source_canary_receipt_redacts_source_identity(
         terminal_status=None,
         coverage_status=None,
         retry_after_present=True,
+        admission_reason="capacity",
     )
     worker_results = iter((accepted, rejected))
     selected_source_ids: list[str | None] = []
