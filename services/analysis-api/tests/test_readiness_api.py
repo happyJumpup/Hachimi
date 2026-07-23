@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +151,7 @@ def configured_readiness(
     tmp_path: Path,
     *,
     controlled_sources: bool = True,
+    controlled_source_count: int = 5,
     include_web_root: bool = True,
     trusted_proxy_cidrs: str = "",
     judge_access_code: str = "judge-access-code-at-least-16-bytes",
@@ -158,25 +161,33 @@ def configured_readiness(
     settings_overrides: dict[str, Any] | None = None,
 ) -> tuple[ProductionReadiness, Path]:
     media_root = tmp_path / "media"
-    media_path = media_root / "arm-01.mp4"
+    media_path = media_root / "controlled-01.mp4"
     manifest_path = tmp_path / "sources.json"
+    source_durations: dict[Path, float] = {}
     if controlled_sources:
         media_root.mkdir()
-        media_path.write_bytes(b"team-owned-video")
+        sources: list[dict[str, object]] = []
+        for index in range(1, controlled_source_count + 1):
+            fixture_path = media_root / f"controlled-{index:02d}.mp4"
+            fixture_content = f"authorized-video-{index:02d}".encode()
+            fixture_duration = float(59 + index)
+            fixture_path.write_bytes(fixture_content)
+            source_durations[fixture_path] = fixture_duration
+            sources.append(
+                {
+                    "id": f"controlled-{index:02d}",
+                    "title": "Controlled training video",
+                    "media_path": fixture_path.name,
+                    "duration_seconds": fixture_duration,
+                    "sha256": hashlib.sha256(fixture_content).hexdigest(),
+                    "origin_url": None,
+                }
+            )
         manifest_path.write_text(
             json.dumps(
                 {
                     "version": 1,
-                    "sources": [
-                        {
-                            "id": "arm-01",
-                            "title": "手臂训练 01",
-                            "media_path": "arm-01.mp4",
-                            "duration_seconds": 60,
-                            "sha256": hashlib.sha256(b"team-owned-video").hexdigest(),
-                            "origin_url": None,
-                        }
-                    ],
+                    "sources": sources,
                 }
             ),
             encoding="utf-8",
@@ -216,8 +227,12 @@ def configured_readiness(
         ),
         "judge_access_code": judge_access_code,
         "access_cookie_secret": "cookie-signing-secret-with-at-least-32-bytes",
-        "judge_analysis_concurrency": 3,
-        "public_analysis_concurrency": 0,
+        "judge_analysis_concurrency": 0,
+        "public_analysis_concurrency": 1,
+        "gymti_llm_api_key": "ark-key",
+        "gymti_llm_enabled": True,
+        "gymti_llm_retention_confirmed": True,
+        "gymti_llm_concurrency": 3,
         "web_static_root": web_static_root,
         "trusted_proxy_cidrs": trusted_proxy_cidrs,
         "imageio_ffmpeg_exe": ffmpeg_path if include_ffmpeg else None,
@@ -234,7 +249,7 @@ def configured_readiness(
             manifest_path=manifest_path,
             media_root=media_root,
             public_media_base_url="https://media.example.com/hachimi/",
-            duration_probe=lambda _: 60,
+            duration_probe=lambda path: source_durations[path],
         )
         if controlled_sources
         else EmptySourceCatalog()
@@ -245,7 +260,7 @@ def configured_readiness(
             catalog=catalog,
             temp_root=tmp_path / "analysis-runs",
             skills_root=skills_root,
-            duration_probe=lambda _: 60,
+            duration_probe=lambda path: source_durations[path],
             ffmpeg_receipt_probe=lambda *_: ffmpeg_audit_passes,
         ),
         media_path,
@@ -333,8 +348,8 @@ async def test_production_ready_rejects_legacy_hashes_without_signed_build_recei
         ("analysis_visual_chunk_seconds", 50),
         ("analysis_visual_overlap_seconds", 5),
         ("run_timeout_seconds", 179),
-        ("judge_analysis_concurrency", 2),
-        ("public_analysis_concurrency", 1),
+        ("judge_analysis_concurrency", 1),
+        ("public_analysis_concurrency", 0),
         ("trusted_proxy_cidrs", "10.0.0.0/8"),
     ],
 )
@@ -346,6 +361,79 @@ def test_production_ready_rejects_competition_profile_drift(
     readiness, _ = configured_readiness(
         tmp_path,
         settings_overrides={setting_name: unsafe_value},
+    )
+
+    assert readiness.check() == "competition_configuration_invalid"
+
+
+@pytest.mark.parametrize(
+    ("setting_name", "unsafe_value"),
+    [
+        ("gymti_llm_api_key", None),
+        ("gymti_llm_enabled", False),
+        ("gymti_llm_retention_confirmed", False),
+    ],
+)
+def test_production_ready_requires_the_approved_gymti_provider_gate(
+    tmp_path: Path,
+    setting_name: str,
+    unsafe_value: object,
+) -> None:
+    readiness, _ = configured_readiness(
+        tmp_path,
+        settings_overrides={setting_name: unsafe_value},
+    )
+
+    assert readiness.check() == "provider_configuration_invalid"
+
+
+@pytest.mark.parametrize(
+    "setting_name",
+    ["ark_api_key", "volc_asr_api_key", "gymti_llm_api_key"],
+)
+def test_production_ready_rejects_whitespace_only_provider_keys(
+    tmp_path: Path,
+    setting_name: str,
+) -> None:
+    readiness, _ = configured_readiness(
+        tmp_path,
+        settings_overrides={setting_name: "   "},
+    )
+
+    assert readiness.check() == "provider_configuration_invalid"
+
+
+def test_production_ready_rejects_gymti_model_drift_from_doubao_seed_mini(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(tmp_path)
+    readiness._settings.gymti_llm_model = "doubao-seed-2-0-pro-260428"
+
+    assert readiness.check() == "provider_configuration_invalid"
+
+
+@pytest.mark.parametrize("contract_payload", [None, "{}"])
+def test_production_ready_rejects_a_missing_or_invalid_gymti_contract(
+    tmp_path: Path,
+    contract_payload: str | None,
+) -> None:
+    contract_path = tmp_path / "invalid-gymti-contract.json"
+    if contract_payload is not None:
+        contract_path.write_text(contract_payload, encoding="utf-8")
+    readiness, _ = configured_readiness(
+        tmp_path,
+        settings_overrides={"gymti_contract_path": contract_path},
+    )
+
+    assert readiness.check() == "gymti_contract_invalid"
+
+
+def test_production_ready_requires_the_independent_three_slot_gymti_gate(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(
+        tmp_path,
+        settings_overrides={"gymti_llm_concurrency": 2},
     )
 
     assert readiness.check() == "competition_configuration_invalid"
@@ -382,7 +470,7 @@ async def test_production_ready_uses_direct_peer_when_no_trusted_proxy_is_config
 
 
 @pytest.mark.asyncio
-async def test_production_ready_accepts_local_upload_without_controlled_catalog(
+async def test_production_ready_rejects_local_upload_without_controlled_catalog(
     tmp_path: Path,
 ) -> None:
     readiness, _ = configured_readiness(
@@ -397,8 +485,24 @@ async def test_production_ready_accepts_local_upload_without_controlled_catalog(
     ) as client:
         response = await client.get("/api/v1/ready")
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "code": "source_manifest_invalid"}
+
+
+@pytest.mark.asyncio
+async def test_production_ready_requires_exactly_five_controlled_sources(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(tmp_path, controlled_source_count=4)
+    app = create_app(app_env="production", readiness=readiness)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="https://test"
+    ) as client:
+        response = await client.get("/api/v1/ready")
+
+    assert response.status_code == 503
+    assert response.json() == {"status": "not_ready", "code": "source_manifest_invalid"}
 
 
 @pytest.mark.asyncio
@@ -431,3 +535,37 @@ async def test_production_ready_detects_media_changed_after_startup(tmp_path: Pa
 
     assert response.status_code == 503
     assert response.json() == {"status": "not_ready", "code": "media_cache_invalid"}
+
+
+def test_production_ready_rejects_an_unlisted_file_added_to_the_media_cache(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(tmp_path)
+    unexpected = tmp_path / "media" / "unlisted-private-video.mp4"
+    unexpected.write_bytes(b"synthetic-unlisted-media")
+
+    assert readiness.check() == "media_cache_invalid"
+
+
+def test_production_ready_rejects_a_symbolic_link_added_to_the_media_cache(
+    tmp_path: Path,
+) -> None:
+    readiness, _ = configured_readiness(tmp_path)
+    outside = tmp_path / "outside-cache"
+    outside.mkdir()
+    link = tmp_path / "media" / "unlisted-link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        if os.name != "nt":
+            pytest.skip("symbolic links are unavailable for this test user")
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(outside)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            pytest.skip("directory links are unavailable for this test user")
+
+    assert readiness.check() == "media_cache_invalid"

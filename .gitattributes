@@ -1,2 +1,14 @@
+**/.env export-ignore
+**/.env.* export-ignore
+**/*.mp4 export-ignore
+**/*.mov export-ignore
+**/*.webm export-ignore
+**/*.avi export-ignore
+**/*.mkv export-ignore
+**/*.mp3 export-ignore
+**/*.wav export-ignore
+**/*.m4a export-ignore
+**/*.aac export-ignore
+**/*.ogg export-ignore
 /questionaire export-ignore
 /questionaire/** export-ignore

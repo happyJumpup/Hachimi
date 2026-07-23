@@ -646,6 +646,7 @@ class GymtiNarrativeInput:
     secondary_result_id: str | None
     coach_style_id: str
     reason_codes: tuple[str, ...]
+    candidate_narrative_ids: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -736,9 +737,12 @@ class OpenAiStyleGymtiModel:
     async def narrate_result(self, payload: GymtiNarrativeInput) -> str | None:
         content = await self._completion(
             system=(
-                "Write a brief, warm GYMTI result narrative from the fixed structured facts. "
-                "Return JSON only with the key text. Do not change, infer, rank, or add results, "
-                "coach styles, reason codes, training advice, health claims, or user facts."
+                "Select exactly one candidate_narrative_id for the fixed GYMTI result. "
+                "Return JSON only and echo every supplied version, result, coach style, and "
+                "reason-code field unchanged. The exact keys are contract_version, "
+                "questionnaire_version, scoring_version, formal_result_id, "
+                "secondary_result_id, coach_style_id, reason_codes, and narrative_id. "
+                "Do not generate free text, change a fact, or add any other key."
             ),
             payload={
                 "contract_version": payload.contract_version,
@@ -748,17 +752,10 @@ class OpenAiStyleGymtiModel:
                 "secondary_result_id": payload.secondary_result_id,
                 "coach_style_id": payload.coach_style_id,
                 "reason_codes": payload.reason_codes,
+                "candidate_narrative_ids": payload.candidate_narrative_ids,
             },
         )
-        if content is None:
-            return None
-        try:
-            decoded = json.loads(content)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(decoded, dict) or set(decoded) != {"text"}:
-            return None
-        return decoded["text"] if isinstance(decoded["text"], str) else None
+        return content
 
     async def _completion(self, *, system: str, payload: Mapping[str, object]) -> str | None:
         try:
@@ -803,24 +800,56 @@ class OpenAiStyleGymtiModel:
             return None
 
 
-def _normalize_narrative(value: str | None) -> str | None:
+_NARRATIVE_TEMPLATES: Mapping[str, str] = {
+    "warm_confirmation": (
+        "你的 GYMTI 结果已经由问卷规则确定。TrainPal 会围绕这份偏好呈现陪伴方式，"
+        "推荐教练风格仍由你确认。"
+    ),
+    "clear_next_step": (
+        "这份 GYMTI 结果描述的是你当前的健身偏好。接下来可以查看推荐教练风格，"
+        "再由你决定是否采用。"
+    ),
+    "steady_reflection": (
+        "问卷已经形成稳定结果。TrainPal 只会用它调整表达与陪伴方式，"
+        "不会据此替你决定训练内容。"
+    ),
+}
+_NARRATIVE_IDS = tuple(_NARRATIVE_TEMPLATES)
+
+
+def approved_gymti_narratives() -> tuple[str, ...]:
+    """Return the only server-authored narratives an LLM may select."""
+
+    return tuple(_NARRATIVE_TEMPLATES.values())
+
+
+def _validated_narrative(
+    value: str | None,
+    payload: GymtiNarrativeInput,
+) -> str | None:
     if value is None:
         return None
-    text = value.strip()
-    if not text or len(text) > 600:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
         return None
-    if text.startswith("{"):
-        try:
-            decoded = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        if not isinstance(decoded, dict) or set(decoded) != {"text"}:
-            return None
-        candidate = decoded["text"]
-        if not isinstance(candidate, str):
-            return None
-        return _normalize_narrative(candidate)
-    return text
+    expected: Mapping[str, object] = {
+        "contract_version": payload.contract_version,
+        "questionnaire_version": payload.questionnaire_version,
+        "scoring_version": payload.scoring_version,
+        "formal_result_id": payload.formal_result_id,
+        "secondary_result_id": payload.secondary_result_id,
+        "coach_style_id": payload.coach_style_id,
+        "reason_codes": list(payload.reason_codes),
+    }
+    if not isinstance(decoded, dict) or set(decoded) != {*expected, "narrative_id"}:
+        return None
+    if any(decoded.get(key) != expected_value for key, expected_value in expected.items()):
+        return None
+    narrative_id = decoded.get("narrative_id")
+    if not isinstance(narrative_id, str):
+        return None
+    return _NARRATIVE_TEMPLATES.get(narrative_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -952,7 +981,9 @@ class GymtiService:
         if allow_model and self._model is not None:
             for _ in range(self._model_attempts):
                 try:
-                    narrative = _normalize_narrative(await self._model.narrate_result(payload))
+                    narrative = _validated_narrative(
+                        await self._model.narrate_result(payload), payload
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -1148,6 +1179,7 @@ class GymtiService:
             secondary_result_id=result.secondary_gymti_type,
             coach_style_id=result.recommended_coach_style_id,
             reason_codes=expected_reason_codes,
+            candidate_narrative_ids=_NARRATIVE_IDS,
         )
 
     def _positive_reason_codes(

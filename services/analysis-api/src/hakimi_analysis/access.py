@@ -7,12 +7,16 @@ import math
 import secrets
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
+from typing import Literal
 
 from hakimi_analysis.models import AccessSessionView, AccessTier
 
 ACCESS_COOKIE_NAME = "hachimi_access"
 ACCESS_SESSION_SECONDS = 12 * 60 * 60
+ADMISSION_REASON_HEADER = "X-TrainPal-Admission-Reason"
+AdmissionReason = Literal["capacity", "rate_limit", "session_active"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,8 +27,14 @@ class AccessSession:
 
 
 class AdmissionDenied(RuntimeError):
-    def __init__(self, *, retry_after_seconds: int) -> None:
+    def __init__(
+        self,
+        *,
+        reason: AdmissionReason,
+        retry_after_seconds: int,
+    ) -> None:
         super().__init__("analysis admission denied")
+        self.reason = reason
         self.retry_after_seconds = retry_after_seconds
 
 
@@ -40,11 +50,25 @@ class AnalysisLease:
     session_id: str
     tier: AccessTier
     source_id: str
+    client_ip: str
+    provisional: bool = False
     run_id: str | None = None
+    attempt_recorded: bool = False
+    attempt_recorded_at: float | None = None
+    committed: bool = False
     released: bool = False
+
+    async def activate(self, source_id: str) -> None:
+        await self.manager.activate(self, source_id)
 
     async def bind(self, run_id: str) -> None:
         await self.manager.bind(self, run_id)
+
+    def commit(self, run_id: str) -> None:
+        """Transfer a provisional lease to a created run before yielding control."""
+
+        self.run_id = run_id
+        self.committed = True
 
     async def release(self) -> None:
         await self.manager.release(self)
@@ -155,8 +179,13 @@ class AccessManager:
         encoded_signature = base64.urlsafe_b64encode(signature).rstrip(b"=")
         return f"{encoded.decode('ascii')}.{encoded_signature.decode('ascii')}"
 
-    def view(self, session: AccessSession) -> AccessSessionView:
-        retry_after = self._rate_retry_after(session.tier, session.id, None)
+    def view(
+        self,
+        session: AccessSession,
+        *,
+        client_ip: str | None = None,
+    ) -> AccessSessionView:
+        retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
         can_analyze = (
             session.id not in self._active_by_session
             and self._active_counts[session.tier] < self._capacities[session.tier]
@@ -183,40 +212,117 @@ class AccessManager:
         client_ip: str,
     ) -> AnalysisLease:
         async with self._lock:
-            if session.id in self._active_by_session:
-                raise AdmissionDenied(retry_after_seconds=1)
-            retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
-            if retry_after is not None:
-                raise AdmissionDenied(retry_after_seconds=retry_after)
-            if self._active_counts[session.tier] >= self._capacities[session.tier]:
-                raise AdmissionDenied(retry_after_seconds=15)
-            lease = AnalysisLease(
-                manager=self,
-                session_id=session.id,
-                tier=session.tier,
+            lease = self._reserve_locked(
+                session,
                 source_id=source_id,
+                client_ip=client_ip,
+                provisional=False,
             )
-            self._active_counts[session.tier] += 1
-            self._active_by_session[session.id] = lease
-            now = self._time_source()
-            self._session_attempts.setdefault((session.tier, session.id), []).append(now)
-            self._ip_attempts.setdefault((session.tier, client_ip), []).append(now)
+            self._record_attempt_locked(lease)
             return lease
+
+    async def reserve_provisional(
+        self,
+        session: AccessSession,
+        *,
+        source_id: str,
+        client_ip: str,
+    ) -> AnalysisLease:
+        """Hold capacity before reading a body without charging an attempt."""
+
+        async with self._lock:
+            return self._reserve_locked(
+                session,
+                source_id=source_id,
+                client_ip=client_ip,
+                provisional=True,
+            )
+
+    def _reserve_locked(
+        self,
+        session: AccessSession,
+        *,
+        source_id: str,
+        client_ip: str,
+        provisional: bool,
+    ) -> AnalysisLease:
+        # A full pool is the most immediate retry condition. The public canary
+        # depends on this precedence when concurrent clients share one egress IP.
+        if self._active_counts[session.tier] >= self._capacities[session.tier]:
+            raise AdmissionDenied(reason="capacity", retry_after_seconds=15)
+        retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
+        if retry_after is not None:
+            raise AdmissionDenied(
+                reason="rate_limit",
+                retry_after_seconds=retry_after,
+            )
+        if session.id in self._active_by_session:
+            raise AdmissionDenied(reason="session_active", retry_after_seconds=1)
+        lease = AnalysisLease(
+            manager=self,
+            session_id=session.id,
+            tier=session.tier,
+            source_id=source_id,
+            client_ip=client_ip,
+            provisional=provisional,
+        )
+        self._active_counts[session.tier] += 1
+        self._active_by_session[session.id] = lease
+        return lease
+
+    async def activate(self, lease: AnalysisLease, source_id: str) -> None:
+        """Turn a provisional body-ingress hold into one analysis attempt."""
+
+        async with self._lock:
+            if lease.released or self._active_by_session.get(lease.session_id) is not lease:
+                raise RuntimeError("analysis lease is no longer active")
+            lease.source_id = source_id
+            self._record_attempt_locked(lease)
+
+    def _record_attempt_locked(self, lease: AnalysisLease) -> None:
+        if lease.attempt_recorded:
+            return
+        lease.attempt_recorded = True
+        now = self._time_source()
+        lease.attempt_recorded_at = now
+        self._session_attempts.setdefault((lease.tier, lease.session_id), []).append(now)
+        self._ip_attempts.setdefault((lease.tier, lease.client_ip), []).append(now)
 
     async def bind(self, lease: AnalysisLease, run_id: str) -> None:
         async with self._lock:
             if lease.released:
                 return
             lease.run_id = run_id
+            lease.committed = True
 
     async def release(self, lease: AnalysisLease) -> None:
         async with self._lock:
             if lease.released:
                 return
             lease.released = True
+            if lease.provisional and not lease.committed:
+                self._rollback_attempt_locked(lease)
             if self._active_by_session.get(lease.session_id) is lease:
                 self._active_by_session.pop(lease.session_id, None)
             self._active_counts[lease.tier] = max(0, self._active_counts[lease.tier] - 1)
+
+    def _rollback_attempt_locked(self, lease: AnalysisLease) -> None:
+        recorded_at = lease.attempt_recorded_at
+        if not lease.attempt_recorded or recorded_at is None:
+            return
+        for attempts, key in (
+            (self._session_attempts, (lease.tier, lease.session_id)),
+            (self._ip_attempts, (lease.tier, lease.client_ip)),
+        ):
+            values = attempts.get(key)
+            if values is None:
+                continue
+            with suppress(ValueError):
+                values.remove(recorded_at)
+            if not values:
+                attempts.pop(key, None)
+        lease.attempt_recorded = False
+        lease.attempt_recorded_at = None
 
     def _rate_retry_after(
         self,

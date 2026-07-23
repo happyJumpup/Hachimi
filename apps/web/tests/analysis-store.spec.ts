@@ -162,6 +162,25 @@ describe('动作分析 store', () => {
     expect(events.closed).toBe(true)
   })
 
+  it('does not implicitly cancel or replace an active run when start is requested again', async () => {
+    const client = new FakeClient()
+    const events = new FakeEventFactory()
+    const store = useAnalysisStore()
+    let createCount = 0
+    client.createRun = async () => {
+      createCount += 1
+      return { ...completedRun('run-1'), status: 'queued', stage: 'queued', candidates: [] }
+    }
+
+    await store.start({ sourceId: 'video-a', client, events })
+    await store.start({ sourceId: 'video-a', client, events })
+
+    expect(createCount).toBe(1)
+    expect(client.cancelled).toEqual([])
+    expect(store.activeRunId).toBe('run-1')
+    expect(store.status).toBe('queued')
+  })
+
   it('uses real progress snapshots without inventing a percentage or ETA', async () => {
     const client = new FakeClient()
     const events = new FakeEventFactory()

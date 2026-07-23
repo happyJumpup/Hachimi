@@ -31,8 +31,10 @@
   "runtime": {
     "app_env": "production",
     "analysis_provider": "cloud",
-    "judge_analysis_concurrency": 3,
-    "public_analysis_concurrency": 0,
+    "judge_analysis_concurrency": 0,
+    "public_analysis_concurrency": 1,
+    "public_attempt_limit": 1,
+    "public_attempt_window_seconds": 600,
     "run_timeout_seconds": 180,
     "local_upload_enabled": true,
     "local_analysis_max_seconds": 300,
@@ -42,20 +44,26 @@
     "analysis_visual_chunk_seconds": 60,
     "analysis_visual_overlap_seconds": 10,
     "unauthenticated_page_browse": true,
-    "judge_code_required_for_paid_analysis": true,
-    "anonymous_paid_analysis": false,
+    "judge_code_required_for_paid_analysis": false,
+    "anonymous_paid_analysis": true,
+    "gymti_llm_enabled": true,
+    "gymti_llm_provider": "ark-doubao",
+    "gymti_llm_concurrency": 3,
+    "gymti_llm_request_quota": null,
     "raw_media_persistence": "forbidden",
     "active_run_state": "single-process-memory"
   },
   "asset_contract": {
-    "controlled_sources_required": false,
-    "source_manifest_path": null,
-    "source_media_root": null,
+    "controlled_sources_required": true,
+    "source_manifest_path": "/workspace/competition/media-manifest.json",
+    "source_media_root": "/workspace/tmp/controlled-media",
+    "controlled_source_count": 5,
+    "public_media_base_url_required": true,
     "ffmpeg_path": "/opt/trainpal/ffmpeg/bin/ffmpeg",
     "ffmpeg_receipt_path": "/opt/trainpal/ffmpeg/receipt.json",
     "smoke_annotations_path": null,
     "must_verify_ffmpeg_receipt": true,
-    "assets_deferred_until_content_approval": true
+    "assets_deferred_until_content_approval": false
   },
   "release_gates": {
     "private": {
@@ -66,9 +74,10 @@
     },
     "public_canary": {
       "public_health_ready": true,
-      "judge_analysis_sse_result": true,
+      "public_analysis_sse_result": true,
       "second_browser_entry": true,
-      "concurrent_judge_requests": 3,
+      "concurrent_public_requests": 2,
+      "accepted_public_requests": 1,
       "over_capacity_http_status": 429,
       "memory_pressure_observed": true,
       "rollback_smoke": true
@@ -110,6 +119,20 @@
     "VOLC_ASR_RESOURCE_ID",
     "VOLC_ASR_URL",
     "WEB_STATIC_ROOT"
+  ],
+  "release_managed_secret_alias_environment_keys": [
+    "GYMTI_LLM_API_KEY"
+  ],
+  "release_managed_nonsecret_environment_keys": [
+    "APP_RELEASE_SHA",
+    "GYMTI_LLM_BASE_URL",
+    "GYMTI_LLM_CONCURRENCY",
+    "GYMTI_LLM_ENABLED",
+    "GYMTI_LLM_MODEL",
+    "GYMTI_LLM_RETENTION_CONFIRMED",
+    "PUBLIC_MEDIA_BASE_URL",
+    "SOURCE_MANIFEST_PATH",
+    "SOURCE_MEDIA_ROOT"
   ],
   "budget": {
     "currency": "CNY",

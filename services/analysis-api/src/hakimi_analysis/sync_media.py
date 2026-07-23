@@ -25,7 +25,7 @@ def sync_media(*, manifest_path: Path, target_root: Path, base_url: str) -> int:
     except SourceManifestError as error:
         raise MediaSyncError("manifest_invalid", exit_code=2) from error
     normalized_base = _validated_base_url(base_url)
-    if target_root.is_symlink():
+    if target_root.is_symlink() or target_root.is_junction():
         raise MediaSyncError("cache_symlink_rejected", exit_code=3)
     resolved_target = target_root.expanduser().resolve()
     relative_paths = [_safe_media_path(source.media_path) for source in manifest.sources]
@@ -64,7 +64,7 @@ def _validate_existing_cache(root: Path, allowed_paths: list[PurePosixPath]) -> 
     allowed = {path.as_posix().casefold() for path in allowed_paths}
     try:
         for path in root.rglob("*"):
-            if path.is_symlink():
+            if path.is_symlink() or path.is_junction():
                 raise MediaSyncError("cache_symlink_rejected", exit_code=3)
             if path.is_file():
                 relative = path.relative_to(root).as_posix().casefold()
@@ -103,7 +103,7 @@ def _download_one(
     destination: Path,
     expected_sha256: str,
 ) -> None:
-    if destination.is_symlink():
+    if destination.is_symlink() or destination.is_junction():
         raise MediaSyncError("cache_symlink_rejected", exit_code=3)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")

@@ -370,8 +370,8 @@ export const useAnalysisStore = defineStore('analysis', () => {
     persistence?: AnalysisCheckpointStore
   }): Promise<void> {
     usePersistence(input.persistence)
-    if (isRunning.value) await cancel(input.client)
-    else clearResult()
+    if (isRunning.value) return
+    clearResult()
 
     const currentGeneration = ++generation
     resetResult()

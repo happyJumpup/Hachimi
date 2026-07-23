@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "id": "1c803eb2abf25554dce9df30",
+      "title": "快速体验视频",
+      "media_path": "media/bce76189cc97a9cf3e448a23483a919a.mp4",
+      "duration_seconds": 54.87,
+      "sha256": "c78463a5837f3340e21ff28904b6ad20a858e1b6229351324280c2923af37584"
+    },
+    {
+      "id": "dd56832d04fb3c53b59f5443",
+      "title": "快速体验视频",
+      "media_path": "media/e4f9f2ec4465cca33be1104c9905283b.mp4",
+      "duration_seconds": 67.83,
+      "sha256": "c3c670e2fb4602806a2ac77c20a18cf2a12747acacd184e3f2de6946410d09a5"
+    },
+    {
+      "id": "6630c7c03377d529d56543fe",
+      "title": "快速体验视频",
+      "media_path": "media/43d3e35438a6798e287fe8f9bd71c571.mp4",
+      "duration_seconds": 100.43,
+      "sha256": "33e2013ce0ecec2633d04a90a47954dcf5b71a289c0a10fe43dbe3cd72d065e3"
+    },
+    {
+      "id": "ebbc7d276bafc0489595366d",
+      "title": "快速体验视频",
+      "media_path": "media/2da767225180b15ec3b519b54274118c.mp4",
+      "duration_seconds": 108.72,
+      "sha256": "8e29cf4ecf244d4c9fcb89a0f6342706a56dd7a96df49ac83e29cec1034d89a5"
+    },
+    {
+      "id": "788fb21b61fdef42f37e8f56",
+      "title": "快速体验视频",
+      "media_path": "media/c1224ec1dff1256cb34df4f86a6c4d2d.mp4",
+      "duration_seconds": 207.77,
+      "sha256": "6a799122757fcc7bcfa8ec52076891e51e3fb6879eb54dd6b81262bd0b7df9f4"
+    }
+  ]
+}

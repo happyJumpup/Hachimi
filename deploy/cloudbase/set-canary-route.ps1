@@ -3,7 +3,7 @@ param(
     [Parameter(Mandatory)][string]$EnvironmentId,
     [Parameter(Mandatory)][string]$ExpectedStableVersion,
     [Parameter(Mandatory)][string]$ExpectedCandidateCommitSha,
-    [Parameter(Mandatory)][ValidateSet('enable', 'restore')][string]$Mode,
+    [Parameter(Mandatory)][ValidateSet('enable', 'promote', 'restore')][string]$Mode,
     [string]$RoutingHeaderName = '',
     [string]$RoutingHeaderValue = '',
     [string]$Region = 'ap-shanghai',
@@ -161,8 +161,8 @@ if ($ExpectedCandidateCommitSha -notmatch '^[0-9a-f]{40}$') {
 if ($Mode -eq 'enable' -and (-not $RoutingHeaderName -or -not $RoutingHeaderValue)) {
     throw 'Enabling a canary route requires a complete routing header pair.'
 }
-if ($Mode -eq 'restore' -and ($RoutingHeaderName -or $RoutingHeaderValue)) {
-    throw 'Restoring stable traffic does not accept a routing header pair.'
+if ($Mode -ne 'enable' -and ($RoutingHeaderName -or $RoutingHeaderValue)) {
+    throw 'FLOW route modes do not accept a routing header pair.'
 }
 if (-not $AuthPath) {
     $userProfile = [Environment]::GetFolderPath('UserProfile')
@@ -194,7 +194,7 @@ if (-not $candidateVersion -or $candidateVersion -eq $stableVersion) {
     throw 'CloudBase does not expose a distinct gray candidate version.'
 }
 $candidateIdentityVerified = $Mode -eq 'restore'
-if ($Mode -eq 'enable') {
+if ($Mode -in @('enable', 'promote')) {
     $candidateDetail = Invoke-TencentApi `
         -Service 'tcbr' `
         -Version '2022-02-17' `
@@ -223,14 +223,14 @@ if ($Mode -eq 'enable') {
     $candidateIdentityVerified = $true
 }
 if (
-    $Mode -eq 'enable' -and
+    $Mode -in @('enable', 'promote') -and
     @('normal', 'running') -notcontains [string](Get-PropertyValue $candidate 'Status')
 ) {
     throw 'The gray candidate is not running.'
 }
 $serviceDetail = $null
 $stableRouteVerifiedBeforeMutation = $false
-if ($Mode -eq 'enable') {
+if ($Mode -in @('enable', 'promote')) {
     $serviceDetail = Invoke-TencentApi `
         -Service 'tcbr' `
         -Version '2022-02-17' `
@@ -248,22 +248,44 @@ if ($Mode -eq 'enable') {
             }
         }
     )
-    $positiveRoutes = @(
-        $normalizedOnlineVersions | Where-Object {
-            [int]$_.FlowRatio -gt 0
-        }
-    )
     $stableRoutes = @(
-        $positiveRoutes | Where-Object {
+        $normalizedOnlineVersions | Where-Object {
             [string]$_.VersionName -eq $ExpectedStableVersion
         }
     )
-    if (
-        $positiveRoutes.Count -ne 1 -or
-        $stableRoutes.Count -ne 1 -or
-        [int]$stableRoutes[0].FlowRatio -ne 100
-    ) {
-        throw 'Private header routing can only start from stable 100 and candidate 0.'
+    $candidateRoutes = @(
+        $normalizedOnlineVersions | Where-Object {
+            [string]$_.VersionName -eq $candidateVersion
+        }
+    )
+    if ($Mode -eq 'promote') {
+        if (
+            $normalizedOnlineVersions.Count -ne 2 -or
+            $stableRoutes.Count -ne 1 -or
+            $candidateRoutes.Count -ne 1 -or
+            [int]$stableRoutes[0].FlowRatio -ne 100 -or
+            [int]$candidateRoutes[0].FlowRatio -ne 0
+        ) {
+            throw 'Promotion can only start from exact stable 100 and candidate 0.'
+        }
+    } else {
+        $positiveRoutes = @(
+            $normalizedOnlineVersions | Where-Object {
+                [int]$_.FlowRatio -gt 0
+            }
+        )
+        $positiveStableRoutes = @(
+            $positiveRoutes | Where-Object {
+                [string]$_.VersionName -eq $ExpectedStableVersion
+            }
+        )
+        if (
+            $positiveRoutes.Count -ne 1 -or
+            $positiveStableRoutes.Count -ne 1 -or
+            [int]$positiveStableRoutes[0].FlowRatio -ne 100
+        ) {
+            throw 'Private header routing can only start from stable 100 and candidate 0.'
+        }
     }
     $stableRouteVerifiedBeforeMutation = $true
 }

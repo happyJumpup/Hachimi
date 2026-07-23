@@ -17,9 +17,9 @@ def test_test_provider_is_allowed_only_in_test_environment() -> None:
 
 
 def test_analysis_capacity_has_safe_production_defaults() -> None:
-    settings = Settings(_env_file=None)
-    assert settings.judge_analysis_concurrency == 2
-    assert settings.public_analysis_concurrency == 0
+    settings = Settings(_env_file=None, app_env="production")
+    assert settings.judge_analysis_concurrency == 0
+    assert settings.public_analysis_concurrency == 1
 
 
 def test_default_development_cors_origins_match_vite_loopback_hosts() -> None:
@@ -136,13 +136,13 @@ def test_secret_values_are_redacted_from_settings_repr() -> None:
     assert "cookie-secret-value" not in representation
 
 
-def test_gymti_deepseek_compatible_settings_have_safe_local_fallback_defaults() -> None:
+def test_gymti_ark_settings_have_safe_local_fallback_defaults() -> None:
     settings = Settings(_env_file=None)
     configured = Settings(
         _env_file=None,
-        gymti_llm_api_key=SecretStr("deepseek-secret-value"),
-        gymti_llm_model="deepseek-reasoner",
-        gymti_llm_base_url="https://api.deepseek.com/v1",
+        gymti_llm_api_key=SecretStr("ark-gymti-secret-value"),
+        gymti_llm_model="doubao-seed-2-0-mini-260428",
+        gymti_llm_base_url="https://ark.cn-beijing.volces.com/api/v3",
         gymti_llm_enabled=True,
         gymti_llm_retention_confirmed=True,
     )
@@ -151,8 +151,63 @@ def test_gymti_deepseek_compatible_settings_have_safe_local_fallback_defaults() 
     assert settings.gymti_llm_enabled is False
     assert settings.gymti_llm_retention_confirmed is False
     assert settings.gymti_llm_temperature > 0
-    assert settings.gymti_llm_model == "deepseek-chat"
+    assert settings.gymti_llm_model == "doubao-seed-2-0-mini-260428"
+    assert settings.gymti_llm_base_url == "https://ark.cn-beijing.volces.com/api/v3"
+    assert settings.gymti_llm_concurrency == 3
     assert configured.gymti_llm_enabled is True
     assert configured.gymti_llm_retention_confirmed is True
-    assert configured.gymti_llm_model == "deepseek-reasoner"
-    assert "deepseek-secret-value" not in repr(configured)
+    assert configured.gymti_llm_model == "doubao-seed-2-0-mini-260428"
+    assert "ark-gymti-secret-value" not in repr(configured)
+
+
+def test_legacy_deepseek_environment_variables_cannot_configure_gymti(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "legacy-deepseek-secret")
+    monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
+    monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.gymti_llm_api_key is None
+    assert settings.gymti_llm_model == "doubao-seed-2-0-mini-260428"
+    assert settings.gymti_llm_base_url == "https://ark.cn-beijing.volces.com/api/v3"
+
+
+def test_production_rejects_a_non_ark_gymti_endpoint() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            gymti_llm_enabled=True,
+            gymti_llm_base_url="https://api.deepseek.com/v1",
+        )
+
+
+def test_production_gymti_requires_the_exact_doubao_seed_mini_model() -> None:
+    with pytest.raises(ValidationError):
+        Settings(
+            _env_file=None,
+            app_env="production",
+            gymti_llm_enabled=True,
+            gymti_llm_model="doubao-seed-2-0-pro-260428",
+        )
+
+    settings = Settings(
+        _env_file=None,
+        app_env="production",
+        ark_model_id="operator-selected-video-model",
+        gymti_llm_enabled=True,
+        gymti_llm_model="doubao-seed-2-0-mini-260428",
+    )
+
+    assert settings.ark_model_id == "operator-selected-video-model"
+    assert settings.gymti_llm_model == "doubao-seed-2-0-mini-260428"
+
+
+def test_gymti_model_gate_concurrency_is_configurable_and_positive() -> None:
+    configured = Settings(_env_file=None, gymti_llm_concurrency=4)
+
+    assert configured.gymti_llm_concurrency == 4
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, gymti_llm_concurrency=0)

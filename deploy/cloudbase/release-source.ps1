@@ -3,6 +3,8 @@ param(
     [Parameter(Mandatory)][string]$EnvironmentId,
     [Parameter(Mandatory)][string]$CommitSha,
     [Parameter(Mandatory)][string]$ExpectedCurrentVersion,
+    [Parameter(Mandatory)][ValidatePattern('^https://')][string]$PublicMediaBaseUrl,
+    [switch]$ConfirmGymtiProviderRetention,
     [string]$Region = 'ap-shanghai',
     [string]$ServiceName = 'trainpal-demo',
     [string]$AuthPath = '',
@@ -11,6 +13,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if (-not $ConfirmGymtiProviderRetention.IsPresent) {
+    throw (
+        'GYMTI provider retention must be explicitly confirmed for this release. ' +
+        'Re-run with -ConfirmGymtiProviderRetention only after checking the target provider account.'
+    )
+}
 
 function Get-Sha256Hex {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
@@ -281,7 +290,7 @@ foreach ($key in @($foundation.required_secret_environment_keys)) {
     }
 }
 
-$overrides = [ordered]@{
+$inheritedOverrides = [ordered]@{
     APP_ENV = 'production'
     ANALYSIS_PROVIDER = 'cloud'
     LOCAL_UPLOAD_ENABLED = 'true'
@@ -292,15 +301,71 @@ $overrides = [ordered]@{
     ANALYSIS_VISUAL_CHUNK_SECONDS = '60'
     ANALYSIS_VISUAL_OVERLAP_SECONDS = '10'
     RUN_TIMEOUT_SECONDS = '180'
-    PUBLIC_ANALYSIS_CONCURRENCY = '0'
-    JUDGE_ANALYSIS_CONCURRENCY = '3'
+    PUBLIC_ANALYSIS_CONCURRENCY = '1'
+    JUDGE_ANALYSIS_CONCURRENCY = '0'
     TRUSTED_PROXY_CIDRS = ''
     IMAGEIO_FFMPEG_EXE = '/opt/trainpal/ffmpeg/bin/ffmpeg'
     FFMPEG_BUILD_RECEIPT_PATH = '/opt/trainpal/ffmpeg/receipt.json'
     WEB_STATIC_ROOT = '/workspace/apps/web/dist'
-    APP_RELEASE_SHA = $CommitSha
 }
-foreach ($entry in $overrides.GetEnumerator()) {
+$releaseManagedNonsecretOverrides = [ordered]@{
+    APP_RELEASE_SHA = $CommitSha
+    GYMTI_LLM_BASE_URL = $environment['ARK_BASE_URL']
+    GYMTI_LLM_CONCURRENCY = '3'
+    GYMTI_LLM_ENABLED = 'true'
+    GYMTI_LLM_MODEL = 'doubao-seed-2-0-mini-260428'
+    GYMTI_LLM_RETENTION_CONFIRMED = 'true'
+    PUBLIC_MEDIA_BASE_URL = $PublicMediaBaseUrl
+    SOURCE_MANIFEST_PATH = '/workspace/competition/media-manifest.json'
+    SOURCE_MEDIA_ROOT = '/workspace/tmp/controlled-media'
+}
+$releaseManagedSecretAliases = [ordered]@{
+    GYMTI_LLM_API_KEY = $environment['ARK_API_KEY']
+}
+
+$expectedManagedNonsecretKeys = @(
+    $foundation.release_managed_nonsecret_environment_keys |
+        ForEach-Object { [string]$_ } |
+        Sort-Object
+)
+$actualManagedNonsecretKeys = @(
+    $releaseManagedNonsecretOverrides.Keys |
+        ForEach-Object { [string]$_ } |
+        Sort-Object
+)
+if (@(
+    Compare-Object `
+        -ReferenceObject $expectedManagedNonsecretKeys `
+        -DifferenceObject $actualManagedNonsecretKeys
+).Count -ne 0) {
+    throw 'Release-managed non-secret environment key contract drifted.'
+}
+
+$expectedManagedSecretAliasKeys = @(
+    $foundation.release_managed_secret_alias_environment_keys |
+        ForEach-Object { [string]$_ } |
+        Sort-Object
+)
+$actualManagedSecretAliasKeys = @(
+    $releaseManagedSecretAliases.Keys |
+        ForEach-Object { [string]$_ } |
+        Sort-Object
+)
+if (@(
+    Compare-Object `
+        -ReferenceObject $expectedManagedSecretAliasKeys `
+        -DifferenceObject $actualManagedSecretAliasKeys
+).Count -ne 0) {
+    throw 'Release-managed secret alias environment key contract drifted.'
+}
+
+foreach ($entry in $inheritedOverrides.GetEnumerator()) {
+    $environment[$entry.Key] = $entry.Value
+}
+foreach ($entry in $releaseManagedNonsecretOverrides.GetEnumerator()) {
+    $environment[$entry.Key] = $entry.Value
+}
+foreach ($entry in $releaseManagedSecretAliases.GetEnumerator()) {
     $environment[$entry.Key] = $entry.Value
 }
 $orderedEnvironment = [ordered]@{}
@@ -345,7 +410,7 @@ try {
     $items = @(
         @{ Key = 'CpuSpecs'; FloatValue = 2.0 },
         @{ Key = 'MemSpecs'; FloatValue = 4.0 },
-        @{ Key = 'MinNum'; IntValue = 0 },
+        @{ Key = 'MinNum'; IntValue = 1 },
         @{ Key = 'MaxNum'; IntValue = 1 },
         @{ Key = 'Port'; IntValue = 8000 },
         @{ Key = 'AccessTypes'; ArrayValue = @($releasePolicy.access_types) },

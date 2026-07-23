@@ -2,11 +2,13 @@ import re
 from ipaddress import ip_network
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
+GYMTI_DOUBAO_SEED_MINI_MODEL = "doubao-seed-2-0-mini-260428"
 
 
 class Settings(BaseSettings):
@@ -40,8 +42,8 @@ class Settings(BaseSettings):
     ffmpeg_expected_configuration_sha256: str | None = None
     judge_access_code: SecretStr | None = None
     access_cookie_secret: SecretStr | None = None
-    judge_analysis_concurrency: int = Field(default=2, ge=0)
-    public_analysis_concurrency: int = Field(default=0, ge=0)
+    judge_analysis_concurrency: int = Field(default=0, ge=0)
+    public_analysis_concurrency: int = Field(default=1, ge=0)
     trusted_proxy_cidrs: str = ""
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     run_ttl_seconds: int = Field(default=600, ge=1)
@@ -55,29 +57,15 @@ class Settings(BaseSettings):
     analysis_visual_overlap_seconds: float = Field(default=10.0, ge=0)
     analysis_latency_target_max_seconds_per_video_minute: float = Field(default=15.0, gt=0)
     gymti_contract_path: Path = PROJECT_ROOT / "contracts" / "gymti-questionnaire.v1.json"
-    gymti_llm_api_key: SecretStr | None = Field(
-        default=None,
-        validation_alias=AliasChoices("GYMTI_LLM_API_KEY", "DEEPSEEK_API_KEY"),
-    )
-    gymti_llm_model: str = Field(
-        default="deepseek-chat",
-        validation_alias=AliasChoices("GYMTI_LLM_MODEL", "DEEPSEEK_MODEL"),
-    )
-    gymti_llm_base_url: str = Field(
-        default="https://api.deepseek.com/v1",
-        validation_alias=AliasChoices("GYMTI_LLM_BASE_URL", "DEEPSEEK_BASE_URL"),
-    )
-    gymti_llm_enabled: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("GYMTI_LLM_ENABLED"),
-    )
-    gymti_llm_retention_confirmed: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("GYMTI_LLM_RETENTION_CONFIRMED"),
-    )
+    gymti_llm_api_key: SecretStr | None = None
+    gymti_llm_model: str = GYMTI_DOUBAO_SEED_MINI_MODEL
+    gymti_llm_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
+    gymti_llm_enabled: bool = False
+    gymti_llm_retention_confirmed: bool = False
     gymti_llm_timeout_seconds: float = Field(default=4.0, gt=0, le=20)
     gymti_llm_temperature: float = Field(default=0.7, ge=0, le=2)
     gymti_llm_max_attempts: int = Field(default=2, ge=1, le=3)
+    gymti_llm_concurrency: int = Field(default=3, ge=1)
 
     @model_validator(mode="after")
     def reject_runtime_test_provider(self) -> "Settings":
@@ -85,6 +73,23 @@ class Settings(BaseSettings):
             raise ValueError("test analysis provider is allowed only when APP_ENV=test")
         if self.analysis_visual_overlap_seconds >= self.analysis_visual_chunk_seconds:
             raise ValueError("visual chunk overlap must be shorter than the chunk")
+        if self.app_env == "production" and self.gymti_llm_enabled:
+            gymti_url = urlparse(self.gymti_llm_base_url)
+            if (
+                gymti_url.scheme != "https"
+                or gymti_url.hostname != "ark.cn-beijing.volces.com"
+                or gymti_url.path.rstrip("/") != "/api/v3"
+                or gymti_url.username is not None
+                or gymti_url.password is not None
+                or gymti_url.params
+                or gymti_url.query
+                or gymti_url.fragment
+                or self.gymti_llm_model.strip() != GYMTI_DOUBAO_SEED_MINI_MODEL
+            ):
+                raise ValueError(
+                    "production GYMTI must use the approved Ark endpoint and "
+                    "Doubao Seed Mini model"
+                )
         return self
 
     @field_validator("trusted_proxy_cidrs")

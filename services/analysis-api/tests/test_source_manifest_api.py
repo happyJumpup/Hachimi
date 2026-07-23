@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,12 @@ from hakimi_analysis.app import create_app
 from hakimi_analysis.bootstrap import build_catalog
 from hakimi_analysis.pipeline import PipelineOutput
 from hakimi_analysis.settings import Settings
-from hakimi_analysis.sources import SourceCatalog, SourceManifestError, VideoSource
+from hakimi_analysis.sources import (
+    SourceCatalog,
+    SourceManifestError,
+    VideoSource,
+    load_source_manifest,
+)
 
 
 class EmptyPipeline:
@@ -21,6 +27,43 @@ class EmptyPipeline:
         emit: object,
     ) -> PipelineOutput:
         return PipelineOutput(candidates=[], empty_reason="no_evidence")
+
+
+def test_competition_manifest_registers_five_neutral_opaque_sources_in_duration_order() -> None:
+    manifest_path = Path(__file__).parents[3] / "competition" / "media-manifest.json"
+
+    manifest = load_source_manifest(manifest_path)
+    serialized = manifest_path.read_text(encoding="utf-8")
+    raw_manifest = json.loads(serialized)
+
+    assert len(manifest.sources) == 5
+    assert all(
+        set(source) == {"id", "title", "media_path", "duration_seconds", "sha256"}
+        for source in raw_manifest["sources"]
+    )
+    assert {source.title for source in manifest.sources} == {"快速体验视频"}
+    assert [source.duration_seconds for source in manifest.sources] == [
+        54.87,
+        67.83,
+        100.43,
+        108.72,
+        207.77,
+    ]
+    assert [source.sha256 for source in manifest.sources] == [
+        "c78463a5837f3340e21ff28904b6ad20a858e1b6229351324280c2923af37584",
+        "c3c670e2fb4602806a2ac77c20a18cf2a12747acacd184e3f2de6946410d09a5",
+        "33e2013ce0ecec2633d04a90a47954dcf5b71a289c0a10fe43dbe3cd72d065e3",
+        "8e29cf4ecf244d4c9fcb89a0f6342706a56dd7a96df49ac83e29cec1034d89a5",
+        "6a799122757fcc7bcfa8ec52076891e51e3fb6879eb54dd6b81262bd0b7df9f4",
+    ]
+    assert all(re.fullmatch(r"[0-9a-f]{24}", source.id) for source in manifest.sources)
+    assert all(
+        re.fullmatch(r"media/[0-9a-f]{32}\.mp4", source.media_path)
+        for source in manifest.sources
+    )
+    assert "video1" not in serialized
+    assert "健身视频" not in serialized
+    assert all(token not in serialized for token in ("-68s", "-100s", "-108s", "-208s"))
 
 
 def write_manifest(tmp_path: Path, *, media_path: str = "competition/arm-01.mp4") -> Path:

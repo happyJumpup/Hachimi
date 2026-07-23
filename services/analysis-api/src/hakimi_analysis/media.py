@@ -12,6 +12,7 @@ from typing import Any
 
 import imageio_ffmpeg
 
+from hakimi_analysis.runtime_cleanup import RuntimeCleanupMonitor
 from hakimi_analysis.sources import MAX_ANALYZABLE_SOURCE_DURATION_SECONDS
 
 VISUAL_SAMPLE_INTERVAL_SECONDS = 3.5
@@ -79,6 +80,7 @@ class LocalMediaProcessor:
         command_timeout_seconds: float = 90,
         max_source_duration_seconds: float = MAX_ANALYZABLE_SOURCE_DURATION_SECONDS,
         visual_sample_interval_seconds: float = VISUAL_SAMPLE_INTERVAL_SECONDS,
+        runtime_cleanup: RuntimeCleanupMonitor | None = None,
     ) -> None:
         if max_source_duration_seconds <= 0 or visual_sample_interval_seconds <= 0:
             raise ValueError("media analysis limits must be positive")
@@ -86,6 +88,7 @@ class LocalMediaProcessor:
         self._command_timeout_seconds = command_timeout_seconds
         self._max_source_duration_seconds = max_source_duration_seconds
         self._visual_sample_interval_seconds = visual_sample_interval_seconds
+        self._runtime_cleanup = runtime_cleanup
         if self._temp_root is not None:
             self._temp_root.mkdir(parents=True, exist_ok=True)
 
@@ -346,6 +349,8 @@ class LocalMediaProcessor:
             )
         except OSError as error:
             raise MediaProcessingError(f"{operation} extraction could not start") from error
+        if self._runtime_cleanup is not None:
+            self._runtime_cleanup.register_ffmpeg_process(process)
         communication = asyncio.create_task(asyncio.to_thread(process.communicate))
         try:
             async with asyncio.timeout(self._command_timeout_seconds):
@@ -360,6 +365,9 @@ class LocalMediaProcessor:
         except asyncio.CancelledError:
             await _stop_process(process, communication)
             raise
+        finally:
+            if self._runtime_cleanup is not None and process.poll() is not None:
+                self._runtime_cleanup.unregister_ffmpeg_process(process)
         if process.returncode != 0:
             raise MediaProcessingError(f"{operation} extraction failed")
         output_path = Path(arguments[-1])

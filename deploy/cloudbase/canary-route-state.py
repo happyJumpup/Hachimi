@@ -80,12 +80,41 @@ def _verify_percentage_routes(
             raise RouteStateError("online traffic is not stable 100 and candidate 0")
 
 
+def _verify_exact_percentage_routes(
+    online_versions: list[Any],
+    *,
+    stable_version: str,
+    candidate_version: str,
+    stable_ratio: int,
+    candidate_ratio: int,
+) -> None:
+    ratios: dict[str, int] = {}
+    for item in online_versions:
+        if not isinstance(item, dict):
+            raise RouteStateError("online route state is invalid")
+        version_name = _required_string(item, "VersionName")
+        if version_name in ratios:
+            raise RouteStateError("online route state contains duplicate versions")
+        ratios[version_name] = _required_ratio(item, "FlowRatio")
+    if set(ratios) != {stable_version, candidate_version}:
+        raise RouteStateError("online routes do not exactly match stable and candidate")
+    if (
+        ratios[stable_version] != stable_ratio
+        or ratios[candidate_version] != candidate_ratio
+    ):
+        raise RouteStateError("online traffic does not match the requested promotion")
+
+
 def verify_route_state(payload: Any) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise RouteStateError("route verification input must be a JSON object")
     mode = _required_string(payload, "mode")
-    if mode not in {"enable", "restore"}:
+    if mode not in {"enable", "promote", "restore"}:
         raise RouteStateError("route verification mode is invalid")
+    if mode != "enable" and (
+        "routing_header_name" in payload or "routing_header_value" in payload
+    ):
+        raise RouteStateError("FLOW route modes do not accept routing headers")
     stable_version = _required_string(payload, "stable_version")
     candidate_commit_sha = _required_string(payload, "candidate_commit_sha")
     if re.fullmatch(r"[0-9a-f]{40}", candidate_commit_sha) is None:
@@ -101,9 +130,15 @@ def verify_route_state(payload: Any) -> dict[str, object]:
         raise RouteStateError("candidate release identity is not distinct")
     if stable.get("Status") not in ACTIVE_VERSION_STATUSES:
         raise RouteStateError("stable release is not running")
-    if mode == "enable" and candidate.get("Status") not in ACTIVE_VERSION_STATUSES:
+    if (
+        mode in {"enable", "promote"}
+        and candidate.get("Status") not in ACTIVE_VERSION_STATUSES
+    ):
         raise RouteStateError("candidate release is not running")
-    if mode == "enable" and payload.get("candidate_identity_verified") is not True:
+    if (
+        mode in {"enable", "promote"}
+        and payload.get("candidate_identity_verified") is not True
+    ):
         raise RouteStateError("candidate release identity is not verified")
     candidate_remark = candidate.get("Remark")
     if (
@@ -132,6 +167,27 @@ def verify_route_state(payload: Any) -> dict[str, object]:
             raise RouteStateError("stable version has unexpected header-mode traffic")
         if _required_ratio(candidate, "FlowRatio") != 0:
             raise RouteStateError("candidate unexpectedly received percentage traffic")
+    elif mode == "promote":
+        if payload.get("stable_route_verified_before_mutation") is not True:
+            raise RouteStateError("stable traffic was not verified before mutation")
+        _verify_exact_percentage_routes(
+            online_versions,
+            stable_version=stable_version,
+            candidate_version=candidate_version,
+            stable_ratio=0,
+            candidate_ratio=100,
+        )
+        if _required_ratio(stable, "FlowRatio") != 0:
+            raise RouteStateError("stable release order ratio is not zero")
+        if _required_ratio(candidate, "FlowRatio") != 100:
+            raise RouteStateError("candidate release order ratio is not 100")
+        if stable.get("IsDefaultPriority") is not True:
+            raise RouteStateError("stable release order priority is invalid")
+        if candidate.get("IsDefaultPriority") is not False:
+            raise RouteStateError("candidate release order priority is invalid")
+        traffic_values = _optional_list(order, "TrafficTypeValues")
+        if traffic_values:
+            raise RouteStateError("candidate header route is still active")
     else:
         _verify_percentage_routes(
             online_versions,
@@ -144,8 +200,8 @@ def verify_route_state(payload: Any) -> dict[str, object]:
         "traffic_type": expected_traffic_type,
         "stable_version": stable_version,
         "candidate_version": candidate_version,
-        "stable_flow_ratio": 100,
-        "candidate_flow_ratio": 0,
+        "stable_flow_ratio": 0 if mode == "promote" else 100,
+        "candidate_flow_ratio": 100 if mode == "promote" else 0,
         "routing_header_name": None,
         "routing_header_value_sha256": None,
     }

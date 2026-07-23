@@ -28,6 +28,7 @@ def load_audit_module() -> ModuleType:
         ("workspace/skills/transcript.vtt", "subtitle or transcript"),
         ("workspace/apps/web/dist/assets/unregistered.webp", "unregistered visual"),
         ("workspace/services/analysis-api/src/transcript.json", "transcript artifact"),
+        ("workspace/competition/controlled-source.mp4", "raw media"),
     ],
 )
 def test_release_audit_rejects_frames_and_transcripts(path: str, reason: str) -> None:
@@ -109,13 +110,38 @@ def test_web_builder_and_runtime_copy_the_shared_gymti_contract() -> None:
     assert dockerfile.count(contract_copy) == 2
 
 
-def test_release_image_verifiers_share_the_anonymous_gymti_smoke_contract() -> None:
-    for verifier_name in ("verify-competition-image.sh", "verify-competition-image.ps1"):
+def test_release_image_verifiers_share_the_public_gymti_and_runtime_media_contract() -> None:
+    for verifier_name, model_trap_variable in (
+        ("verify-competition-image.sh", "model_trap_name"),
+        ("verify-competition-image.ps1", "modelTrapName"),
+    ):
         verifier = (PROJECT_ROOT / "deploy" / verifier_name).read_text(encoding="utf-8")
         assert "smoke-gymti-image.py" in verifier
         assert "GYMTI_LLM_ENABLED" in verifier
         assert "GYMTI_LLM_RETENTION_CONFIRMED" in verifier
+        assert "GYMTI_LLM_CONCURRENCY=3" in verifier
+        assert "PUBLIC_ANALYSIS_CONCURRENCY=1" in verifier
+        assert "JUDGE_ANALYSIS_CONCURRENCY=0" in verifier
+        assert "SOURCE_MANIFEST_PATH=/runtime-fixture/media-manifest.json" in verifier
+        assert "SOURCE_MEDIA_ROOT=/runtime-fixture/media" in verifier
+        assert "PUBLIC_MEDIA_BASE_URL=https://image-audit.invalid/media" in verifier
+        assert "/opt/trainpal/ffmpeg/bin/ffmpeg" in verifier
+        assert "gymti-provider-call" in verifier
+        assert "unexpected-gymti-model-call" not in verifier
         assert "/workspace/contracts/gymti-questionnaire.v1.json" in verifier
+        assert "APP_ENV=production" in verifier
+        assert "GYMTI_LLM_MODEL=doubao-seed-2-0-mini-260428" in verifier
+        assert (
+            "GYMTI_LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3" in verifier
+        )
+        assert "APP_ENV=test" in verifier
+        assert "ANALYSIS_PROVIDER=test" in verifier
+        assert "GYMTI_LLM_MODEL=image-audit-trap-model" in verifier
+        assert f"http://${{{model_trap_variable}}}:8081/v1" in verifier
 
     smoke = (PROJECT_ROOT / "deploy" / "smoke-gymti-image.py").read_text(encoding="utf-8")
-    assert '"Origin": "http://127.0.0.1:8000"' in smoke
+    assert 'base_url="http://image-audit.invalid"' in smoke
+    assert 'headers={"Origin": "http://image-audit.invalid"}' in smoke
+    assert 'app_env="test"' in smoke
+    assert '"source": "llm"' in smoke
+    assert '"source": "local_fallback"' in smoke
