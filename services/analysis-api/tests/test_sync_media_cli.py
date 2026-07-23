@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -12,13 +13,27 @@ from typing import cast
 
 import pytest
 
+from hakimi_analysis import sync_media as sync_media_module
+
 
 @contextmanager
-def media_server(content: bytes, *, declared_length: int | None = None) -> Iterator[str]:
+def media_server(
+    content: bytes,
+    *,
+    declared_length: int | None = None,
+    transient_failures: int = 0,
+) -> Iterator[str]:
+    request_count = 0
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            nonlocal request_count
             if self.path != "/media/competition/arm-01.mp4":
                 self.send_error(404)
+                return
+            request_count += 1
+            if request_count <= transient_failures:
+                self.send_error(503)
                 return
             self.send_response(200)
             self.send_header("Content-Type", "video/mp4")
@@ -107,6 +122,59 @@ def test_sync_media_cli_downloads_and_verifies_authorized_manifest_media(
     assert result.stdout == "media_sync_pass source_count=1\n"
     assert result.stderr == ""
     assert (target / "competition" / "arm-01.mp4").read_bytes() == content
+
+
+def test_sync_media_cli_retries_one_transient_transfer_failure(tmp_path: Path) -> None:
+    content = b"team-owned-competition-video"
+    manifest = write_manifest(tmp_path, content)
+    target = tmp_path / "cache"
+
+    with media_server(content, transient_failures=1) as base_url:
+        result = run_sync(manifest, target, base_url)
+
+    assert result.returncode == 0
+    assert result.stdout == "media_sync_pass source_count=1\n"
+    assert result.stderr == ""
+    assert (target / "competition" / "arm-01.mp4").read_bytes() == content
+
+
+def test_sync_media_fails_closed_when_the_global_startup_budget_is_exhausted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"team-owned-competition-video"
+    manifest = write_manifest(tmp_path, content)
+    target = tmp_path / "cache"
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setattr(sync_media_module, "SYNC_DEADLINE_SECONDS", 0.0)
+
+    with (
+        media_server(content) as base_url,
+        pytest.raises(sync_media_module.MediaSyncError) as captured,
+    ):
+        sync_media_module.sync_media(
+            manifest_path=manifest,
+            target_root=target,
+            base_url=base_url,
+        )
+
+    assert captured.value.code == "sync_timeout"
+    assert captured.value.exit_code == 3
+    assert not (target / "competition" / "arm-01.mp4").exists()
+    assert list(target.rglob("*.tmp")) == []
+
+
+def test_transfer_timeout_is_clamped_to_the_remaining_global_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(time, "monotonic", lambda: 239.75)
+
+    timeout = sync_media_module._bounded_transfer_timeout(deadline=240.0)
+
+    assert timeout.connect == pytest.approx(0.25)
+    assert timeout.read == pytest.approx(0.25)
+    assert timeout.write == pytest.approx(0.25)
+    assert timeout.pool == pytest.approx(0.25)
 
 
 @pytest.mark.parametrize(

@@ -11,12 +11,17 @@ from hakimi_analysis.pipeline import EmitCallback, PipelineOutput
 from hakimi_analysis.sources import SourceCatalog, VideoSource
 
 
-def access_manager(*, public_concurrency: int = 0) -> AccessManager:
+def access_manager(
+    *,
+    public_concurrency: int = 0,
+    public_attempt_limit: int | None = None,
+) -> AccessManager:
     return AccessManager(
         cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
         judge_access_code="judge-demo-code",
         judge_concurrency=2,
         public_concurrency=public_concurrency,
+        public_attempt_limit=public_attempt_limit,
     )
 
 
@@ -270,6 +275,67 @@ async def test_judge_and_public_capacity_are_isolated_and_full_pool_returns_429(
 
 
 @pytest.mark.asyncio
+async def test_legacy_judge_session_shares_the_public_slot_when_judge_pool_is_disabled(
+    tmp_path: Path,
+) -> None:
+    access = AccessManager(
+        cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
+        judge_access_code="judge-demo-code",
+        judge_concurrency=0,
+        public_concurrency=1,
+    )
+    app = create_app(
+        catalog=two_source_catalog(tmp_path),
+        pipeline=SlowPipeline(),
+        access=access,
+    )
+    async with (
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("203.0.113.2", 1002)),
+            base_url="https://test",
+        ) as legacy_judge,
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, client=("203.0.113.3", 1003)),
+            base_url="https://test",
+        ) as public_client,
+    ):
+        await legacy_judge.get("/api/v1/access/session")
+        upgraded = await legacy_judge.post(
+            "/api/v1/access/session",
+            json={"access_code": "judge-demo-code"},
+            headers={"Origin": "https://test"},
+        )
+        session = await legacy_judge.get("/api/v1/access/session")
+        started = await legacy_judge.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-01", "trigger_seconds": 10},
+        )
+        rejected = await public_client.post(
+            "/api/v1/analysis-runs",
+            json={"source_id": "arm-02", "trigger_seconds": 10},
+        )
+
+        assert upgraded.status_code == 200
+        assert upgraded.json() == {
+            "tier": "public",
+            "can_analyze": True,
+            "retry_after_seconds": None,
+        }
+        assert session.status_code == 200
+        assert session.json() == {
+            "tier": "public",
+            "can_analyze": True,
+            "retry_after_seconds": None,
+        }
+        assert started.status_code == 202
+        assert rejected.status_code == 429
+        assert rejected.headers["retry-after"] == "15"
+        assert rejected.headers["x-trainpal-admission-reason"] == "capacity"
+
+        await legacy_judge.delete(f"/api/v1/analysis-runs/{started.json()['id']}")
+
+
+@pytest.mark.asyncio
 async def test_legacy_judge_session_cannot_bypass_the_public_single_capacity(
     tmp_path: Path,
 ) -> None:
@@ -312,7 +378,7 @@ async def test_legacy_judge_session_cannot_bypass_the_public_single_capacity(
         assert public_run.status_code == 202
         assert upgraded.status_code == 200
         assert upgraded.json() == {
-            "tier": "judge",
+            "tier": "public",
             "can_analyze": False,
             "retry_after_seconds": None,
         }
@@ -324,7 +390,9 @@ async def test_legacy_judge_session_cannot_bypass_the_public_single_capacity(
 
 
 @pytest.mark.asyncio
-async def test_public_session_is_limited_to_one_analysis_per_ten_minutes(tmp_path: Path) -> None:
+async def test_public_session_can_analyze_again_immediately_after_terminal_run(
+    tmp_path: Path,
+) -> None:
     app = create_app(
         catalog=two_source_catalog(tmp_path),
         pipeline=ImmediatePipeline(),
@@ -348,13 +416,11 @@ async def test_public_session_is_limited_to_one_analysis_per_ten_minutes(tmp_pat
         )
 
     assert first.status_code == 202
-    assert second.status_code == 429
-    assert second.headers["retry-after"] == "600"
-    assert second.headers["x-trainpal-admission-reason"] == "rate_limit"
+    assert second.status_code == 202
 
 
 @pytest.mark.asyncio
-async def test_same_ip_cooldown_is_not_reported_as_capacity_when_a_slot_remains(
+async def test_fresh_cookie_on_same_ip_can_use_an_available_slot(
     tmp_path: Path,
 ) -> None:
     app = create_app(
@@ -378,15 +444,14 @@ async def test_same_ip_cooldown_is_not_reported_as_capacity_when_a_slot_remains(
         )
 
         assert first.status_code == 202
-        assert second.status_code == 429
-        assert second.headers["retry-after"] == "600"
-        assert second.headers["x-trainpal-admission-reason"] == "rate_limit"
+        assert second.status_code == 202
 
         await first_client.delete(f"/api/v1/analysis-runs/{first.json()['id']}")
+        await second_client.delete(f"/api/v1/analysis-runs/{second.json()['id']}")
 
 
 @pytest.mark.asyncio
-async def test_access_session_view_includes_the_client_ip_cooldown(tmp_path: Path) -> None:
+async def test_access_session_view_has_no_post_run_cooldown(tmp_path: Path) -> None:
     app = create_app(
         catalog=two_source_catalog(tmp_path),
         pipeline=ImmediatePipeline(),
@@ -412,13 +477,13 @@ async def test_access_session_view_includes_the_client_ip_cooldown(tmp_path: Pat
     assert session.status_code == 200
     assert session.json() == {
         "tier": "public",
-        "can_analyze": False,
-        "retry_after_seconds": 600,
+        "can_analyze": True,
+        "retry_after_seconds": None,
     }
 
 
 @pytest.mark.asyncio
-async def test_public_session_and_ip_capacity_recovers_at_the_600_second_boundary() -> None:
+async def test_optional_attempt_policy_recovers_at_its_window_boundary() -> None:
     now = [0.0]
     access = AccessManager(
         cookie_secret="cookie-signing-secret-with-at-least-32-bytes",
@@ -595,13 +660,13 @@ async def test_trusted_proxy_rejects_missing_ambiguous_or_invalid_client_ip(
 
 
 @pytest.mark.asyncio
-async def test_untrusted_direct_client_cannot_bypass_ip_limit_with_forwarded_headers(
+async def test_untrusted_direct_client_cannot_bypass_optional_ip_limit_with_forwarded_headers(
     tmp_path: Path,
 ) -> None:
     app = create_app(
         catalog=two_source_catalog(tmp_path),
         pipeline=ImmediatePipeline(),
-        access=access_manager(public_concurrency=2),
+        access=access_manager(public_concurrency=2, public_attempt_limit=1),
         trusted_proxy_cidrs=["172.30.248.2/32"],
     )
     first_transport = httpx.ASGITransport(app=app, client=("198.51.100.10", 1001))
@@ -632,7 +697,7 @@ async def test_untrusted_direct_client_cannot_bypass_ip_limit_with_forwarded_hea
 
 
 @pytest.mark.asyncio
-async def test_public_cooldown_cannot_cancel_an_active_run_with_another_source(
+async def test_public_capacity_cannot_cancel_an_active_run_with_another_source(
     tmp_path: Path,
 ) -> None:
     app = create_app(

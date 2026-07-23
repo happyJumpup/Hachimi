@@ -90,7 +90,7 @@ class AccessManager:
         public_concurrency: int = 0,
         judge_attempt_limit: int = 10,
         judge_attempt_window_seconds: int = 3_600,
-        public_attempt_limit: int = 1,
+        public_attempt_limit: int | None = None,
         public_attempt_window_seconds: int = 600,
         upgrade_attempt_limit: int = 5,
         upgrade_attempt_window_seconds: int = 600,
@@ -105,10 +105,13 @@ class AccessManager:
         if min(
             judge_attempt_limit,
             judge_attempt_window_seconds,
-            public_attempt_limit,
-            public_attempt_window_seconds,
             upgrade_attempt_limit,
             upgrade_attempt_window_seconds,
+        ) < 1:
+            raise ValueError("analysis attempt policy must be positive")
+        if public_attempt_limit is not None and min(
+            public_attempt_limit,
+            public_attempt_window_seconds,
         ) < 1:
             raise ValueError("analysis attempt policy must be positive")
         self._cookie_secret = cookie_secret.encode("utf-8")
@@ -120,7 +123,11 @@ class AccessManager:
         self._active_counts = {AccessTier.JUDGE: 0, AccessTier.PUBLIC: 0}
         self._attempt_policies = {
             AccessTier.JUDGE: (judge_attempt_limit, judge_attempt_window_seconds),
-            AccessTier.PUBLIC: (public_attempt_limit, public_attempt_window_seconds),
+            AccessTier.PUBLIC: (
+                None
+                if public_attempt_limit is None
+                else (public_attempt_limit, public_attempt_window_seconds)
+            ),
         }
         self._active_by_session: dict[str, AnalysisLease] = {}
         self._session_attempts: dict[tuple[AccessTier, str], list[float]] = {}
@@ -185,14 +192,15 @@ class AccessManager:
         *,
         client_ip: str | None = None,
     ) -> AccessSessionView:
-        retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
+        admission_tier = self._admission_tier(session.tier)
+        retry_after = self._rate_retry_after(admission_tier, session.id, client_ip)
         can_analyze = (
             session.id not in self._active_by_session
-            and self._active_counts[session.tier] < self._capacities[session.tier]
+            and self._active_counts[admission_tier] < self._capacities[admission_tier]
             and retry_after is None
         )
         return AccessSessionView(
-            tier=session.tier,
+            tier=admission_tier,
             can_analyze=can_analyze,
             retry_after_seconds=retry_after,
         )
@@ -246,11 +254,12 @@ class AccessManager:
         client_ip: str,
         provisional: bool,
     ) -> AnalysisLease:
+        admission_tier = self._admission_tier(session.tier)
         # A full pool is the most immediate retry condition. The public canary
         # depends on this precedence when concurrent clients share one egress IP.
-        if self._active_counts[session.tier] >= self._capacities[session.tier]:
+        if self._active_counts[admission_tier] >= self._capacities[admission_tier]:
             raise AdmissionDenied(reason="capacity", retry_after_seconds=15)
-        retry_after = self._rate_retry_after(session.tier, session.id, client_ip)
+        retry_after = self._rate_retry_after(admission_tier, session.id, client_ip)
         if retry_after is not None:
             raise AdmissionDenied(
                 reason="rate_limit",
@@ -261,14 +270,23 @@ class AccessManager:
         lease = AnalysisLease(
             manager=self,
             session_id=session.id,
-            tier=session.tier,
+            tier=admission_tier,
             source_id=source_id,
             client_ip=client_ip,
             provisional=provisional,
         )
-        self._active_counts[session.tier] += 1
+        self._active_counts[admission_tier] += 1
         self._active_by_session[session.id] = lease
         return lease
+
+    def _admission_tier(self, session_tier: AccessTier) -> AccessTier:
+        if (
+            session_tier is AccessTier.JUDGE
+            and self._capacities[AccessTier.JUDGE] == 0
+            and self._capacities[AccessTier.PUBLIC] > 0
+        ):
+            return AccessTier.PUBLIC
+        return session_tier
 
     async def activate(self, lease: AnalysisLease, source_id: str) -> None:
         """Turn a provisional body-ingress hold into one analysis attempt."""
@@ -280,7 +298,7 @@ class AccessManager:
             self._record_attempt_locked(lease)
 
     def _record_attempt_locked(self, lease: AnalysisLease) -> None:
-        if lease.attempt_recorded:
+        if lease.attempt_recorded or self._attempt_policies[lease.tier] is None:
             return
         lease.attempt_recorded = True
         now = self._time_source()
@@ -330,7 +348,10 @@ class AccessManager:
         session_id: str,
         client_ip: str | None,
     ) -> int | None:
-        limit, window_seconds = self._attempt_policies[tier]
+        policy = self._attempt_policies[tier]
+        if policy is None:
+            return None
+        limit, window_seconds = policy
         now = self._time_source()
         retry_values = [
             self._retry_for_window(

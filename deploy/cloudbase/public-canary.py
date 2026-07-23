@@ -27,8 +27,6 @@ LOCAL_CANARY_DURATION_SECONDS = 295.0
 LOCAL_CANARY_DURATION_TOLERANCE_SECONDS = 0.5
 PARALLEL_REQUESTS = 2
 EXPECTED_ACCEPTED_RUNS = 1
-MIN_COOLDOWN_SECONDS = 1
-MAX_COOLDOWN_SECONDS = 600
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 PASSING_COVERAGE_STATUSES = {"complete", "partial"}
 ADMISSION_REASON_HEADER = "X-TrainPal-Admission-Reason"
@@ -75,15 +73,18 @@ class WorkerResult:
     admission_reason: str | None = None
     reliable_candidate_count: int = 0
     coverage_gap_count: int = 0
-    session_cooldown_enforced: bool = False
-    session_retry_after_seconds: int | None = None
+    same_session_restart_accepted: bool = False
+    same_session_restart_cancelled: bool = False
+    same_session_cleanup_proven: bool = False
 
 
 def summarize_terminal(
     payload: dict[str, Any],
     *,
     terminal_event_observed: bool,
-    session_retry_after_seconds: int,
+    same_session_restart_accepted: bool = False,
+    same_session_restart_cancelled: bool = False,
+    same_session_cleanup_proven: bool = False,
     require_local_295_seconds: bool = False,
 ) -> WorkerResult:
     if require_local_295_seconds and not _is_295_second_duration(
@@ -117,8 +118,9 @@ def summarize_terminal(
         retry_after_present=False,
         reliable_candidate_count=reliable_candidate_count,
         coverage_gap_count=len(coverage_gaps),
-        session_cooldown_enforced=True,
-        session_retry_after_seconds=session_retry_after_seconds,
+        same_session_restart_accepted=same_session_restart_accepted,
+        same_session_restart_cancelled=same_session_restart_cancelled,
+        same_session_cleanup_proven=same_session_cleanup_proven,
     )
 
 
@@ -222,17 +224,6 @@ class PublicCanaryClient:
         except ValueError as error:
             raise CanaryError("controlled source catalog returned invalid JSON") from error
 
-    def require_analysis_cooldown(self, *, label: str) -> int:
-        session = self.get_json("/api/v1/access/session", label=label)
-        retry_after_seconds = session.get("retry_after_seconds")
-        if (
-            session.get("can_analyze") is not False
-            or type(retry_after_seconds) is not int
-            or not MIN_COOLDOWN_SECONDS <= retry_after_seconds <= MAX_COOLDOWN_SECONDS
-        ):
-            raise CanaryError(f"{label} did not prove the analysis cooldown")
-        return retry_after_seconds
-
     def upload_video(self, media_path: Path) -> httpx.Response:
         with media_path.open("rb") as media:
             return self._client.post(
@@ -313,7 +304,11 @@ class PublicCanaryClient:
         raise CanaryError("runtime cleanup was not proven before timeout")
 
     def cancel(self, run_id: str) -> None:
-        self._client.delete(f"/api/v1/analysis-runs/{run_id}")
+        _expect_json(
+            self._client.delete(f"/api/v1/analysis-runs/{run_id}"),
+            202,
+            "analysis cancellation",
+        )
 
 
 def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
@@ -341,14 +336,12 @@ def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
                 "an accepted public canary run failed the coverage contract"
             )
         if (
-            result.session_cooldown_enforced is not True
-            or type(result.session_retry_after_seconds) is not int
-            or not MIN_COOLDOWN_SECONDS
-            <= result.session_retry_after_seconds
-            <= MAX_COOLDOWN_SECONDS
+            result.same_session_restart_accepted is not True
+            or result.same_session_restart_cancelled is not True
+            or result.same_session_cleanup_proven is not True
         ):
             raise CanaryError(
-                "an accepted public canary run failed the session cooldown contract"
+                "an accepted public canary run failed the same-session restart contract"
             )
         if result.coverage_status == "complete" and result.coverage_gap_count != 0:
             raise CanaryError(
@@ -389,10 +382,15 @@ def summarize_parallel_results(results: list[WorkerResult]) -> dict[str, Any]:
             result.reliable_candidate_count for result in accepted
         ),
         "coverage_gap_count": sum(result.coverage_gap_count for result in accepted),
-        "session_cooldown_enforced": all(
-            result.session_cooldown_enforced for result in accepted
+        "same_session_restart_accepted": all(
+            result.same_session_restart_accepted for result in accepted
         ),
-        "session_retry_after_seconds": accepted[0].session_retry_after_seconds,
+        "same_session_restart_cancelled": all(
+            result.same_session_restart_cancelled for result in accepted
+        ),
+        "same_session_cleanup_proven": all(
+            result.same_session_cleanup_proven for result in accepted
+        ),
         "retry_after_present_count": sum(
             result.retry_after_present for result in rejected
         ),
@@ -413,7 +411,7 @@ def _run_worker(
     if (media_path is None) == (source_id is None):
         raise CanaryError("public canary worker requires exactly one analysis input")
     client = PublicCanaryClient(origin=origin, timeout_seconds=timeout_seconds)
-    run_id: str | None = None
+    active_run_id: str | None = None
     try:
         client.prepare_public_session()
         barrier.wait(timeout=30)
@@ -435,49 +433,85 @@ def _run_worker(
         run_id_value = created.get("id")
         if not isinstance(run_id_value, str) or not run_id_value:
             raise CanaryError("analysis upload did not return a run id")
-        run_id = run_id_value
-        sse_status, terminal_observed = client.stream_events(run_id)
+        active_run_id = run_id_value
+        sse_status, terminal_observed = client.stream_events(active_run_id)
         if sse_status != 200:
             raise CanaryError(f"public SSE failed with HTTP {sse_status}")
-        terminal = client.wait_for_terminal(run_id, timeout_seconds=timeout_seconds)
-        session_retry_after_seconds = client.require_analysis_cooldown(
-            label="accepted session cooldown"
+        terminal = client.wait_for_terminal(
+            active_run_id,
+            timeout_seconds=timeout_seconds,
+        )
+        active_run_id = None
+        client.wait_for_runtime_cleanup(
+            timeout_seconds=min(timeout_seconds, RUNTIME_CLEANUP_TIMEOUT_SECONDS)
+        )
+        restart_response = (
+            client.upload_video(media_path)
+            if media_path is not None
+            else client.start_controlled_analysis(cast(str, source_id))
+        )
+        restart_created = _expect_json(
+            restart_response,
+            202,
+            "same-session analysis restart",
+        )
+        restart_run_id = restart_created.get("id")
+        if not isinstance(restart_run_id, str) or not restart_run_id:
+            raise CanaryError("same-session analysis restart did not return a run id")
+        active_run_id = restart_run_id
+        client.cancel(active_run_id)
+        restart_terminal = client.wait_for_terminal(
+            active_run_id,
+            timeout_seconds=timeout_seconds,
+        )
+        if restart_terminal.get("status") != "cancelled":
+            raise CanaryError("same-session analysis restart did not cancel")
+        active_run_id = None
+        client.wait_for_runtime_cleanup(
+            timeout_seconds=min(timeout_seconds, RUNTIME_CLEANUP_TIMEOUT_SECONDS)
         )
         return summarize_terminal(
             terminal,
             terminal_event_observed=terminal_observed,
-            session_retry_after_seconds=session_retry_after_seconds,
+            same_session_restart_accepted=True,
+            same_session_restart_cancelled=True,
+            same_session_cleanup_proven=True,
             require_local_295_seconds=media_path is not None,
         )
     except BaseException:
-        if run_id is not None:
+        if active_run_id is not None:
             with suppress(Exception):
-                client.cancel(run_id)
+                client.cancel(active_run_id)
+            with suppress(Exception):
+                client.wait_for_terminal(
+                    active_run_id,
+                    timeout_seconds=min(
+                        timeout_seconds,
+                        RUNTIME_CLEANUP_TIMEOUT_SECONDS,
+                    ),
+                )
+        with suppress(Exception):
+            client.wait_for_runtime_cleanup(
+                timeout_seconds=min(
+                    timeout_seconds,
+                    RUNTIME_CLEANUP_TIMEOUT_SECONDS,
+                )
+            )
         raise
     finally:
         client.close()
 
 
-def probe_post_run_guards(
+def probe_post_run_cleanup(
     *, origin: str, timeout_seconds: float
-) -> tuple[dict[str, object], dict[str, object]]:
+) -> dict[str, object]:
     client = PublicCanaryClient(origin=origin, timeout_seconds=timeout_seconds)
     try:
-        runtime_cleanup = client.wait_for_runtime_cleanup(
+        return client.wait_for_runtime_cleanup(
             timeout_seconds=min(timeout_seconds, RUNTIME_CLEANUP_TIMEOUT_SECONDS)
-        )
-        retry_after_seconds = client.require_analysis_cooldown(
-            label="fresh IP cooldown"
         )
     finally:
         client.close()
-    return (
-        runtime_cleanup,
-        {
-            "enforced": True,
-            "retry_after_seconds": retry_after_seconds,
-        },
-    )
 
 
 def run_canary(args: argparse.Namespace) -> dict[str, Any]:
@@ -535,7 +569,7 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         results = [future.result() for future in futures]
 
     concurrency = summarize_parallel_results(results)
-    runtime_cleanup, ip_cooldown = probe_post_run_guards(
+    runtime_cleanup = probe_post_run_cleanup(
         origin=origin,
         timeout_seconds=args.timeout_seconds,
     )
@@ -568,7 +602,6 @@ def run_canary(args: argparse.Namespace) -> dict[str, Any]:
         "access_gate": {"public_can_analyze": True, "public_sessions": 2},
         "concurrency": concurrency,
         "runtime_cleanup": runtime_cleanup,
-        "ip_cooldown": ip_cooldown,
     }
 
 

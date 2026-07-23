@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import os
 import sys
+import time
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlparse
@@ -10,6 +11,12 @@ from uuid import uuid4
 import httpx
 
 from hakimi_analysis.sources import SourceManifestError, _safe_media_path, load_source_manifest
+
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_RETRY_DELAYS_SECONDS = (1.0, 2.0)
+RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504}
+SYNC_DEADLINE_SECONDS = 240.0
+TRANSFER_READ_TIMEOUT_SECONDS = 30.0
 
 
 class MediaSyncError(RuntimeError):
@@ -20,6 +27,7 @@ class MediaSyncError(RuntimeError):
 
 
 def sync_media(*, manifest_path: Path, target_root: Path, base_url: str) -> int:
+    deadline = time.monotonic() + SYNC_DEADLINE_SECONDS
     try:
         manifest = load_source_manifest(manifest_path)
     except SourceManifestError as error:
@@ -37,7 +45,7 @@ def sync_media(*, manifest_path: Path, target_root: Path, base_url: str) -> int:
 
     try:
         with httpx.Client(
-            timeout=httpx.Timeout(180, connect=15),
+            timeout=httpx.Timeout(TRANSFER_READ_TIMEOUT_SECONDS, connect=15),
             follow_redirects=False,
             trust_env=False,
         ) as client:
@@ -47,17 +55,52 @@ def sync_media(*, manifest_path: Path, target_root: Path, base_url: str) -> int:
                     destination.relative_to(resolved_target)
                 except ValueError as error:
                     raise MediaSyncError("path_invalid", exit_code=2) from error
-                _download_one(
+                _download_one_with_retry(
                     client=client,
                     url=f"{normalized_base}/{quote(relative_path.as_posix(), safe='/')}",
                     destination=destination,
                     expected_sha256=source.sha256,
+                    deadline=deadline,
                 )
     except MediaSyncError:
         raise
     except (httpx.HTTPError, OSError) as error:
         raise MediaSyncError("transfer_failed", exit_code=3) from error
     return len(manifest.sources)
+
+
+def _download_one_with_retry(
+    *,
+    client: httpx.Client,
+    url: str,
+    destination: Path,
+    expected_sha256: str,
+    deadline: float,
+) -> None:
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        _ensure_before_deadline(deadline)
+        try:
+            _download_one(
+                client=client,
+                url=url,
+                destination=destination,
+                expected_sha256=expected_sha256,
+                deadline=deadline,
+            )
+            return
+        except httpx.HTTPStatusError as error:
+            if (
+                error.response.status_code not in RETRYABLE_HTTP_STATUS_CODES
+                or attempt == DOWNLOAD_ATTEMPTS - 1
+            ):
+                raise
+        except httpx.RequestError:
+            if attempt == DOWNLOAD_ATTEMPTS - 1:
+                raise
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise MediaSyncError("sync_timeout", exit_code=3)
+        time.sleep(min(DOWNLOAD_RETRY_DELAYS_SECONDS[attempt], remaining))
 
 
 def _validate_existing_cache(root: Path, allowed_paths: list[PurePosixPath]) -> None:
@@ -102,6 +145,7 @@ def _download_one(
     url: str,
     destination: Path,
     expected_sha256: str,
+    deadline: float,
 ) -> None:
     if destination.is_symlink() or destination.is_junction():
         raise MediaSyncError("cache_symlink_rejected", exit_code=3)
@@ -110,16 +154,23 @@ def _download_one(
     digest = hashlib.sha256()
     byte_count = 0
     try:
-        with client.stream("GET", url, headers={"Accept-Encoding": "identity"}) as response:
+        with client.stream(
+            "GET",
+            url,
+            headers={"Accept-Encoding": "identity"},
+            timeout=_bounded_transfer_timeout(deadline),
+        ) as response:
             response.raise_for_status()
             declared_length = _content_length(response.headers.get("Content-Length"))
             with temporary.open("xb") as output:
                 for chunk in response.iter_raw():
+                    _ensure_before_deadline(deadline)
                     output.write(chunk)
                     digest.update(chunk)
                     byte_count += len(chunk)
                 output.flush()
                 os.fsync(output.fileno())
+        _ensure_before_deadline(deadline)
         if declared_length is not None and byte_count != declared_length:
             raise MediaSyncError("content_length_mismatch", exit_code=3)
         if digest.hexdigest() != expected_sha256:
@@ -128,6 +179,22 @@ def _download_one(
     finally:
         with suppress(OSError):
             temporary.unlink(missing_ok=True)
+
+
+def _ensure_before_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise MediaSyncError("sync_timeout", exit_code=3)
+
+
+def _bounded_transfer_timeout(deadline: float) -> httpx.Timeout:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise MediaSyncError("sync_timeout", exit_code=3)
+    operation_timeout = min(TRANSFER_READ_TIMEOUT_SECONDS, remaining)
+    return httpx.Timeout(
+        operation_timeout,
+        connect=min(15.0, operation_timeout),
+    )
 
 
 def _content_length(value: str | None) -> int | None:

@@ -19,7 +19,7 @@ TrainPal 同时是产品名、用户可见的唯一 Agent 和小猫教练身份�
 5. GYMTI v1 使用共享版本化合同完成 5–8 题测评、七猫单一推荐、明确确认／改选和同设备恢复；目标竞赛部署使用 Ark／豆包最小数据增强与独立三并发门，拥塞、失败或留存边界未确认时立即使用确定性本地选题与模板叙事。
 6. 完整或提前结束的实际完成量进入训练记录；完整训练可生成 1080×1920 PNG 海报并分享或下载。
 
-当前部署合同要求普通访客可使用五条明确标注、按时长排列的受控视频发起真实分析；同一时刻只接纳一条公开分析，并按会话与客户端 IP 各限制 600 秒内一次。评委体验码不再是公开真实分析的必要条件。静态“快速体验方案”仍是产品样例，不是 AI 结果或运行时 Mock 回退。该新合同尚无当前 CloudBase 候选的线上通过回执，不得把本地实现或历史版本结果表述为已上线成功。
+当前部署合同要求普通访客可使用五条明确标注、按时长排列的受控视频发起真实分析；同一时刻只接纳一条公开分析，不再设置会话／IP 冷却或请求次数额度，终态清理后同一会话可立即再次创建。评委体验码不再是公开真实分析的必要条件。静态“快速体验方案”仍是产品样例，不是 AI 结果或运行时 Mock 回退。该新合同尚无当前 CloudBase 候选的线上通过回执，不得把本地实现或历史版本结果表述为已上线成功。
 
 主要页面：`/` 首页与导入、`/analysis` 分析任务、`/plan` 方案编辑、`/personalize` 个性化、`/train` 训练中心、`/training` 训练执行、`/result/:recordId` 结果与海报、`/mine` 我的。开发环境另提供静态 Fixture 设计画廊 `/__design/trainpal` 和七猫动画预览台 `/__design/trainpal/pets`，生产构建不注册这两个路由。
 
@@ -74,7 +74,7 @@ pnpm api:generate
 - [本地视频优先与可恢复覆盖分析 ADR](docs/adr/0013-local-video-import-and-recoverable-analysis.md)
 - [GYMTI 主应用确认边界 ADR](docs/adr/0031-questionnaire-recommends-main-app-confirms-coach-style.md)
 - [GYMTI 共享版本化合同 ADR](docs/adr/0040-gymti-uses-one-versioned-json-contract.md)
-- [公开分析单并发与频控 ADR](docs/adr/0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md)
+- [公开分析单并发且无会话／IP 冷却 ADR](docs/adr/0045-public-analysis-keeps-one-slot-without-session-or-ip-cooldown.md)
 - [GYMTI Ark／豆包最小数据与独立并发 ADR](docs/adr/0044-gymti-uses-ark-doubao-minimal-data-and-independent-concurrency.md)
 - [Web 体验规范历史入口](docs/design/web-experience-guidelines.md)
 - [完整 Web 架构](docs/technical/web-mvp-architecture.md)

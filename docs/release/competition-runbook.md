@@ -1,12 +1,12 @@
 # TrainPal 竞赛版发布、验收与回滚手册
 
-> 状态：当前候选合同已冻结；旧 CloudBase A/B、三路评委并发和 B→A→B 回滚只作为历史证据。五条受控来源、公开单并发／会话与 IP 600 秒频控、GYMTI Ark／豆包独立三并发的新候选尚未取得线上通过回执；最终素材、移动真机与录屏仍待团队验收
+> 状态：当前候选合同已冻结；旧 CloudBase A/B、三路评委并发和 B→A→B 回滚只作为历史证据。五条受控来源、无冷却公开单并发、GYMTI Ark／豆包独立三并发的新候选尚未取得线上通过回执；最终素材、移动真机与录屏仍待团队验收
 >
 > 更新日期：2026-07-23
 >
 > 适用范围：独立 Web、本地视频上传、受控快速体验、真实 Provider 与腾讯云 CloudBase Run 临时竞赛入口
 
-本手册禁止把计划值、占位项或本地通过记录表述为公网已上线事实。操作源以 [`deploy/cloudbase/foundation-plan.json`](../../deploy/cloudbase/foundation-plan.json)、[`deploy/cloudbase/README.md`](../../deploy/cloudbase/README.md)、[ADR-0043](../adr/0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md) 和 [ADR-0044](../adr/0044-gymti-uses-ark-doubao-minimal-data-and-independent-concurrency.md) 为准。
+本手册禁止把计划值、占位项或本地通过记录表述为公网已上线事实。操作源以 [`deploy/cloudbase/foundation-plan.json`](../../deploy/cloudbase/foundation-plan.json)、[`deploy/cloudbase/README.md`](../../deploy/cloudbase/README.md)、[ADR-0045](../adr/0045-public-analysis-keeps-one-slot-without-session-or-ip-cooldown.md) 和 [ADR-0044](../adr/0044-gymti-uses-ark-doubao-minimal-data-and-independent-concurrency.md) 为准。
 
 ## 1. 当前发布结论
 
@@ -39,8 +39,9 @@
 - CloudBase Run 只运行一个 `trainpal-demo` 服务、一个实例上限和一个 Uvicorn worker。Analysis Run、SSE、取消句柄和容量均在单进程内存中。
 - 原始上传、音频、帧、联系表、转录、提示词和模型响应只在独立临时目录或内存中存在，所有终态都清理。
 - 训练档案、个性化上下文、方案、场次、记录和本地视频 Blob 留在浏览器 IndexedDB，不上传为账户数据。
-- 公开会话可直接发起 Provider-backed 分析，不要求评委体验码；全局 `PUBLIC_ANALYSIS_CONCURRENCY=1`、`JUDGE_ANALYSIS_CONCURRENCY=0`，成功租约同时按会话与客户端 IP 记录 600 秒冷却，不排队。
-- GYMTI Ark／豆包调用只发送最小结构化数据，使用独立三并发门；第四条并发或模型失败立即本地降级，不占用视频分析槽或其频控额度。
+- 公开会话可直接发起 Provider-backed 分析，不要求评委体验码；全局 `PUBLIC_ANALYSIS_CONCURRENCY=1`、`JUDGE_ANALYSIS_CONCURRENCY=0`，不设置会话／IP 冷却或次数额度，终态清理后同一会话可立即再次创建，且始终不排队。
+- 历史设备若仍携带有效评委 Cookie，在评委池为零时必须按普通公开会话共享上述单槽；不得要求清 Cookie，也不得因此获得额外容量。
+- GYMTI Ark／豆包调用只发送最小结构化数据，使用独立三并发门；第四条并发或模型失败立即本地降级，不占用视频分析槽。
 - 测试 Provider 只允许 `APP_ENV=test`；生产环境配置测试 Provider 必须拒绝启动。
 - 快速体验方案必须明确标注为示例，不能伪装成真实 AI 结果、缓存回退或用户记录。
 - 当前真实 Provider 仍是已接入的 Ark + 豆包流式语音识别 2.0 路线；未完成新的质量选型前不得临时切换模型并宣称升级。
@@ -90,7 +91,7 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 - 最小实例为 0 只控制成本，不等于关闭公网；首次 OA-only 场景仍以公网开关和映射状态控制访问，已有公开稳定版场景则以稳定 100%／候选 0% 的路由状态保护当前链接。
 - 候选私有门禁全部通过后，才能把未公布的公网 canary 从稳定版短时切向候选。
 - 公开用户可以浏览产品页面、使用五条受控来源或本地上传，并直接开始真实 Provider 分析；无需先取得评委访问会话。
-- 服务端仍通过 Secure、HttpOnly、SameSite Cookie 维持匿名会话 ID，以执行会话频控；Cookie 不得进入 URL、截图、录屏或日志。兼容保留的体验码也不得扩大分析并发。
+- 服务端仍通过 Secure、HttpOnly、SameSite Cookie 维持匿名会话 ID，用于运行归属和同会话活动状态；Cookie 不得进入 URL、截图、录屏或日志。兼容保留的体验码也不得扩大分析并发。
 - 超过准入池立即返回 `429 + Retry-After`，不排队、不启动后台任务。
 - 候选 canary 失败立即恢复操作前确认的稳定版本 100%／候选 0%，不得误把历史 `009` 写死为永远的回滚目标；只有首次 OA-only 基础版本失败时才关闭公网开关与映射。把最小实例恢复为 0 只能作为后续成本动作。
 
@@ -136,6 +137,8 @@ CloudBase 默认域名仅用于有限竞赛演示。首次访问可能出现腾�
 | `SOURCE_MANIFEST_PATH` / `SOURCE_MEDIA_ROOT` | 必填，指向版本化五来源清单与 `/workspace/tmp/controlled-media` 运行缓存 |
 | `PUBLIC_MEDIA_BASE_URL` | 必填，指向只读 HTTPS 媒体基址；不得包含凭据 |
 | `SMOKE_ANNOTATIONS_PATH` | 只读人工标注清单，不含转录或响应 |
+
+CloudBase 平台启动探针必须设置 `InitialDelaySeconds=300`。受控媒体同步采用 240 秒全局同步截止，网络阻塞按剩余预算收紧；另留至少 60 秒覆盖不可抢占 I/O 与 Uvicorn 启动，但不把它宣称为 OS 级绝对硬上界。发布回执必须记录该非秘密配置值，且不能把单次媒体读取超时或重试次数相加后冒充启动上限。
 
 检查秘密时只验证“存在、非空、权限正确”，不能回显值。本地 `.env.local` 可作为授权转移来源，但转移过程不得打印。GitHub Actions 不注入真实云 Key；真实 smoke 只在受控发布机或 CloudBase 私有路径运行。
 
@@ -198,11 +201,11 @@ FFmpeg 不进入 Git，而是在 Docker 多阶段构建中从 FFmpeg 8.1.2 官�
 ### 9.3 候选版本与 canary
 
 1. 构建不同不可变 digest 的候选版本；当前已有公开稳定版时，候选保持 0% 流量，稳定版继续 100%。
-2. 运行兼容文件名 `run-private-canary.ps1` 的 full-FLOW 身份事务。脚本从唯一确认的稳定版 100%／候选 0% 起步，先 `promote` 到候选 100%，再从公开入口确认 `/health` 的 `release_sha` 与预期完整 SHA 精确一致且 `/ready` 为 `ready`，并在 `finally` 中 `restore` 且验证稳定版 100%／候选 0%。该事务不接收请求头、媒体或 Provider 输入；恢复失败按 P0 阻断发布。
-3. 身份事务通过并恢复稳定流量后，才在受控公开窗口重新提升候选。先运行 `public-canary.py --controlled-shortest`，用五条受控来源中的最短项验证一个请求 `202`、并发第二个请求 `429 + Retry-After + X-TrainPal-Admission-Reason: capacity`、SSE 终态、覆盖合同和会话／IP 冷却；终态后还必须在 30 秒内由脱敏 `/api/v1/runtime-cleanup` 证明 `clean=true`、临时残留数和 FFmpeg 子进程数均为 0，回执不得记录路径、文件名或 PID。
-4. 等公开能力接口恢复且实际冷却窗口结束后，再运行 `public-canary.py --media`，以团队授权的 295 秒、19 MB Web 安全边界内样本验证同一上传合同。两类回执都只保留输入种类、计数、时长／字节数及结果聚合；不记录来源身份、标题、origin、对象／本地路径、文件名、分析候选或内容。
+2. 以 `-Mode exercise` 运行兼容文件名 `run-private-canary.ps1` 的 full-FLOW 身份事务。脚本从唯一确认的稳定版 100%／候选 0% 和开放中的灰度管理任务起步，按 CLI 3.6.4 的完成灰度语义提交 `ReleaseGray + CloseGrayRelease=true`，等待该管理任务成功、候选 100% 数据面收敛，再确认公开 `/health.release_sha` 精确等于候选 SHA 且 `/ready` 为 `ready`。随后使用专用 `SubmitServerRollback`，等待新回滚任务成功并验证稳定版 100%／候选 0%。CLI 3.6.4 的 promote／rollback 都只提交请求后返回，不能单独作为完成证据，也不能在提升任务仍运行时紧接回滚。比例为 0% 的已知版本可以从 `OnlineVersionInfos` 省略；非零版本必须存在且比例精确，未知、额外或重复路由一律失败关闭。主事务默认等待 240 秒，恢复默认等待 300 秒；不使用已证实无效的 `StartVersionInstance` 预热。恢复失败按 P0 阻断发布。
+3. 正式回滚会关闭并放弃首个灰度候选。身份事务通过后，必须从同一精确 Git SHA 新建第二个候选，不能把已回滚版本“向前回滚”成最终版。对第二候选以 `-Mode finalize` 运行同一脚本：只有提升任务成功、候选 100% 数据面、精确 `/health.release_sha`、`/ready` 和脱敏回执写入全部通过才保留候选流量；任何失败且流量已切换时，脚本自动 `SubmitServerRollback` 并等待稳定版 100%。最终提升成功后再运行 `public-canary.py --controlled-shortest`，用五条受控来源中的最短项验证一个请求 `202`、并发第二个请求 `429 + Retry-After + X-TrainPal-Admission-Reason: capacity`、SSE 终态和覆盖合同；首条终态后必须在 30 秒内由脱敏 `/api/v1/runtime-cleanup` 证明 `clean=true`，随后同一会话立即再次创建并获得 `202`，取消第二条后再次证明临时残留数和 FFmpeg 子进程数均为 0。演练与最终提升分别写入模式隔离的回执；回执不得记录路径、文件名、PID、会话或 IP。
+4. 上述无冷却重入与清理通过后，可立即运行 `public-canary.py --media`，以团队授权的 295 秒、19 MB Web 安全边界内样本验证同一上传合同。两类回执都只保留输入种类、计数、时长／字节数及结果聚合；不记录来源身份、标题、origin、对象／本地路径、文件名、分析候选或内容。
 5. 数据面门槛通过后运行 `python .\deploy\cloudbase\public-gymti-canary.py --public-base-url '<operator-supplied-https-origin>' --output '<private-receipt-outside-repository>'`。它必须先通过一次 LLM 选题和一次非空 LLM 正式结果叙事，再取得四并发精确三次 `llm`／一次 `local_fallback`；回执只含 schema、服务名、两项通过布尔值、并发计数和 Provider 模型名，不含 URL、Cookie、题目、选项、答案、正式结果、原因 ID、叙事或响应正文。
-6. 完成候选→稳定版→候选回滚。任何门槛失败都恢复稳定版并放弃灰度；全部通过才保留新候选作为公开版本。
+6. 用“首个候选 `exercise` 提升 → 稳定版回滚 → 同 SHA 第二候选 `finalize` 提升”完成回滚演练。任何门槛失败都恢复稳定版并放弃灰度；全部通过才保留第二候选作为公开版本。
 
 历史版本 B 为 `trainpal-demo-008`，Build ID `2601400393`，源码提交 `81de88d0b7475797a51a4fdf73d334d5836dd529`。当时私有门禁通过后完成 `008 → 007 → 008` 回滚，并生成历史公网配置版本 `trainpal-demo-009`。这些名称不得写死为当前候选、稳定版或最终回滚目标；每次发布都从控制面重新唯一确认。
 
@@ -238,20 +241,21 @@ CloudBase CLI 具体命令只从 [`deploy/cloudbase/README.md`](../../deploy/clo
 
 在不接入公网的隔离测试环境，使用合成媒体和测试 Provider 验证静态页面、训练、限流和 50 会话。生产容器仍必须拒绝测试 Provider。记录成功率、预期 429、p50/p95、CPU、内存、网络和临时目录，不为未建立的指标编造阈值。
 
-### 11.2 公开真实 Provider 容量与频控
+### 11.2 公开真实 Provider 单并发与无冷却重入
 
 只有以下条件全部通过，才保留 `PUBLIC_ANALYSIS_CONCURRENCY=1`：
 
 - 一个公开会话无需评委码完成真实分析；
-- 首条运行占用槽时，并发第二条请求得到预期 `429 + Retry-After`；
-- 首条成功租约后，同会话和同 IP 的新会话在 600 秒内分别得到预期 `429 + Retry-After`，窗口结束后资格恢复；
-- GYMTI 三并发与第四路本地降级不改变分析槽或其冷却状态；
+- 首条运行占用槽时，并发第二条请求得到预期
+  `429 + Retry-After + X-TrainPal-Admission-Reason: capacity`；
+- 首条运行终态并证明清理后，同一会话立即再次创建并得到 `202`；第二条取消后再次证明清理；
+- GYMTI 三并发与第四路本地降级不改变视频分析槽状态；
 - 全部临时材料清理；
 - 2 vCPU / 4 GiB 实例在观测窗口内无 OOM、无重启、无持续临时目录增长。
 
 任何一项失败都关闭公开分析并重新 smoke；不能通过增加实例规避。
 
-历史证据：2026-07-23 的公网 canary 使用四个独立评委会话，三次创建返回 `202`、第四次返回 `429`，三条终态均为 `partial`。它证明当时三路门禁的工程行为，不证明当前公开单并发或 600 秒双重频控已经上线。
+历史证据：2026-07-23 的公网 canary 使用四个独立评委会话，三次创建返回 `202`、第四次返回 `429`，三条终态均为 `partial`。它证明当时三路门禁的工程行为，不证明当前无冷却公开单并发已经上线。
 
 ## 12. 移动体验与演示验收
 
@@ -333,11 +337,11 @@ CloudBase 总授权上限为人民币 300 元，精确窗口与估算以基础�
 - [ ] 五来源清单、启动同步、对象／缓存哈希与生产 `/ready` 在当前候选通过；MP4 未进入 Git／镜像。
 - [x] 本地上传符合五分钟、19 MB Web 安全上限和所有终态清理边界。
 - [ ] 真实 Provider 样本覆盖口播、静音视觉、多动作和证据不足；输出已脱敏。
-- [ ] 当前候选的公开单并发、同会话／同 IP 600 秒频控与窗口恢复通过，无 SSE 串流、容量泄漏或媒体遗留。
+- [ ] 当前候选的公开单并发、并发第二条 `capacity` 429、同会话终态清理后立即重入与再次清理通过，无 SSE 串流、容量泄漏或媒体遗留。
 - [ ] GYMTI Ark／豆包三并发、第四路立即本地降级、最小数据和无内容日志通过。
 - [ ] Android Chrome 与 iOS Safari 主路径通过。
 - [ ] full-FLOW 身份事务已完成候选 100% 提升、公开 `/health` 精确 SHA、`/ready` 与 `finally` 稳定流量恢复回执。
-- [ ] 已先用最短受控来源完成公开 canary，待冷却结束后再用 295 秒授权样本完成上传 canary；两类回执均无来源身份或内容。
+- [ ] 已先用最短受控来源完成公开 canary，随后无需等待即可用 295 秒授权样本完成上传 canary；两类回执均无来源身份或内容。
 - [ ] 当前候选的第二浏览器上下文、回滚、再前滚均有新合同回执；旧版本记录只作历史证据。
 - [ ] 匿名会话 Cookie、兼容体验码、Provider Key 均未进入 URL、构建、日志、截图或录屏。
 - [ ] 五分钟脚本与双份录屏通过；未实现能力已从讲解中删除。
@@ -350,5 +354,5 @@ CloudBase 总授权上限为人民币 300 元，精确窗口与估算以基础�
 - [ADR-0024：独立 Web 与可迁移愿景](../adr/0024-independent-web-is-current-while-platform-understanding-is-portable.md)
 - [ADR-0025：覆盖状态](../adr/0025-provider-declares-complete-partial-or-insufficient-coverage.md)
 - [ADR-0029：CloudBase Run 临时竞赛入口](../adr/0029-cloudbase-run-is-the-unfiled-competition-demo-entry.md)
-- [ADR-0043：公开分析单并发与会话／IP 频控](../adr/0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md)
+- [ADR-0045：公开分析单并发且无会话／IP 冷却](../adr/0045-public-analysis-keeps-one-slot-without-session-or-ip-cooldown.md)
 - [ADR-0044：GYMTI Ark／豆包最小数据与独立并发](../adr/0044-gymti-uses-ark-doubao-minimal-data-and-independent-concurrency.md)

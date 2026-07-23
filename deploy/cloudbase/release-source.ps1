@@ -61,6 +61,17 @@ function Get-PropertyValue {
     return $property.Value
 }
 
+function Test-EmptyCommandOverride {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $true }
+    if ($Value -is [string]) {
+        $normalized = $Value.Trim()
+        return -not $normalized -or $normalized -eq '[]'
+    }
+    return @($Value).Count -eq 0
+}
+
 function Invoke-TencentApi {
     param(
         [Parameter(Mandatory)][string]$Service,
@@ -235,6 +246,12 @@ $detail = Invoke-TencentApi `
     -Credential $credential
 $baseInfo = Get-PropertyValue $detail 'BaseInfo'
 $serverConfig = Get-PropertyValue $detail 'ServerConfig'
+if (
+    -not (Test-EmptyCommandOverride (Get-PropertyValue $serverConfig 'Cmd')) -or
+    -not (Test-EmptyCommandOverride (Get-PropertyValue $serverConfig 'EntryPoint'))
+) {
+    throw 'CloudBase command overrides must be empty so the audited image startup command is used.'
+}
 $onlineVersionPolicies = @(
     foreach ($version in @(Get-PropertyValue $detail 'OnlineVersionInfos')) {
         [ordered]@{
@@ -413,6 +430,7 @@ try {
         @{ Key = 'MinNum'; IntValue = 1 },
         @{ Key = 'MaxNum'; IntValue = 1 },
         @{ Key = 'Port'; IntValue = 8000 },
+        @{ Key = 'InitialDelaySeconds'; IntValue = 300 },
         @{ Key = 'AccessTypes'; ArrayValue = @($releasePolicy.access_types) },
         @{ Key = 'EnvParam'; Value = $environmentJson },
         @{ Key = 'BuildDir'; Value = '.' },
@@ -448,6 +466,7 @@ try {
         release_type = 'GRAY'
         access_types = @($releasePolicy.access_types)
         requested_candidate_initial_traffic_percent = [int]$releasePolicy.requested_candidate_initial_traffic_percent
+        startup_initial_delay_seconds = 300
         package_version = $packageVersion
         environment_key_names = @($orderedEnvironment.Keys)
         request_id = [string](Get-PropertyValue $release 'RequestId')

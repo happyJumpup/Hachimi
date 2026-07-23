@@ -163,8 +163,7 @@ def validate(plan: dict[str, Any]) -> None:
             "analysis_provider",
             "judge_analysis_concurrency",
             "public_analysis_concurrency",
-            "public_attempt_limit",
-            "public_attempt_window_seconds",
+            "public_post_run_cooldown_seconds",
             "run_timeout_seconds",
             "local_upload_enabled",
             "local_analysis_max_seconds",
@@ -303,10 +302,8 @@ def validate(plan: dict[str, Any]) -> None:
         fail("judge analysis capacity must be disabled")
     if runtime.get("public_analysis_concurrency") != 1:
         fail("public analysis concurrency must remain one")
-    if runtime.get("public_attempt_limit") != 1:
-        fail("public analysis must allow one attempt per window")
-    if runtime.get("public_attempt_window_seconds") != 600:
-        fail("public analysis attempt window must remain ten minutes")
+    if runtime.get("public_post_run_cooldown_seconds") != 0:
+        fail("public analysis post-run cooldown must be disabled")
     if runtime.get("unauthenticated_page_browse") is not True:
         fail("the public product pages must remain browseable")
     if runtime.get("judge_code_required_for_paid_analysis") is not False:

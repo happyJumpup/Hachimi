@@ -264,7 +264,7 @@ def build_default_app() -> FastAPI:
         judge_access_code=judge_access_code,
         judge_concurrency=settings.judge_analysis_concurrency,
         public_concurrency=public_concurrency,
-        public_attempt_limit=100 if settings.app_env == "test" else 1,
+        public_attempt_limit=None,
     )
     readiness = ProductionReadiness(
         settings=settings,
