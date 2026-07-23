@@ -430,7 +430,7 @@ try {
         @{ Key = 'MinNum'; IntValue = 1 },
         @{ Key = 'MaxNum'; IntValue = 1 },
         @{ Key = 'Port'; IntValue = 8000 },
-        @{ Key = 'InitialDelaySeconds'; IntValue = 300 },
+        @{ Key = 'InitialDelaySeconds'; IntValue = 60 },
         @{ Key = 'AccessTypes'; ArrayValue = @($releasePolicy.access_types) },
         @{ Key = 'EnvParam'; Value = $environmentJson },
         @{ Key = 'BuildDir'; Value = '.' },
@@ -466,7 +466,7 @@ try {
         release_type = 'GRAY'
         access_types = @($releasePolicy.access_types)
         requested_candidate_initial_traffic_percent = [int]$releasePolicy.requested_candidate_initial_traffic_percent
-        startup_initial_delay_seconds = 300
+        startup_initial_delay_seconds = 60
         package_version = $packageVersion
         environment_key_names = @($orderedEnvironment.Keys)
         request_id = [string](Get-PropertyValue $release 'RequestId')
