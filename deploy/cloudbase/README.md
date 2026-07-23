@@ -22,6 +22,8 @@
 
 `InitialDelaySeconds` 的配置形态以已固定的 `@cloudbase/cli@3.6.4` 为兼容性依据：该 CLI 在服务差异中把它作为 `IntValue`，并在 deploy/update 请求中提交 `Key=InitialDelaySeconds`。2026-07-23 的真实 `CreateVersion` 任务证明 300 秒会先于平台约 240 秒管理超时而失败，因此当前固定为 60 秒；发布仍须由候选构建与 `/ready` 实测确认平台接受该值。
 
+CloudBase 源码构建不复用本机镜像层。为避免完整 FFmpeg 组件矩阵超过平台 `CreateVersion` 窗口，镜像仍从官方签名的 8.1.2 源码构建，但只启用产品合同需要的 MP4／MOV／WebM 输入、MPEG-4／WAV／JPEG／rawvideo 输出和对应滤镜；LGPL-only、共享库、唯一二进制与构建收据门禁不变。最终镜像必须重新通过真实媒体提取和 `verify-competition-image`，不能只凭配置文本上线。
+
 同一个容器提供 SPA、FastAPI 和 SSE。活跃运行保存在单进程内存中，因此最大实例数不能大于 1。默认域名只用于短期开发演示；首次访问可能出现腾讯云风险提示，评委说明应写明“首次打开会看到腾讯云安全提示，请点击‘确定访问’进入演示”。
 
 ## 历史脱敏验收快照
