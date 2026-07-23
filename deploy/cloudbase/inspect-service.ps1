@@ -46,6 +46,17 @@ function Read-Property {
     return $property.Value
 }
 
+function Test-EmptyCommandOverride {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return $true }
+    if ($Value -is [string]) {
+        $normalized = $Value.Trim()
+        return -not $normalized -or $normalized -eq '[]'
+    }
+    return @($Value).Count -eq 0
+}
+
 function Invoke-TcbrReadApi {
     param(
         [Parameter(Mandatory)][string]$Action,
@@ -183,6 +194,13 @@ $receipt = [ordered]@{
     scaling = [ordered]@{
         minimum_instances = Read-Property $serverConfig 'MinNum'
         maximum_instances = Read-Property $serverConfig 'MaxNum'
+    }
+    startup = [ordered]@{
+        initial_delay_seconds = Read-Property $serverConfig 'InitialDelaySeconds'
+        command_override_present = -not (
+            (Test-EmptyCommandOverride (Read-Property $serverConfig 'Cmd')) -and
+            (Test-EmptyCommandOverride (Read-Property $serverConfig 'EntryPoint'))
+        )
     }
     access = [ordered]@{
         types = @((Read-Property $baseInfo 'AccessTypes'))

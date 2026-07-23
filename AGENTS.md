@@ -45,9 +45,10 @@
   outside the app before upload. Page load, playback, and seeking must not
   auto-create a run.
 - The device-demo production profile uses one public analysis slot and no judge
-  slot. A session and its direct peer IP may each start only one analysis per
-  600 seconds. Keep the legacy access-session endpoint compatible, but do not
-  expose a judge-code control in the product or let a judge cookie add capacity.
+  slot. Do not add a completed-run cooldown or request quota by session or peer
+  IP; after terminal cleanup the same session may start again immediately. Keep
+  the legacy access-session endpoint compatible, but do not expose a judge-code
+  control in the product or let a judge cookie add capacity.
 - The competition catalog contains exactly five manifest-backed controlled
   sources. Public UI may show their rounded durations only, and every confirmed
   start must create a fresh real Analysis Run rather than replay cached output.

@@ -96,13 +96,22 @@ def _verify_exact_percentage_routes(
         if version_name in ratios:
             raise RouteStateError("online route state contains duplicate versions")
         ratios[version_name] = _required_ratio(item, "FlowRatio")
-    if set(ratios) != {stable_version, candidate_version}:
+    expected_ratios = {
+        stable_version: stable_ratio,
+        candidate_version: candidate_ratio,
+    }
+    if not set(ratios).issubset(expected_ratios):
         raise RouteStateError("online routes do not exactly match stable and candidate")
-    if (
-        ratios[stable_version] != stable_ratio
-        or ratios[candidate_version] != candidate_ratio
-    ):
-        raise RouteStateError("online traffic does not match the requested promotion")
+    for version_name, expected_ratio in expected_ratios.items():
+        if expected_ratio == 0:
+            if ratios.get(version_name, 0) != 0:
+                raise RouteStateError(
+                    "online traffic does not match the requested promotion"
+                )
+        elif ratios.get(version_name) != expected_ratio:
+            raise RouteStateError(
+                "online traffic does not match the requested promotion"
+            )
 
 
 def verify_route_state(payload: Any) -> dict[str, object]:

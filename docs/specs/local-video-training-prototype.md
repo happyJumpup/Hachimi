@@ -6,7 +6,7 @@ Updated: 2026-07-21
 
 > 本文保留 2026-07-21 本地视频与可恢复分析切片的技术边界。当前产品、Agent、方案和页面体验以 [TrainPal 竞赛 Web MVP](competition-web-mvp.md)、根目录 `CONTEXT.md` 与 ADR-0015～0028 为准。下文的公开 `segment_role`、候选面板、产品名暂缓和旧 Pet 口径不得用于新实现；媒体安全、覆盖缺口、运行恢复与清理合同仍有效，直至被新的技术 ADR 取代。
 
-> 2026-07-23 取代注记：下文“今晚原型安全默认 60 秒”已由 [ADR-0030](../adr/0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 取代为当前竞赛部署完整源文件最多 300 秒；公开分析准入以 [ADR-0043](../adr/0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md) 为准。旧数字只保留为历史实现记录。
+> 2026-07-23 取代注记：下文“今晚原型安全默认 60 秒”已由 [ADR-0030](../adr/0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 取代为当前竞赛部署完整源文件最多 300 秒；公开分析准入以 [ADR-0045](../adr/0045-public-analysis-keeps-one-slot-without-session-or-ip-cooldown.md) 为准。旧数字只保留为历史实现记录。
 
 Audience: 产品、设计、Web/API 开发、测试与演示人员
 

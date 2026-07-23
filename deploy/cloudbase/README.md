@@ -12,12 +12,15 @@
 | CPU / 内存 | 2 vCPU / 4 GiB |
 | 实例数 | 非评审时 0；评审时 1；最大 1 |
 | 应用 / CloudBase 配置请求超时 | 异步运行 180 秒 / 平台配置至少 240 秒；HTTP Access 曾观测到的 60 秒窗口只作历史限制证据 |
+| CloudBase 启动探针延迟 | `InitialDelaySeconds=300`；受控媒体同步采用 240 秒全局同步截止，网络阻塞按剩余预算收紧；另留至少 60 秒覆盖不可抢占 I/O 与 Uvicorn 启动，不宣称 OS 级绝对硬上界 |
 | 本地上传 | 后端合同：完整文件不超过 300 秒、256 MiB；CloudBase HTTP Access：20 MB；Web 安全上限：19,000,000 bytes |
 | 视觉策略 | 60 秒分块、10 秒重叠、单块 20 秒、顺序执行 |
-| 真实分析 | 公开单并发；无需评委码；成功尝试按会话与客户端 IP 各执行 600 秒冷却 |
+| 真实分析 | 公开单并发；无需评委码；无会话／IP 冷却，终态清理后同一会话可立即再次创建 |
 | GYMTI | Ark／豆包最小数据增强；独立非排队 3 并发；第四条或模型失败立即本地降级 |
 | 总预算 | 300 元人民币硬上限 |
 | 最晚关闭 | `2026-07-25T00:00:00+08:00` |
+
+`InitialDelaySeconds` 的配置形态以已固定的 `@cloudbase/cli@3.6.4` 为兼容性依据：该 CLI 在服务差异中把它作为 `IntValue`，并在 deploy/update 请求中提交 `Key=InitialDelaySeconds`。发布仍须由候选构建与 `/ready` 实测确认平台接受该值。
 
 同一个容器提供 SPA、FastAPI 和 SSE。活跃运行保存在单进程内存中，因此最大实例数不能大于 1。默认域名只用于短期开发演示；首次访问可能出现腾讯云风险提示，评委说明应写明“首次打开会看到腾讯云安全提示，请点击‘确定访问’进入演示”。
 
@@ -31,7 +34,7 @@
 | 历史公网配置 | `trainpal-demo-009`，复用版本 B 同一镜像 | 当时的 SPA/history、匿名隔离、三路评委 `202`、第四路 `429` 通过；三条完成结果均为 `partial` |
 | 历史本地候选 | 精确 SHA 由 PR #9 发布回执记录 | 当时的双平台镜像审计、生产 `/ready`、匿名 GYMTI 本地降级与模型 trap 0 调用通过；未替换 `009` |
 
-上述版本和配置均为 2026-07-23 早期候选的历史证据，不是当前最终版本。新候选必须以精确当前提交重新验证五条受控来源、公开单并发／双重 600 秒频控和 GYMTI Ark／豆包独立三并发；在取得新回执前不得声称已上线。已安排一次性任务在 2026-07-24 23:00（Asia/Shanghai）启动关停，确保本周六 0 点前禁用公网映射、恢复 `OA` 并把最小实例降为 0；任务本身的成功仍须以执行回执确认。
+上述版本和配置均为 2026-07-23 早期候选的历史证据，不是当前最终版本。新候选必须以精确当前提交重新验证五条受控来源、无冷却公开单并发和 GYMTI Ark／豆包独立三并发；在取得新回执前不得声称已上线。已安排一次性任务在 2026-07-24 23:00（Asia/Shanghai）启动关停，确保本周六 0 点前禁用公网映射、恢复 `OA` 并把最小实例降为 0；任务本身的成功仍须以执行回执确认。
 
 上述记录不包含环境 ID、域名、Pod、秘密值或真实分析内容。公网三路 `partial` 是真实质量限制，不能改写为 `complete`。
 
@@ -117,9 +120,9 @@ docker build --tag trainpal-five-minute:local .
 
 3. 最终前端提交后，重新生成 OpenAPI 类型、跑完整前端/E2E 和窄屏检查，再从精确候选 SHA 部署 `GRAY` 候选。若存在公开稳定版，`release-source.ps1` 必须严格保留现有访问配置，并让候选从 0% 流量开始；发布人核对目标 Provider 账号的训练／内容留存设置后，必须在命令中显式传入 `-ConfirmGymtiProviderRetention`，否则脚本失败关闭。CloudBase 源码包构建是当前发布路线；GHCR 拉取只保留为曾失败的历史尝试，不是主路线或回滚依赖。
 
-4. 候选构建完成且稳定版 100%／候选 0% 状态唯一确认后，先运行兼容文件名 `run-private-canary.ps1` 的 full-FLOW 身份事务：临时把候选提升到公开流量 100%，从公开入口核对 `/health` 返回精确候选 SHA 且 `/ready` 为 `ready`，然后无论成功或失败都在 `finally` 恢复并验证稳定版 100%／候选 0%。该事务不接收路由头或媒体，不调用分析或 GYMTI Provider；恢复失败按 P0 处理。
+4. 候选构建完成且稳定版 100%／候选 0% 状态唯一确认后，先以 `-Mode exercise` 运行兼容文件名 `run-private-canary.ps1` 的 full-FLOW 身份事务：按 CloudBase CLI 3.6.4 的正式完成灰度语义提交 `ReleaseGray + CloseGrayRelease=true`，等待对应管理任务成功和候选 100% 数据面收敛，再从公开入口核对 `/health` 返回精确候选 SHA 且 `/ready` 为 `ready`。脚本随后等待提升任务终态，调用专用 `SubmitServerRollback`，等待回滚管理任务成功并验证稳定版 100%／候选 0%。从同一精确 SHA 构建第二候选后，以 `-Mode finalize` 执行相同门禁；成功时保留候选 100% 流量，任一验证或回执写入失败且流量已切换时自动提交并验证专用回滚。该事务不接收路由头或媒体，不调用分析或 GYMTI Provider；恢复失败按 P0 处理。
 
-   身份事务通过后，才在受控公开窗口重新提升候选并运行数据面门槛：先用最短受控来源验证五来源、公开单并发、SSE、终态与会话／IP 冷却；待该冷却窗口确实结束后，再用 295 秒授权样本验证本地上传。随后补齐 GYMTI 三并发／第四路降级和候选→稳定版→候选回滚。任一门槛失败都恢复稳定版，不发布新链接。2026-07-23 的旧定向 canary 未命中候选只保留为历史失败证据，不能替代当前 full-FLOW 身份事务。
+   正式回滚会关闭并放弃该灰度候选，因此身份事务通过后，必须从同一精确 Git SHA 再构建一个新候选，不能对已回滚的版本执行“向前回滚”。新候选才进入受控公开数据面门槛：先用最短受控来源验证五来源、公开单并发、SSE、终态与清理，再由同一会话立即创建第二条并取消，证明无冷却重入和再次清理；随后可直接用 295 秒授权样本验证本地上传，再补齐 GYMTI 三并发／第四路降级。任一门槛失败都恢复稳定版，不发布新链接。2026-07-23 的旧定向 canary 未命中候选只保留为历史失败证据，不能替代当前 full-FLOW 身份事务。
 
 5. 仅在评审窗口把最小实例数设为 1，其余时间恢复 0。费用接近 300 元时先把公开真实分析并发归零；到最晚关闭时间禁用公共入口并缩容。
 
@@ -162,7 +165,7 @@ docker build --tag trainpal-five-minute:local .
 
 `-ConfirmGymtiProviderRetention` 不是默认值或自动探测；只有发布人已在目标账号核对训练复用和内容留存设置时才可传入。缺少该开关时脚本会在打包和云端变更前失败关闭。发布回执只记录零流量请求、名称集合和哈希；实际流量与身份仍由部署后的事务核对。
 
-`run-private-canary.ps1` 仅为兼容保留原文件名；当前行为是 full-FLOW 公开身份事务，不是私有或请求头 canary。它从精确稳定版 100%／候选 0% 开始，临时 `promote` 到候选 100%，通过公开入口核对 `/health` 的 `release_sha` 与预期完整 SHA 完全一致并确认 `/ready`，最后在 `finally` 中 `restore` 且验证稳定版 100%／候选 0%。它不接收媒体，也不执行真实分析：
+`run-private-canary.ps1` 仅为兼容保留原文件名；当前行为是 full-FLOW 公开身份事务，不是私有或请求头 canary。对 `@cloudbase/cli@3.6.4` 的源码审计确认：`traffic promote` 只提交带 `CloseGrayRelease=true` 的 `ReleaseGray` 后立即返回；`traffic rollback` 读取最新任务并提交 `OperateServerManage go_back` 后立即返回，两者都不等待管理任务或数据面。为消除任务重叠，脚本直接复刻正式提升请求，等待提升管理任务终态、候选 100% 在线流量、公开精确 SHA 和 readiness；恢复使用官方专用 `SubmitServerRollback`，再等待回滚任务终态和稳定版 100% 在线流量。`exercise` 模式验证后必定恢复稳定版；`finalize` 模式成功时保留候选 100%，但任一验证或回执写入失败都会等待提升任务终态并自动恢复稳定版。比例为 0% 的已知版本可以被 `OnlineVersionInfos` 省略，非零版本必须存在且比例精确，未知、额外或重复路由一律失败关闭。默认主事务等待 240 秒、恢复等待 300 秒。它不执行 `StartVersionInstance` 预热，不接收媒体，也不执行真实分析：
 
 ```powershell
 .\deploy\cloudbase\run-private-canary.ps1 `
@@ -170,12 +173,13 @@ docker build --tag trainpal-five-minute:local .
   -PublicBaseUrl '<operator-supplied-https-origin>' `
   -ExpectedStableVersion '<operator-confirmed-current-stable-version>' `
   -ExpectedCandidateCommitSha '<full-lowercase-git-sha>' `
-  -OutputDirectory '<private-directory-outside-the-repository>'
+  -OutputDirectory '<private-directory-outside-the-repository>' `
+  -Mode exercise
 ```
 
-事务回执仅包含服务名、候选提交 SHA、稳定版本、`health`／`ready` 聚合状态和恢复状态；不记录环境 ID、公开 origin 或任何内容。恢复失败高于主检查结果：必须立即阻断发布并人工恢复稳定流量。
+事务回执按模式分为 `private-canary-exercise-transaction.json` 与 `private-canary-finalize-transaction.json`，仅包含服务名、候选提交 SHA、稳定版本、`health`／`ready` 聚合状态、恢复状态和最终保留状态；不记录环境 ID、公开 origin 或任何内容。第二次运行不会删除第一次演练证据。恢复失败高于主检查结果：必须立即阻断发布并人工恢复稳定流量。
 
-身份事务通过并恢复稳定流量后，在另一个受控公开窗口重新提升候选。先用 `--controlled-shortest` 从恰好五条来源中选择最短项，验证一个公开请求 `202`、并发第二个请求 `429 + Retry-After`、SSE 终态、覆盖合同，以及已接纳会话和新会话同 IP 的冷却：
+身份事务通过并恢复稳定流量后，从同一精确 Git SHA 新建第二个灰度候选，并用同一命令改传 `-Mode finalize` 正式提升。只有管理任务成功、候选 100%、精确 `/health.release_sha`、`/ready` 与脱敏回执写入全部通过，脚本才保留候选流量；失败会自动回滚。随后用 `--controlled-shortest` 从恰好五条来源中选择最短项，验证一个公开请求 `202`、并发第二个请求 `429 + Retry-After + X-TrainPal-Admission-Reason: capacity`、SSE 终态与覆盖合同；首条清理后同一会话必须立即再次获得 `202`，随后取消第二条并再次证明清理：
 
 ```powershell
 python .\deploy\cloudbase\public-canary.py `
@@ -184,7 +188,7 @@ python .\deploy\cloudbase\public-canary.py `
   --output '<private-controlled-canary-receipt>'
 ```
 
-该次运行会建立会话／IP 冷却。只有公开能力接口重新显示可分析、实际冷却窗口已经结束后，才用 `--media` 对 295 秒、仍处于 19 MB Web 安全边界内的授权样本执行同一公开并发、SSE、终态和冷却合同：
+该次运行不建立会话／IP 冷却。完成并确认清理后即可用 `--media` 对 295 秒、仍处于 19 MB Web 安全边界内的授权样本执行同一公开并发、SSE、终态、无冷却重入和清理合同：
 
 ```powershell
 python .\deploy\cloudbase\public-canary.py `
@@ -193,7 +197,7 @@ python .\deploy\cloudbase\public-canary.py `
   --output '<private-upload-canary-receipt>'
 ```
 
-两类公开 canary 回执都只保留输入种类、受控目录计数或媒体字节数、最短项时长、并发／终态／覆盖聚合计数和冷却秒数；不记录受控来源 ID、标题、origin、对象路径、本地路径、文件名、分析候选或内容。回执放在团队受控位置，不提交 Git；原视频、密钥、账户标识和可搜索的真实分析内容同样不得提交。
+两类公开 canary 回执都只保留输入种类、受控目录计数或媒体字节数、最短项时长、并发／终态／覆盖聚合计数、同会话重入和清理证据；不记录受控来源 ID、标题、origin、对象路径、本地路径、文件名、会话、IP、分析候选或内容。回执放在团队受控位置，不提交 Git；原视频、密钥、账户标识和可搜索的真实分析内容同样不得提交。
 
 GYMTI 使用独立的公开 canary：先验证一次 LLM 选题和一次非空 LLM 正式结果叙事，再并发四次选题并要求精确三次 `llm`、一次 `local_fallback`：
 

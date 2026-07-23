@@ -259,14 +259,29 @@ if ($Mode -in @('enable', 'promote')) {
         }
     )
     if ($Mode -eq 'promote') {
+        $promotionStartsFromExactTwoRoutes = (
+            $normalizedOnlineVersions.Count -eq 2 -and
+            $stableRoutes.Count -eq 1 -and
+            $candidateRoutes.Count -eq 1 -and
+            [int]$stableRoutes[0].FlowRatio -eq 100 -and
+            [int]$candidateRoutes[0].FlowRatio -eq 0
+        )
+        # CloudBase may omit a zero-percent gray candidate from
+        # OnlineVersionInfos even though DescribeReleaseOrder exposes the
+        # distinct, running candidate. Candidate identity and status were
+        # verified above, so the only safe omitted form is one exact stable
+        # route at 100% and no other online route.
+        $promotionStartsFromOmittedZeroCandidate = (
+            $normalizedOnlineVersions.Count -eq 1 -and
+            $stableRoutes.Count -eq 1 -and
+            $candidateRoutes.Count -eq 0 -and
+            [int]$stableRoutes[0].FlowRatio -eq 100
+        )
         if (
-            $normalizedOnlineVersions.Count -ne 2 -or
-            $stableRoutes.Count -ne 1 -or
-            $candidateRoutes.Count -ne 1 -or
-            [int]$stableRoutes[0].FlowRatio -ne 100 -or
-            [int]$candidateRoutes[0].FlowRatio -ne 0
+            -not $promotionStartsFromExactTwoRoutes -and
+            -not $promotionStartsFromOmittedZeroCandidate
         ) {
-            throw 'Promotion can only start from exact stable 100 and candidate 0.'
+            throw 'Promotion requires exact stable 100 with a zero-percent or omitted candidate.'
         }
     } else {
         $positiveRoutes = @(
@@ -345,7 +360,7 @@ $release = Invoke-TencentApi `
     -Credential $credential
 
 $verifiedState = $null
-for ($attempt = 1; $attempt -le 30; $attempt++) {
+for ($attempt = 1; $attempt -le 120; $attempt++) {
     $observedResponse = Invoke-TencentApi `
         -Service 'tcbr' `
         -Version '2022-02-17' `
@@ -400,7 +415,7 @@ for ($attempt = 1; $attempt -le 30; $attempt++) {
         }
         break
     }
-    if ($attempt -lt 30) {
+    if ($attempt -lt 120) {
         Start-Sleep -Seconds 1
     }
 }

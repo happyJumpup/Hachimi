@@ -7,7 +7,7 @@
 
 > 2026-07-23 更新：本地上传、五分钟分块管线、空可信代理列表和镜像内签名 FFmpeg 合同由 [ADR-0030](0030-five-minute-chunked-analysis-and-signed-ffmpeg.md) 取代。本文关于必须配置受控来源、FFmpeg 位于镜像外以及生产代理列表不得为空的要求不再适用于当前 CloudBase 版本。
 
-> 2026-07-23 取代注记：本文关于匿名分析并发为 0、真实分析必须使用评委码和评委并发为 3 的内容已由 [ADR-0043](0043-public-analysis-uses-one-slot-and-session-ip-cooldown.md) 取代。下文相关数字只保留为当时的历史部署决策。
+> 2026-07-23 取代注记：本文关于匿名分析并发为 0、真实分析必须使用评委码和评委并发为 3 的内容最终已由 [ADR-0045](0045-public-analysis-keeps-one-slot-without-session-or-ip-cooldown.md) 取代为无冷却公开单并发和评委并发为零。下文相关数字只保留为当时的历史部署决策。
 
 ## Context
 
