@@ -69,7 +69,24 @@ RUN set -eu; \
         --disable-ffplay \
         --disable-ffprobe \
         --disable-network \
-        --disable-autodetect; \
+        --disable-autodetect \
+        --disable-everything \
+        --disable-programs \
+        --enable-ffmpeg \
+        --enable-avcodec \
+        --enable-avdevice \
+        --enable-avfilter \
+        --enable-avformat \
+        --enable-swresample \
+        --enable-swscale \
+        --enable-protocol=file,pipe \
+        --enable-demuxer=mov,matroska \
+        --enable-muxer=mp4,wav,image2,image2pipe \
+        --enable-decoder=h264,hevc,mpeg4,vp8,vp9,av1,aac,mp3,opus,vorbis,pcm_s16le,wrapped_avframe \
+        --enable-encoder=mpeg4,pcm_s16le,mjpeg,rawvideo \
+        --enable-filter=scale,fps,tile,format,aformat,aresample,color \
+        --enable-indev=lavfi \
+        --enable-parser=h264,aac,mpeg4video; \
     make -j"$(nproc)"; \
     make install; \
     cp COPYING.LGPLv2.1 /opt/trainpal/ffmpeg/LICENSE.LGPLv2.1; \

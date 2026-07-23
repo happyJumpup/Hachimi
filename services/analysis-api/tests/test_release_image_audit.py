@@ -110,6 +110,24 @@ def test_web_builder_and_runtime_copy_the_shared_gymti_contract() -> None:
     assert dockerfile.count(contract_copy) == 2
 
 
+def test_ffmpeg_build_is_bounded_to_the_runtime_media_contract() -> None:
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+    for flag in (
+        "--disable-everything",
+        "--disable-programs",
+        "--enable-ffmpeg",
+        "--enable-protocol=file,pipe",
+        "--enable-demuxer=mov,matroska",
+        "--enable-muxer=mp4,wav,image2,image2pipe",
+        "--enable-decoder=h264,hevc,mpeg4,vp8,vp9,av1,aac,mp3,opus,vorbis,pcm_s16le,wrapped_avframe",
+        "--enable-encoder=mpeg4,pcm_s16le,mjpeg,rawvideo",
+        "--enable-filter=scale,fps,tile,format,aformat,aresample,color",
+        "--enable-indev=lavfi",
+    ):
+        assert flag in dockerfile
+
+
 def test_release_image_verifiers_share_the_public_gymti_and_runtime_media_contract() -> None:
     for verifier_name, model_trap_variable in (
         ("verify-competition-image.sh", "model_trap_name"),
